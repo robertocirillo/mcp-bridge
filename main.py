@@ -9,12 +9,12 @@ import logging
 
 from app.core.session_manager import SessionManager
 from app.api.routes import sessions, queries, health
-from app.utils.logging import setup_logging
+from app.utils.logging import setup_logging, get_logger
 from config import settings
 
-# Setup logging
+# Setup logging locale
 setup_logging()
-logger = logging.getLogger(__name__)
+logger = get_logger("main")
 
 # Session manager globale
 session_manager = SessionManager()

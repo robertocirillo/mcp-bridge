@@ -1,0 +1,48 @@
+2025-09-05 08:50:13,830 - app.api.routes.queries - ERROR - Errore nell'esecuzione della query per sessione c230ac25-3666-4117-9b9a-f5a8a8229c61: 'MCPWrapper' object has no attribute 'run_query'
+2025-09-05 08:50:14,965 - app.api.routes.queries - ERROR - Errore nell'esecuzione della query per sessione c230ac25-3666-4117-9b9a-f5a8a8229c61: 'MCPWrapper' object has no attribute 'run_query'
+2025-09-05 08:50:22,261 - app.api.routes.queries - ERROR - Errore nell'esecuzione della query per sessione c230ac25-3666-4117-9b9a-f5a8a8229c61: 'MCPWrapper' object has no attribute 'run_query'
+2025-09-05 08:56:04,094 - app.api.routes.queries - ERROR - Errore nell'esecuzione della query per sessione b24ff1e3-a387-44eb-9f49-900e3ce8111a: 'MCPWrapper' object has no attribute 'run_query'
+2025-09-05 08:57:28,231 - app.api.routes.queries - ERROR - Errore nell'esecuzione della query per sessione ac1daa81-a415-41f9-a604-a3ec6afc4505: 'MCPWrapper' object has no attribute 'run_query'
+2025-09-05 08:57:31,562 - app.api.routes.queries - ERROR - Errore nell'esecuzione della query per sessione ac1daa81-a415-41f9-a604-a3ec6afc4505: 'MCPWrapper' object has no attribute 'run_query'
+2025-09-05 09:15:16,810 - mcp_use - ERROR - Error in StdioConnectionManager task: [Errno 2] No such file or directory
+2025-09-05 09:15:16,811 - mcp_use - ERROR - Failed to connect to MCP implementation: [Errno 2] No such file or directory
+2025-09-05 09:15:16,811 - mcp_use - ERROR - ❌ Error running query: [Errno 2] No such file or directory
+2025-09-05 09:15:16,811 - mcp_use - ERROR - ❌ Error during agent execution: [Errno 2] No such file or directory
+2025-09-05 09:15:17,482 - mcp_use - ERROR - Error in StdioConnectionManager task: [Errno 2] No such file or directory
+2025-09-05 09:15:17,483 - mcp_use - ERROR - Failed to connect to MCP implementation: [Errno 2] No such file or directory
+2025-09-05 09:15:17,484 - mcp_use - ERROR - ❌ Error running query: [Errno 2] No such file or directory
+2025-09-05 09:15:17,485 - mcp_use - ERROR - ❌ Error during agent execution: [Errno 2] No such file or directory
+2025-09-05 09:15:18,530 - mcp_use - ERROR - Error in StdioConnectionManager task: [Errno 2] No such file or directory
+2025-09-05 09:15:18,531 - mcp_use - ERROR - Failed to connect to MCP implementation: [Errno 2] No such file or directory
+2025-09-05 09:15:18,532 - mcp_use - ERROR - ❌ Error running query: [Errno 2] No such file or directory
+2025-09-05 09:15:18,532 - mcp_use - ERROR - ❌ Error during agent execution: [Errno 2] No such file or directory
+2025-09-05 09:15:18,566 - app.core.mcp_wrapper - ERROR - Errore nell'esecuzione della query: [Errno 2] No such file or directory
+2025-09-05 09:15:18,567 - app.api.routes.queries - ERROR - Errore nell'esecuzione della query per sessione f2471604-57f1-442f-94c9-83457334ef30: Esecuzione query fallita: [Errno 2] No such file or directory
+2025-09-05 09:16:16,615 - mcp_use - ERROR - Error in StdioConnectionManager task: [Errno 2] No such file or directory
+2025-09-05 09:16:16,615 - mcp_use - ERROR - Failed to connect to MCP implementation: [Errno 2] No such file or directory
+2025-09-05 09:16:16,616 - mcp_use - ERROR - ❌ Error running query: [Errno 2] No such file or directory
+2025-09-05 09:16:16,616 - mcp_use - ERROR - ❌ Error during agent execution: [Errno 2] No such file or directory
+2025-09-05 09:16:18,335 - mcp_use - ERROR - Error in StdioConnectionManager task: [Errno 2] No such file or directory
+2025-09-05 09:16:18,336 - mcp_use - ERROR - Failed to connect to MCP implementation: [Errno 2] No such file or directory
+2025-09-05 09:16:18,337 - mcp_use - ERROR - ❌ Error running query: [Errno 2] No such file or directory
+2025-09-05 09:16:18,338 - mcp_use - ERROR - ❌ Error during agent execution: [Errno 2] No such file or directory
+2025-09-05 09:16:19,386 - mcp_use - ERROR - Error in StdioConnectionManager task: [Errno 2] No such file or directory
+2025-09-05 09:16:19,388 - mcp_use - ERROR - Failed to connect to MCP implementation: [Errno 2] No such file or directory
+2025-09-05 09:16:19,390 - mcp_use - ERROR - ❌ Error running query: [Errno 2] No such file or directory
+2025-09-05 09:16:19,391 - mcp_use - ERROR - ❌ Error during agent execution: [Errno 2] No such file or directory
+2025-09-05 09:16:19,432 - app.core.mcp_wrapper - ERROR - Errore nell'esecuzione della query: [Errno 2] No such file or directory
+2025-09-05 09:16:19,433 - app.api.routes.queries - ERROR - Errore nell'esecuzione della query per sessione ff7541ab-93fd-4e29-86ce-1fa6aaa8dc21: Esecuzione query fallita: [Errno 2] No such file or directory
+2025-09-05 09:17:15,142 - mcp_use - ERROR - Error in StdioConnectionManager task: [Errno 2] No such file or directory
+2025-09-05 09:17:15,142 - mcp_use - ERROR - Failed to connect to MCP implementation: [Errno 2] No such file or directory
+2025-09-05 09:17:15,143 - mcp_use - ERROR - ❌ Error running query: [Errno 2] No such file or directory
+2025-09-05 09:17:15,143 - mcp_use - ERROR - ❌ Error during agent execution: [Errno 2] No such file or directory
+2025-09-05 09:17:15,680 - mcp_use - ERROR - Error in StdioConnectionManager task: [Errno 2] No such file or directory
+2025-09-05 09:17:15,680 - mcp_use - ERROR - Failed to connect to MCP implementation: [Errno 2] No such file or directory
+2025-09-05 09:17:15,681 - mcp_use - ERROR - ❌ Error running query: [Errno 2] No such file or directory
+2025-09-05 09:17:15,681 - mcp_use - ERROR - ❌ Error during agent execution: [Errno 2] No such file or directory
+2025-09-05 09:17:16,722 - mcp_use - ERROR - Error in StdioConnectionManager task: [Errno 2] No such file or directory
+2025-09-05 09:17:16,724 - mcp_use - ERROR - Failed to connect to MCP implementation: [Errno 2] No such file or directory
+2025-09-05 09:17:16,725 - mcp_use - ERROR - ❌ Error running query: [Errno 2] No such file or directory
+2025-09-05 09:17:16,726 - mcp_use - ERROR - ❌ Error during agent execution: [Errno 2] No such file or directory
+2025-09-05 09:17:16,759 - app.core.mcp_wrapper - ERROR - Errore nell'esecuzione della query: [Errno 2] No such file or directory
+2025-09-05 09:17:16,760 - app.api.routes.queries - ERROR - Errore nell'esecuzione della query per sessione ff7541ab-93fd-4e29-86ce-1fa6aaa8dc21: Esecuzione query fallita: [Errno 2] No such file or directory
