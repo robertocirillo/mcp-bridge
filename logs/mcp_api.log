@@ -1,0 +1,10 @@
+2025-09-05 10:21:15,538 - app.utils.logging - INFO - Sistema di logging configurato
+2025-09-05 10:21:15,541 - main - INFO - Avvio del servizio MCP-Use REST API
+2025-09-05 10:21:15,541 - app.core.session_manager - INFO - Inizializzazione Session Manager
+2025-09-05 10:21:37,102 - main - INFO - Chiusura del servizio MCP-Use REST API
+2025-09-05 10:21:37,104 - app.core.session_manager - INFO - Cleanup completato di tutte le sessioni
+2025-09-05 10:21:39,631 - app.utils.logging - INFO - Sistema di logging configurato
+2025-09-05 10:21:39,634 - main - INFO - Avvio del servizio MCP-Use REST API
+2025-09-05 10:21:39,634 - app.core.session_manager - INFO - Inizializzazione Session Manager
+2025-09-05 10:22:15,789 - main - INFO - Chiusura del servizio MCP-Use REST API
+2025-09-05 10:22:15,789 - app.core.session_manager - INFO - Cleanup completato di tutte le sessioni
