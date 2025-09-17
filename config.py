@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     
     # API Settings
     API_TITLE: str = "MCP-Use REST API"
-    API_DESCRIPTION: str = "Servizio REST per interagire con MCP servers tramite mcp-use"
+    API_DESCRIPTION: str = "Servizio REST per interagire con MCP servers tramite la libreria mcp-use"
     API_VERSION: str = "1.0.0"
     
     # Server Settings

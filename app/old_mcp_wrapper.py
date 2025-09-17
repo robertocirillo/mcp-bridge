@@ -158,7 +158,7 @@ class MCPWrapper:
                         "supergateway_command": self.sandbox_options.get("supergateway_command", "npx -y supergateway")
                     }
                     client_kwargs["sandbox_options"] = sandbox_options
-
+            logger.info("Configurazione client MCP: %s", client_kwargs)
             self._client = self.MCPClient(**client_kwargs)
 
             # Crea l'agent
@@ -199,7 +199,7 @@ class MCPWrapper:
         """
         if not self._initialized:
             await self.initialize()
-
+        logger.info(f"Esecuzione query: {query} con max_steps={max_steps} e server_name={server_name}")
         try:
             # Prepara i parametri
             run_kwargs = {"query": query}

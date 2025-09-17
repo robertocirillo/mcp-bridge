@@ -1,82 +1,46 @@
 """
-Configurazione del sistema di logging
+Configurazione del sistema di logging per il codice locale
+(non modifica i logger di mcp-use o di uvicorn)
 """
 
 import logging
-import sys
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from config import settings
 
-class ColorFormatter(logging.Formatter):
-    """Formatter colorato per console, distingue i log di app.*"""
-    COLORS = {
-        "DEBUG": "\033[94m",    # blu
-        "INFO": "\033[92m",     # verde
-        "WARNING": "\033[93m",  # giallo
-        "ERROR": "\033[91m",    # rosso
-        "CRITICAL": "\033[41m", # sfondo rosso
-    }
-    RESET = "\033[0m"
-
-    def format(self, record):
-        msg = super().format(record)
-        color = self.COLORS.get(record.levelname, "")
-        # aggiungi un prefisso per distinguere il tuo codice
-        if record.name.startswith("app."):
-            msg = f"{color}[APP]{msg}{self.RESET}"
-        return msg
-
 def setup_logging():
-    """Configura il sistema di logging"""
+    """Configura il logging solo per il namespace del tuo codice"""
 
     # Crea directory logs se non esiste
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
-    # Configurazione root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
+    # Logger per il tuo namespace
+    logger = logging.getLogger("app")
+    logger.setLevel(getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
 
-    # Rimuovi handler esistenti
-    root_logger.handlers.clear()
+    # Se già ci sono handler, non aggiungerne altri
+    if not logger.handlers:
+        formatter = logging.Formatter(settings.LOG_FORMAT)
 
-    # Formatter generico
-    file_formatter = logging.Formatter(settings.LOG_FORMAT)
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        console_handler.setLevel(logging.INFO)
+        logger.addHandler(console_handler)
 
-    # Console handler colorato
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(ColorFormatter(settings.LOG_FORMAT))
-    console_handler.setLevel(logging.INFO)
-    root_logger.addHandler(console_handler)
+        # File handler
+        file_handler = RotatingFileHandler(
+            log_dir / "app.log",
+            maxBytes=10*1024*1024,
+            backupCount=5
+        )
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(logging.DEBUG)
+        logger.addHandler(file_handler)
 
-    # File handler per logs generali
-    file_handler = RotatingFileHandler(
-        log_dir / "mcp_api.log",
-        maxBytes=10*1024*1024,  # 10MB
-        backupCount=5
-    )
-    file_handler.setFormatter(file_formatter)
-    file_handler.setLevel(logging.DEBUG)
-    root_logger.addHandler(file_handler)
-
-    # File handler per errori
-    error_handler = RotatingFileHandler(
-        log_dir / "errors.log",
-        maxBytes=10*1024*1024,  # 10MB
-        backupCount=5
-    )
-    error_handler.setFormatter(file_formatter)
-    error_handler.setLevel(logging.ERROR)
-    root_logger.addHandler(error_handler)
-
-    # Configurazione logging per librerie esterne
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("uvicorn.access").setLevel(logging.INFO)
-
-    logger = logging.getLogger(__name__)
     logger.info("Sistema di logging configurato")
 
 def get_logger(name: str) -> logging.Logger:
-    """Ottiene un logger configurato per il tuo codice"""
-    return logging.getLogger(name)
+    """Restituisce un logger configurato per il namespace specificato"""
+    return logging.getLogger(f"app.{name}")

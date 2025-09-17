@@ -1,6 +1,6 @@
 """
 MCP-Use REST API Service
-Un servizio REST basato su FastAPI per interagire con la libreria mcp-use
+Un servizio REST basato su FastAPI per interagire con la libreria mcp-agent
 """
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -15,7 +15,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 
-from app.mcp_wrapper import MCPWrapper
+from app.old_mcp_wrapper import MCPWrapper
 
 # Configurazione logging
 logging.basicConfig(level=logging.INFO)

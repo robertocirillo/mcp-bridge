@@ -1,14 +1,12 @@
-version: '3.8'
-
 services:
-  mcp-api:
+  mcp-bridge:
     build: .
     ports:
       - "8000:8000"
     environment:
-      - HOST=0.0.0.0
-      - PORT=8000
-      - DEBUG=false
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      DEBUG: "False"
     env_file:
       - .env
     volumes:
@@ -21,22 +19,11 @@ services:
       retries: 3
       start_period: 40s
 
-#  # Esempio di servizio Ollama (opzionale)
-#  ollama:
-#    image: ollama/ollama:latest
-#    ports:
-#      - "11434:11434"
-#    volumes:
-#      - ollama_data:/root/.ollama
-#    restart: unless-stopped
-#    # Per GPU support (uncomment if needed)
-#    # runtime: nvidia
-#    # environment:
-#    #   - NVIDIA_VISIBLE_DEVICES=all
-#
-#volumes:
-#  ollama_data:
-
-networks:
-  default:
-    name: mcp-network
+  gateway:
+    image: docker/mcp-gateway
+    command:
+      - --servers=duckduckgo
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8822:8811"
