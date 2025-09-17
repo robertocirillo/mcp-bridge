@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   mcp-bridge:
     build: .
@@ -11,6 +13,7 @@ services:
       - .env
     volumes:
       - ./logs:/app/logs
+      - /var/run/docker.sock:/var/run/docker.sock # Monta il socket Docker per eseguire comandi dinamici
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -20,10 +23,9 @@ services:
       start_period: 40s
 
   gateway:
-    image: docker/mcp-gateway
-    command:
-      - --servers=duckduckgo
+    image: docker/mcp-gateway:latest
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock # Monta il socket Docker per il gateway
     ports:
-      - "8822:8811"
+      - "8822:8811" # Espone la porta del gateway
+    restart: unless-stopped
