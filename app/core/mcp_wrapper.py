@@ -228,68 +228,10 @@ class MCPWrapper:
 
         self._agent = self.MCPAgent(**agent_kwargs)
 
-    # async def run_query(self,
-    #                     query: str,
-    #                     max_steps: Optional[int] = None,
-    #                     server_name: Optional[str] = None) -> str:
-    #     """
-    #     Esegue una query utilizzando l'agent MCP
-    #
-    #     Args:
-    #         query: La query da elaborare
-    #         max_steps: Override del numero massimo di passi (opzionale)
-    #         server_name: Nome specifico del server da usare (opzionale)
-    #
-    #     Returns:
-    #         La risposta dell'agent come stringa
-    #     """
-    #     if not self._initialized:
-    #         await self.initialize()
-    #
-    #     if not query.strip():
-    #         raise ValueError("Query vuota non consentita")
-    #
-    #     try:
-    #         logger.debug(f"Esecuzione query: {query[:100]}...")
-    #
-    #         # Prepara i parametri
-    #         run_kwargs = {"query": query}
-    #
-    #         if max_steps:
-    #             run_kwargs["max_steps"] = max_steps
-    #
-    #         if server_name:
-    #             if server_name not in self.mcp_servers:
-    #                 raise ValueError(f"Server '{server_name}' non configurato")
-    #             run_kwargs["server_name"] = server_name
-    #             self._last_server_used = server_name
-    #
-    #         # Esegue la query con retry
-    #         result = await retry_async(
-    #             lambda: self._agent.run(**run_kwargs),
-    #             max_retries=2,
-    #             delay=0.5
-    #         )
-    #
-    #         # Aggiorna le statistiche
-    #         self._steps_used = getattr(self._agent, 'steps_used', 0)
-    #
-    #         if not self._last_server_used and hasattr(self._agent, 'last_server_used'):
-    #             self._last_server_used = self._agent.last_server_used
-    #
-    #         logger.debug(f"Query completata in {self._steps_used} passi")
-    #         return str(result)
-    #
-    #     except Exception as e:
-    #         logger.error(f"Errore nell'esecuzione della query: {e}")
-    #         raise MCPWrapperError(f"Esecuzione query fallita: {e}")
-
-    async def run_query(
-            self,
-            query: str,
-            max_steps: Optional[int] = None,
-            server_name: Optional[str] = None
-    ) -> str:
+    async def run_query(self,
+                        query: str,
+                        max_steps: Optional[int] = None,
+                        server_name: Optional[str] = None) -> str:
         """
         Esegue una query utilizzando l'agent MCP
 
@@ -322,13 +264,13 @@ class MCPWrapper:
                 run_kwargs["server_name"] = server_name
                 self._last_server_used = server_name
 
-            # Funzione async per retry
-            async def run_agent():
+            # Definisci una funzione async separata per il retry
+            async def execute_agent_run():
                 return await self._agent.run(**run_kwargs)
 
             # Esegue la query con retry
             result = await retry_async(
-                run_agent,
+                execute_agent_run,
                 max_retries=2,
                 delay=0.5
             )
@@ -345,6 +287,7 @@ class MCPWrapper:
         except Exception as e:
             logger.error(f"Errore nell'esecuzione della query: {e}")
             raise MCPWrapperError(f"Esecuzione query fallita: {e}")
+
 
     async def close(self):
         """Chiude le connessioni e rilascia le risorse"""
