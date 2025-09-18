@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   mcp-bridge:
     build: .
@@ -13,6 +11,7 @@ services:
       - .env
     volumes:
       - ./logs:/app/logs
+      - /Users/roberto/python-test/mcp-national-rail:/app/servers/mcp-national-rails:ro # Monta il server MCP in sola lettura
       - /var/run/docker.sock:/var/run/docker.sock # Monta il socket Docker per eseguire comandi dinamici
     restart: unless-stopped
     healthcheck:
@@ -21,11 +20,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+#    network_mode: "host"  # For localhost server access
 
-  gateway:
-    image: docker/mcp-gateway:latest
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock # Monta il socket Docker per il gateway
-    ports:
-      - "8822:8811" # Espone la porta del gateway
-    restart: unless-stopped
+#  gateway:
+#    image: docker/mcp-gateway:latest
+#    volumes:
+#      - /var/run/docker.sock:/var/run/docker.sock # Monta il socket Docker per il gateway
+#    ports:
+#      - "8822:8811" # Espone la porta del gateway
+#    restart: unless-stopped
