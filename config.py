@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     """Configurazioni dell'applicazione"""
     
     # API Settings
-    API_TITLE: str = "MCP-Use REST API"
+    API_TITLE: str = "mcp-bridge: REST API for mcp-use library"
     API_DESCRIPTION: str = "Servizio REST per interagire con MCP servers tramite la libreria mcp-use"
     API_VERSION: str = "1.0.0"
     
@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     SUPPORTED_PROVIDERS: List[str] = ["openai", "anthropic", "ollama"]
     
     # Logging Settings
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str = "DEBUG"
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     
     # E2B Sandbox Settings
