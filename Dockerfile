@@ -1,57 +1,41 @@
-FROM python:3.11-slim
+# usa Python >=3.12 perché il tuo pyproject chiede requires-python = ">=3.12"
+FROM python:3.12-slim
 
-# Install required dependencies
-RUN apt-get update && apt-get install -y nodejs npm
+# manteniamo nodejs + npm (richiesti da te)
+RUN apt-get update \
+    && apt-get install -y nodejs npm \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    wget \
-    gnupg \
-    ca-certificates \
-    git \
-    build-essential \
-    bash \
-    procps \
-    docker.io \
-    file \
-    strace \
-    binutils \
-    python3-dev \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Verify installations and install Python tools
-RUN python --version \
-    && node --version \
-    && npm --version \
-    && npx --version \
-    && pip install --no-cache-dir pyelftools jsonschema
-
-# Set working directory
 WORKDIR /app
 
-# Copy dependency files
+# copia solo i file di metadata per sfruttare la cache
 COPY pyproject.toml uv.lock* ./
 
-# Install Python dependencies
-RUN pip install uv
+# installa uv (usiamo la versione da pip; puoi pinarla se preferisci)
+RUN pip install --no-cache-dir uv
 
-# Install Python dependencies
-RUN uv sync
+# crea il venv dentro l'immagine (portabile)
+RUN python -m venv /app/venv
 
-# Copy application code
+# obblighiamo i processi successivi ad usare il venv
+ENV VIRTUAL_ENV=/app/venv
+ENV PATH="/app/venv/bin:$PATH"
+
+# sincronizza le dipendenze dal progetto/lockfile nel venv
+# --locked forza l'uso del lockfile (deterministico)
+RUN uv sync --locked
+
+# poi copia il codice dell'app (dopo aver installato le dipendenze per caching)
 COPY . .
 
-# Set environment variables
-ENV PORT=8000
+ENV PORT=8001
 ENV HOST=0.0.0.0
 ENV SHELL=/bin/bash
 ENV LANG=C.UTF-8
 
-# Expose port
-EXPOSE 8000
+EXPOSE 8001
 
-# Run the application
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# avvia con uv run (userà automaticamente il venv)
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
+

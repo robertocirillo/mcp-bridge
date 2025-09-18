@@ -1,31 +1,24 @@
 services:
   mcp-bridge:
     build: .
-    ports:
-      - "8000:8000"
     environment:
       HOST: "0.0.0.0"
-      PORT: "8000"
+      PORT: "8001"
       DEBUG: "False"
+      # Aggiunta variabile MCP_SERVERS con JSON valido
+      MCP_SERVERS: '{"MCP_DOCKER": {"url": "http://localhost:11434"}}'
     env_file:
       - .env
     volumes:
-      - ./logs:/app/logs
-      - /Users/roberto/python-test/mcp-national-rail:/app/servers/mcp-national-rails:ro # Monta il server MCP in sola lettura
-      - /var/run/docker.sock:/var/run/docker.sock # Monta il socket Docker per eseguire comandi dinamici
+#      - ./logs:/app/logs
+      - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
+#      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-#    network_mode: "host"  # For localhost server access
+    network_mode: "host"
 
-#  gateway:
-#    image: docker/mcp-gateway:latest
-#    volumes:
-#      - /var/run/docker.sock:/var/run/docker.sock # Monta il socket Docker per il gateway
-#    ports:
-#      - "8822:8811" # Espone la porta del gateway
-#    restart: unless-stopped
