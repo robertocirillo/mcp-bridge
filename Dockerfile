@@ -12,7 +12,7 @@ WORKDIR /app
 # copia solo i file di metadata per sfruttare la cache
 COPY pyproject.toml uv.lock* ./
 
-# installa uv (usiamo la versione da pip; puoi pinarla se preferisci)
+# uv 
 RUN pip install --no-cache-dir uv
 
 # crea il venv dentro l'immagine (portabile)
