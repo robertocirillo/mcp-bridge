@@ -1,7 +1,7 @@
 # usa Python >=3.12 perché il tuo pyproject chiede requires-python = ">=3.12"
 FROM python:3.12-slim
 
-# manteniamo nodejs + npm (richiesti da te)
+# manteniamo nodejs + npm
 RUN apt-get update \
     && apt-get install -y nodejs npm \
     && apt-get clean \
@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir uv
 RUN python -m venv /app/venv
 
 # obblighiamo i processi successivi ad usare il venv
-ENV VIRTUAL_ENV=/app/venv
+ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="/app/venv/bin:$PATH"
 
 # sincronizza le dipendenze dal progetto/lockfile nel venv
@@ -29,13 +29,13 @@ RUN uv sync --locked
 # poi copia il codice dell'app (dopo aver installato le dipendenze per caching)
 COPY . .
 
-ENV PORT=8001
+ENV PORT=8000
 ENV HOST=0.0.0.0
 ENV SHELL=/bin/bash
 ENV LANG=C.UTF-8
 
-EXPOSE 8001
+EXPOSE 8000
 
 # avvia con uv run (userà automaticamente il venv)
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 
