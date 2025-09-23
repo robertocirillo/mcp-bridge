@@ -9,9 +9,9 @@ services:
       MCP_SERVERS: '{"MCP_DOCKER": {"url": "http://localhost:11434"}}'
     env_file:
       - .env
-#    volumes:
+    volumes:
 #      - ./logs:/app/logs
- #     - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
+      - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
 #      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     healthcheck:
