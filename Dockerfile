@@ -29,7 +29,7 @@ RUN uv sync --locked
 # poi copia il codice dell'app (dopo aver installato le dipendenze per caching)
 COPY . .
 
-ENV PORT=8001
+ENV PORT=8000
 ENV HOST=0.0.0.0
 ENV SHELL=/bin/bash
 ENV LANG=C.UTF-8
@@ -37,5 +37,5 @@ ENV LANG=C.UTF-8
 EXPOSE 8001
 
 # avvia con uv run (userà automaticamente il venv)
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 

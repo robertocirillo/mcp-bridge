@@ -3,7 +3,7 @@ services:
     build: .
     environment:
       HOST: "0.0.0.0"
-      PORT: "8001"
+      PORT: "8000"
       DEBUG: "False"
       # Aggiunta variabile MCP_SERVERS con JSON valido
       MCP_SERVERS: '{"MCP_DOCKER": {"url": "http://localhost:11434"}}'
@@ -15,7 +15,7 @@ services:
 #      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
