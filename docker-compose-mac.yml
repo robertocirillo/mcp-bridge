@@ -1,0 +1,21 @@
+services:
+  mcp-bridge:
+    build: .
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      DEBUG: "False"
+      MCP_SERVERS: '{"MCP_DOCKER": {"url": "http://host.docker.internal:11434"}}'
+    env_file:
+      - .env
+    volumes:
+      - /Users/roberto/python-test/mcp-national-rail:/app/servers/mcp-national-rails:ro
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
