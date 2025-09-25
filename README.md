@@ -53,8 +53,8 @@ cd mcp_use_api
 
 2. **Crea ambiente virtuale**
 ```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
+python3 -m venv .venv
+source .venv/bin/activate  # Linux/Mac
 # venv\Scripts\activate     # Windows
 ```
 
