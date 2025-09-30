@@ -51,7 +51,7 @@ services:
       - .env
     volumes:
 #      - ./logs:/app/logs
-      - /Users/roberto/python-test/mcp-national-rail:/app/servers/mcp-national-rails:ro
+      - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
 #      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     network_mode: "host"
