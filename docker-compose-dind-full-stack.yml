@@ -1,0 +1,75 @@
+services:
+  ollama-server:
+    image: ollama/ollama:latest
+    container_name: ollama-server
+    pull_policy: always
+    ports:
+      - "11434:11434"
+    volumes:
+      - /srv/docker-volumes/ollama_data:/root/.ollama
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - OLLAMA_DEBUG=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    runtime: nvidia
+    restart: unless-stopped
+
+  ollama-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: ollama-webui
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      - 'OLLAMA_BASE_URL=http://ollama-server:11434'
+  #    - WEBUI_BASE_PATH=/open-webui
+    volumes:
+      - /srv/docker-volumes/webui:/app/backend/data
+    ports:
+      - "3010:8080"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    runtime: nvidia
+    extra_hosts:
+      - host.docker.internal:host-gateway
+  mcp-bridge:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      DEBUG: "False"
+      OLLAMA_BASE_URL: "http://ollama-server:11434"
+    env_file:
+      - .env
+    volumes:
+#      - ./logs:/app/logs
+      - /Users/roberto/python-test/mcp-national-rail:/app/servers/mcp-national-rails:ro
+#      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    network_mode: "host"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      - gateway
+  gateway:
+    image: docker/mcp-gateway:dind
+    privileged: true
+    command:
+      - --transport=sse
+      - --servers=duckduckgo
+      - --port=9011
+      - --memory=512Mb
+    network_mode: "host"
+
