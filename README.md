@@ -1,6 +1,6 @@
 # MCP-BRIDGE REST API
 
-A modular and scalable REST service to interact with MCP servers using the `mcp-use` library.
+A modular and scalable REST service to interact with MCP servers using the `mcp-use` library: https://github.com/mcp-use/mcp-use
 
 ## 🚀 Features
 
