@@ -1,99 +1,99 @@
-# MCP-Use REST API
+# MCP-BRIDGE REST API
 
-Un servizio REST modulare e scalabile per interagire con MCP servers tramite la libreria mcp-use.
+A modular and scalable REST service to interact with MCP servers using the `mcp-use` library.
 
-## 🚀 Caratteristiche
+## 🚀 Features
 
-- **Architettura modulare** - Codice organizzato in moduli separati
-- **Gestione sessioni avanzata** - Sessioni persistenti con cleanup automatico
-- **Multi-provider LLM** - Supporto per OpenAI, Anthropic, Ollama
-- **Sandbox E2B** - Esecuzione sicura in ambiente isolato
-- **API RESTful** - Endpoints ben documentati con OpenAPI/Swagger
-- **Logging strutturato** - Logs organizzati per debugging e monitoraggio
-- **Docker ready** - Container pronto per il deployment
-- **Health monitoring** - Endpoints per monitoraggio stato servizio
+- **Modular architecture** - Code organized into separate modules
+- **Advanced session management** - Persistent sessions with automatic cleanup
+- **Multi-provider LLM** - Support for OpenAI, Anthropic, Ollama
+- **E2B Sandbox** - Safe execution in an isolated environment
+- **RESTful API** - Well-documented endpoints with OpenAPI/Swagger
+- **Structured logging** - Organized logs for debugging and monitoring
+- **Docker ready** - Container ready for deployment
+- **Health monitoring** - Endpoints for service health checks
 
-## 📁 Struttura del Progetto
+## 📁 Project Structure
 
 ```
-mcp_use_api/
-├── main.py                 # Entry point FastAPI
-├── config.py               # Configurazioni globali
-├── requirements.txt        # Dipendenze
-├── Dockerfile             # Container setup
-├── docker-compose.yml     # Orchestrazione servizi
+mcp_bridge/
+├── main.py                 # FastAPI entry point
+├── config.py               # Global configurations
+├── requirements.txt        # Dependencies
+├── Dockerfile              # Container setup
+├── docker-compose.yml      # Service orchestration
 ├── app/
 │   ├── api/
-│   │   ├── routes/         # Endpoints REST
+│   │   ├── routes/         # REST endpoints
 │   │   └── dependencies.py # Dependency injection
 │   ├── core/
-│   │   ├── mcp_wrapper.py  # Wrapper MCP-Use
-│   │   ├── session_manager.py # Gestione sessioni
-│   │   └── exceptions.py   # Eccezioni custom
+│   │   ├── mcp_wrapper.py  # MCP-Use wrapper
+│   │   ├── session_manager.py # Session management
+│   │   └── exceptions.py   # Custom exceptions
 │   ├── models/
-│   │   ├── config.py       # Modelli configurazione
-│   │   ├── requests.py     # Modelli richieste
-│   │   └── responses.py    # Modelli risposte
+│   │   ├── config.py       # Config models
+│   │   ├── requests.py     # Request models
+│   │   └── responses.py    # Response models
 │   └── utils/
-│       ├── logging.py      # Setup logging
-│       └── helpers.py      # Funzioni utility
-├── logs/                   # Directory log
+│       ├── logging.py      # Logging setup
+│       └── helpers.py      # Utility functions
+├── logs/                   # Logs directory
 └── tests/                  # Test suite
 ```
 
-## 🛠️ Installazione
+## 🛠️ Installation
 
-### Installazione Locale
+### Local Installation
 
-1. **Clona il repository**
+1. **Clone the repository**
 ```bash
 git clone <repository-url>
-cd mcp_use_api
+cd mcp_brdige
 ```
 
-2. **Crea ambiente virtuale**
+2. **Create a virtual environment**
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate  # Linux/Mac
-# venv\Scripts\activate     # Windows
+# venv\Scripts\activate   # Windows
 ```
 
-3. **Installa dipendenze**
+3. **Install dependencies**
 ```bash
 pip install -r requirements.txt
 ```
 
-4. **Configura variabili d'ambiente**
+4. **Configure environment variables**
 ```bash
 cp .env.example .env
-# Modifica .env con le tue configurazioni
+# Edit .env with your configuration
 ```
 
-5. **Avvia il servizio**
+5. **Start the service**
 ```bash
 python main.py
 ```
 
-### Installazione con Docker
+### Docker Installation
 
-1. **Configura l'ambiente**
+1. **Prepare environment**
 ```bash
 cp .env.example .env
-# Modifica .env con le tue configurazioni
+# Edit .env with your configuration
 ```
 
-2. **Avvia con Docker Compose**
+2. **Start with Docker Compose**
 ```bash
 docker-compose up -d
 ```
 
-## ⚙️ Configurazione
+## ⚙️ Configuration
 
-### Variabili d'Ambiente Principali
+### Main Environment Variables
 
 ```env
 # API Configuration
-API_TITLE="MCP-Use REST API"
+API_TITLE="MCP-BRIDGE REST API"
 PORT=8000
 DEBUG=false
 
@@ -109,20 +109,18 @@ ANTHROPIC_API_KEY="your_key_here"
 E2B_API_KEY="your_key_here"
 ```
 
-### Provider LLM Supportati
+### Supported LLM Providers
 
 - **OpenAI**: GPT-3.5, GPT-4, etc.
 - **Anthropic**: Claude models
-- **Ollama**: Modelli locali
+- **Ollama**: Local models
 
-## 📚 Utilizzo
+## 📚 Usage
 
-### 1. Creare una Sessione
+### 1. Create a Session
 
 ```bash
-curl -X POST "http://localhost:8000/sessions" \
-  -H "Content-Type: application/json" \
-  -d '{
+curl -X POST "http://localhost:8000/sessions"   -H "Content-Type: application/json"   -d '{
     "llm_provider": {
       "provider": "openai",
       "model": "gpt-3.5-turbo",
@@ -139,24 +137,22 @@ curl -X POST "http://localhost:8000/sessions" \
   }'
 ```
 
-### 2. Eseguire una Query
+### 2. Run a Query
 
 ```bash
-curl -X POST "http://localhost:8000/sessions/{session_id}/query" \
-  -H "Content-Type: application/json" \
-  -d '{
+curl -X POST "http://localhost:8000/sessions/{session_id}/query"   -H "Content-Type: application/json"   -d '{
     "query": "List the files in the directory",
     "max_steps": 10
   }'
 ```
 
-### 3. Monitorare le Sessioni
+### 3. Monitor Sessions
 
 ```bash
-# Lista sessioni attive
+# List active sessions
 curl "http://localhost:8000/sessions"
 
-# Informazioni sessione specifica
+# Get specific session info
 curl "http://localhost:8000/sessions/{session_id}"
 
 # Health check
@@ -165,50 +161,50 @@ curl "http://localhost:8000/health"
 
 ## 🔧 API Endpoints
 
-### Sessioni
-- `POST /sessions` - Crea nuova sessione
-- `GET /sessions` - Lista sessioni attive
-- `GET /sessions/{id}` - Info sessione specifica
-- `DELETE /sessions/{id}` - Elimina sessione
+### Sessions
+- `POST /sessions` - Create new session
+- `GET /sessions` - List active sessions
+- `GET /sessions/{id}` - Get session info
+- `DELETE /sessions/{id}` - Delete session
 
 ### Query
-- `POST /sessions/{id}/query` - Esegue query
-- `GET /sessions/{id}/history` - Cronologia query
+- `POST /sessions/{id}/query` - Execute query
+- `GET /sessions/{id}/history` - Query history
 
-### Monitoraggio
+### Monitoring
 - `GET /health` - Health check
-- `GET /stats` - Statistiche servizio
-- `GET /version` - Informazioni versione
+- `GET /stats` - Service statistics
+- `GET /version` - Version info
 
 ## 🧪 Testing
 
 ```bash
-# Installa dipendenze di test
+# Install test dependencies
 pip install pytest pytest-asyncio httpx
 
-# Esegui test
+# Run tests
 pytest tests/
 
-# Test con coverage
+# Run tests with coverage
 pytest --cov=app tests/
 ```
 
 ## 📊 Monitoring & Logging
 
 ### Logging
-- **Console**: Output formattato per sviluppo
-- **File**: `logs/mcp_api.log` per logs generali
-- **Errori**: `logs/errors.log` per errori specifici
+- **Console**: Formatted output for development
+- **File**: `logs/mcp_api.log` for general logs
+- **Errors**: `logs/errors.log` for specific errors
 
 ### Health Check
-Il servizio espone endpoint `/health` per monitoraggio:
-- Stato generale del servizio
-- Numero sessioni attive
-- Funzionalità disponibili
+The service exposes the `/health` endpoint for monitoring:
+- Overall service status
+- Number of active sessions
+- Available functionalities
 
 ## 🐳 Docker
 
-### Build Immagine
+### Build Image
 ```bash
 docker build -t mcp-use-api .
 ```
@@ -220,38 +216,38 @@ docker run -p 8000:8000 --env-file .env mcp-use-api
 
 ### Docker Compose
 ```bash
-# Avvia tutti i servizi
+# Start all services
 docker-compose up -d
 
-# Visualizza logs
+# View logs
 docker-compose logs -f
 
-# Ferma servizi
+# Stop services
 docker-compose down
 ```
 
-## 🔒 Sicurezza
+## 🔒 Security
 
-- **Sandbox E2B**: Esecuzione sicura di codice
-- **Validazione input**: Tutti i dati in ingresso validati
-- **Rate limiting**: Limite sessioni simultanee
-- **Timeout**: Timeout automatico per sessioni inattive
+- **E2B Sandbox**: Secure code execution
+- **Input validation**: All incoming data validated
+- **Rate limiting**: Limit simultaneous sessions
+- **Timeouts**: Automatic timeout for inactive sessions
 
-## 🤝 Contribuire
+## 🤝 Contributing
 
-1. Fork del repository
-2. Crea feature branch (`git checkout -b feature/nuova-funzione`)
-3. Commit modifiche (`git commit -am 'Aggiunge nuova funzione'`)
-4. Push al branch (`git push origin feature/nuova-funzione`)
-5. Crea Pull Request
+1. Fork the repository
+2. Create feature branch (`git checkout -b feature/new-feature`)
+3. Commit changes (`git commit -am 'Add new feature'`)
+4. Push to branch (`git push origin feature/new-feature`)
+5. Create a Pull Request
 
-## 📄 Licenza
+## 📄 License
 
 [MIT License](LICENSE)
 
-## 🆘 Supporto
+## 🆘 Support
 
-Per problemi o domande:
-- Apri un issue su GitHub
-- Consulta la documentazione API su `/docs`
-- Controlla i logs in `logs/`
+For issues or questions:
+- Open an issue on GitHub
+- Check the API documentation at `/docs`
+- Review logs in `logs/`

@@ -1,5 +1,5 @@
 """
-Dipendenze per FastAPI
+FastAPI dependencies
 """
 
 from functools import lru_cache
@@ -9,7 +9,7 @@ from app.core.session_manager import SessionManager
 _session_manager: SessionManager = None
 
 def get_session_manager() -> SessionManager:
-    """Dependency injection per il session manager"""
+    """Dependency injection session manager"""
     global _session_manager
     if _session_manager is None:
         _session_manager = SessionManager()
@@ -17,6 +17,6 @@ def get_session_manager() -> SessionManager:
 
 @lru_cache()
 def get_settings():
-    """Dependency injection per le settings (cached)"""
+    """Dependency injection settings (cached)"""
     from config import settings
     return settings

@@ -1,53 +1,53 @@
 """
-Modelli Pydantic per le configurazioni
+Pydantic models for configurations
 """
 
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, List, Any
 
 class LLMProvider(BaseModel):
-    """Configurazione del provider LLM"""
-    provider: str = Field(..., description="Provider del modello (openai, anthropic, ollama)")
-    model: str = Field(..., description="Nome del modello")
-    api_key: Optional[str] = Field(None, description="API key (opzionale se in env)")
-    base_url: Optional[str] = Field(None, description="Base URL per provider custom (es. Ollama)")
-    temperature: Optional[float] = Field(0.7, ge=0.0, le=2.0, description="Temperatura del modello")
-    max_tokens: Optional[int] = Field(None, gt=0, description="Massimo numero di token")
+    """Configuration of the LLM provider"""
+    provider: str = Field(..., description="Model provider (openai, anthropic, ollama)")
+    model: str = Field(..., description="Model name")
+    api_key: Optional[str] = Field(None, description="API key (optional if in env)")
+    base_url: Optional[str] = Field(None, description="Base URL for custom provider (e.g. Ollama)")
+    temperature: Optional[float] = Field(0.7, ge=0.0, le=2.0, description="Model temperature")
+    max_tokens: Optional[int] = Field(None, gt=0, description="Maximum number of tokens")
 
 class MCPServerConfig(BaseModel):
-    """Configurazione di un MCP Server"""
-    command: Optional[str] = Field(None, description="Comando per avviare il server")
-    args: Optional[List[str]] = Field(None, description="Argomenti del comando")
-    env: Optional[Dict[str, str]] = Field(None, description="Variabili d'ambiente")
-    url: Optional[str] = Field(None, description="URL per connessioni HTTP")
+    """Configuration of an MCP Server"""
+    command: Optional[str] = Field(None, description="Command to start the server")
+    args: Optional[List[str]] = Field(None, description="Command arguments")
+    env: Optional[Dict[str, str]] = Field(None, description="Environment variables")
+    url: Optional[str] = Field(None, description="URL for HTTP connections")
 
     def model_post_init(self, __context):
-        """Validazione post-inizializzazione"""
+        """Post-initialization validation"""
         if not self.command and not self.url:
-            raise ValueError("Deve essere specificato almeno uno tra 'command' o 'url'")
+            raise ValueError("At least one between 'command' or 'url' must be specified")
         if self.command and self.url:
-            raise ValueError("Non è possibile specificare sia 'command' che 'url'")
+            raise ValueError("It is not possible to specify both 'command' and 'url'")
 
 class SandboxOptions(BaseModel):
-    """Opzioni per il sandbox E2B"""
-    api_key: Optional[str] = Field(None, description="API key E2B")
-    sandbox_template_id: str = Field("base", description="ID template del sandbox")
-    supergateway_command: str = Field("npx -y supergateway", description="Comando supergateway")
-    timeout: int = Field(300, gt=0, description="Timeout in secondi")
+    """Options for E2B sandbox"""
+    api_key: Optional[str] = Field(None, description="E2B API key")
+    sandbox_template_id: str = Field("base", description="Sandbox template ID")
+    supergateway_command: str = Field("npx -y supergateway", description="Supergateway command")
+    timeout: int = Field(300, gt=0, description="Timeout in seconds")
 
 class SessionConfig(BaseModel):
-    """Configurazione per creare una nuova sessione"""
+    """Configuration to create a new session"""
     llm_provider: LLMProvider
     mcp_servers: Dict[str, MCPServerConfig] = Field(..., min_items=1)
-    max_steps: int = Field(30, gt=0, le=100, description="Numero massimo di passi dell'agent")
-    use_server_manager: bool = Field(False, description="Usa il server manager per selezione automatica")
-    disallowed_tools: Optional[List[str]] = Field(None, description="Strumenti non consentiti")
-    sandbox: bool = Field(False, description="Usa l'ambiente sandbox E2B")
-    sandbox_options: Optional[SandboxOptions] = Field(None, description="Opzioni per il sandbox")
-    verbose: bool = Field(False, description="Modalità verbose per debug")
+    max_steps: int = Field(30, gt=0, le=100, description="maximum number of steps")
+    use_server_manager: bool = Field(False, description="Use the server manager for automatic selection")
+    disallowed_tools: Optional[List[str]] = Field(None, description="List of disallowed tools")
+    sandbox: bool = Field(False, description="Enable E2B sandbox")
+    sandbox_options: Optional[SandboxOptions] = Field(None, description="Options for E2B sandbox")
+    verbose: bool = Field(False, description="Enable verbose logging")
 
     def model_post_init(self, __context):
-        """Validazione post-inizializzazione"""
-        # Se sandbox è abilitato ma non ci sono opzioni, usa quelle di default
+        """post-initialization validation"""
+        # use default sandbox options if sandbox is enabled but no options provided
         if self.sandbox and not self.sandbox_options:
             self.sandbox_options = SandboxOptions()
