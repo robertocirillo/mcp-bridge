@@ -1,4 +1,3 @@
-# usa Python >=3.12 perché il tuo pyproject chiede requires-python = ">=3.12"
 FROM python:3.12-slim
 
 # manteniamo nodejs + npm
@@ -36,6 +35,5 @@ ENV LANG=C.UTF-8
 
 EXPOSE 8000
 
-# avvia con uv run (userà automaticamente il venv)
 CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 
