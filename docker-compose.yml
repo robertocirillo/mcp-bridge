@@ -5,8 +5,6 @@ services:
       HOST: "0.0.0.0"
       PORT: "8000"
       DEBUG: "False"
-      # Aggiunta variabile MCP_SERVERS con JSON valido
-      MCP_SERVERS: '{"MCP_DOCKER": {"url": "http://localhost:11434"}}'
     env_file:
       - .env
     volumes:

@@ -7,16 +7,16 @@ services:
       HOST: "0.0.0.0"
       PORT: "8000"
       DEBUG: "False"
-      # Aggiunta variabile MCP_SERVERS con JSON valido
-      MCP_SERVERS: '{"MCP_DOCKER": {"url": "http://localhost:11434"}}'
-      MCP_HOST: "http://gateway:9011/mcp"
+      MCP_HOST: "http://locahost:9011/mcp"
     env_file:
       - .env
     volumes:
 #      - ./logs:/app/logs
-      - /Users/roberto/python-test/mcp-national-rail:/app/servers/mcp-national-rails:ro
+#      - /Users/roberto/python-test/mcp-national-rail:/app/servers/mcp-national-rails:ro
+       - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
 #      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
+    network_mode: "host"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -28,11 +28,10 @@ services:
   gateway:
     image: docker/mcp-gateway:dind
     privileged: true
-    ports:
-      - "9011:9011"
     command:
       - --transport=sse
       - --servers=duckduckgo
       - --port=9011
       - --memory=512Mb
+    network_mode: "host"
 

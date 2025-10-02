@@ -47,6 +47,7 @@ services:
       PORT: "8000"
       DEBUG: "False"
       OLLAMA_BASE_URL: "http://ollama-server:11434"
+      MCP_HOST: "http://locahost:9011/mcp"
     env_file:
       - .env
     volumes:
