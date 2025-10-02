@@ -1,6 +1,6 @@
 """
-Configurazione del sistema di logging per il codice locale
-(non modifica i logger di mcp-use o di uvicorn)
+Logging configuration for local code
+(does not modify mcp-use or uvicorn loggers)
 """
 
 import logging
@@ -9,17 +9,17 @@ from logging.handlers import RotatingFileHandler
 from config import settings
 
 def setup_logging():
-    """Configura il logging solo per il namespace del tuo codice"""
+    """Configure logging only for your code's namespace"""
 
-    # Crea directory logs se non esiste
+    # Create logs directory if it doesn't exist
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 
-    # Logger per il tuo namespace
+    # Logger for your namespace
     logger = logging.getLogger("app")
     logger.setLevel(getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
 
-    # Se già ci sono handler, non aggiungerne altri
+    # If handlers already exist, do not add more
     if not logger.handlers:
         formatter = logging.Formatter(settings.LOG_FORMAT)
 
@@ -39,8 +39,8 @@ def setup_logging():
         file_handler.setLevel(logging.DEBUG)
         logger.addHandler(file_handler)
 
-    logger.info("Sistema di logging configurato")
+    logger.info("Logging system configured")
 
 def get_logger(name: str) -> logging.Logger:
-    """Restituisce un logger configurato per il namespace specificato"""
+    """Return a configured logger for the specified namespace"""
     return logging.getLogger(f"app.{name}")

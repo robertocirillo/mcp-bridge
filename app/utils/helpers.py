@@ -1,5 +1,5 @@
 """
-Funzioni helper e utilità varie
+Helper functions and various utilities
 """
 
 import json
@@ -10,15 +10,15 @@ import hashlib
 
 def generate_session_id(config: Dict[str, Any]) -> str:
     """
-    Genera un ID sessione basato sulla configurazione
-    
+    Generate a session ID based on the configuration
+
     Args:
-        config: Configurazione della sessione
-        
+        config: Session configuration
+
     Returns:
-        ID sessione generato
+        Generated session ID
     """
-    # Crea un hash della configurazione per ID deterministico (opzionale)
+    # Create a hash of the configuration for a deterministic ID (optional)
     config_str = json.dumps(config, sort_keys=True, default=str)
     config_hash = hashlib.md5(config_str.encode()).hexdigest()[:8]
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -26,13 +26,13 @@ def generate_session_id(config: Dict[str, Any]) -> str:
 
 def safe_json_serialize(obj: Any) -> str:
     """
-    Serializza un oggetto in JSON gestendo tipi non serializzabili
-    
+    Serialize an object to JSON handling non-serializable types
+
     Args:
-        obj: Oggetto da serializzare
-        
+        obj: Object to serialize
+
     Returns:
-        Stringa JSON
+        JSON string
     """
     def json_serializer(o):
         if isinstance(o, datetime):
@@ -41,18 +41,18 @@ def safe_json_serialize(obj: Any) -> str:
             return o.__dict__
         else:
             return str(o)
-    
+
     return json.dumps(obj, default=json_serializer, indent=2)
 
 def format_execution_time(seconds: float) -> str:
     """
-    Formatta il tempo di esecuzione in modo leggibile
-    
+    Format execution time in a human-readable way
+
     Args:
-        seconds: Tempo in secondi
-        
+        seconds: Time in seconds
+
     Returns:
-        Tempo formattato
+        Formatted time
     """
     if seconds < 1:
         return f"{seconds*1000:.0f}ms"
@@ -65,28 +65,28 @@ def format_execution_time(seconds: float) -> str:
 
 def validate_provider_config(provider: str, config: Dict[str, Any]) -> bool:
     """
-    Valida la configurazione di un provider LLM
-    
+    Validate an LLM provider configuration
+
     Args:
-        provider: Nome del provider
-        config: Configurazione del provider
-        
+        provider: Provider name
+        config: Provider configuration
+
     Returns:
-        True se valida, False altrimenti
+        True if valid, False otherwise
     """
     required_fields = {
         "openai": ["model"],
-        "anthropic": ["model"], 
+        "anthropic": ["model"],
         "ollama": ["model"]
     }
-    
+
     if provider not in required_fields:
         return False
-    
+
     for field in required_fields[provider]:
         if field not in config or not config[field]:
             return False
-    
+
     return True
 
 async def retry_async(
@@ -97,24 +97,24 @@ async def retry_async(
     exceptions: tuple = (Exception,)
 ) -> Any:
     """
-    Riprova una funzione asincrona con backoff esponenziale
-    
+    Retry an asynchronous function with exponential backoff
+
     Args:
-        func: Funzione da riprovare
-        max_retries: Numero massimo di tentativi
-        delay: Delay iniziale
-        backoff: Fattore di backoff
-        exceptions: Eccezioni da catturare
-        
+        func: Function to retry
+        max_retries: Maximum number of attempts
+        delay: Initial delay
+        backoff: Backoff factor
+        exceptions: Exceptions to catch
+
     Returns:
-        Risultato della funzione
-        
+        Function result
+
     Raises:
-        L'ultima eccezione se tutti i tentativi falliscono
+        Last exception if all retries fail
     """
     last_exception = None
     current_delay = delay
-    
+
     for attempt in range(max_retries + 1):
         try:
             if asyncio.iscoroutinefunction(func):
@@ -131,33 +131,33 @@ async def retry_async(
 
 def sanitize_filename(filename: str) -> str:
     """
-    Sanitizza un nome file rimuovendo caratteri non validi
-    
+    Sanitize a filename by removing invalid characters
+
     Args:
-        filename: Nome file da sanitizzare
-        
+        filename: Filename to sanitize
+
     Returns:
-        Nome file sanitizzato
+        Sanitized filename
     """
     import re
-    # Rimuovi caratteri non validi
+    # Remove invalid characters
     sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
-    # Rimuovi spazi multipli e trim
+    # Remove multiple spaces and trim
     sanitized = re.sub(r'\s+', ' ', sanitized).strip()
     return sanitized
 
 def get_memory_usage() -> Dict[str, float]:
     """
-    Ottiene informazioni sull'utilizzo della memoria
-    
+    Get memory usage information
+
     Returns:
-        Dizionario con informazioni sulla memoria
+        Dictionary with memory info
     """
     try:
         import psutil
         process = psutil.Process()
         memory_info = process.memory_info()
-        
+
         return {
             "rss_mb": memory_info.rss / 1024 / 1024,  # Resident Set Size
             "vms_mb": memory_info.vms / 1024 / 1024,  # Virtual Memory Size
@@ -170,29 +170,29 @@ def get_memory_usage() -> Dict[str, float]:
 
 def parse_duration(duration_str: str) -> Optional[int]:
     """
-    Parsa una stringa di durata in secondi
-    
+    Parse a duration string into seconds
+
     Args:
-        duration_str: Stringa durata (es: "30s", "5m", "1h")
-        
+        duration_str: Duration string (e.g., "30s", "5m", "1h")
+
     Returns:
-        Durata in secondi o None se non valida
+        Duration in seconds or None if invalid
     """
     import re
-    
+
     pattern = r'^(\d+)([smh])$'
     match = re.match(pattern, duration_str.lower())
-    
+
     if not match:
         return None
-    
+
     value, unit = match.groups()
     value = int(value)
-    
+
     multipliers = {
         's': 1,
         'm': 60,
         'h': 3600
     }
-    
+
     return value * multipliers.get(unit, 1)

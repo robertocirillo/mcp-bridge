@@ -1,5 +1,5 @@
 """
-Session Manager per gestire le sessioni MCP attive
+Session Manager to handle active MCP sessions
 """
 
 import asyncio
@@ -16,8 +16,8 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 class SessionData:
-    """Dati di una sessione attiva"""
-    
+    """Data of an active session"""
+
     def __init__(self, session_id: str, config: SessionConfig, wrapper: MCPWrapper):
         self.session_id = session_id
         self.config = config
@@ -26,51 +26,51 @@ class SessionData:
         self.last_used = datetime.now()
         self.status = "active"
         self.query_count = 0
-    
+
     def update_last_used(self):
-        """Aggiorna il timestamp dell'ultimo utilizzo"""
+        """Updates the last used timestamp"""
         self.last_used = datetime.now()
-    
+
     def is_expired(self) -> bool:
-        """Controlla se la sessione è scaduta"""
+        """Checks if the session has expired"""
         return (datetime.now() - self.last_used).total_seconds() > settings.SESSION_TIMEOUT
 
 class SessionManager:
-    """Gestore centrale delle sessioni MCP"""
-    
+    """Central manager for MCP sessions"""
+
     def __init__(self):
         self._sessions: Dict[str, SessionData] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
-    
+
     async def initialize(self):
-        """Inizializza il session manager"""
-        logger.info("Inizializzazione Session Manager")
-        # Avvia il task di cleanup automatico
+        """Initializes the session manager"""
+        logger.info("Initializing Session Manager")
+        # Start the automatic cleanup task
         self._cleanup_task = asyncio.create_task(self._cleanup_expired_sessions())
-    
+
     async def create_session(self, config: SessionConfig) -> str:
         """
-        Crea una nuova sessione
-        
+        Creates a new session
+
         Args:
-            config: Configurazione della sessione
-            
+            config: Session configuration
+
         Returns:
-            ID della sessione creata
-            
+            ID of the created session
+
         Raises:
-            MaxSessionsExceededError: Se raggiunto il limite massimo di sessioni
+            MaxSessionsExceededError: If the maximum number of sessions is reached
         """
         async with self._lock:
-            # Controlla il limite di sessioni
+            # Check session limit
             if len(self._sessions) >= settings.MAX_ACTIVE_SESSIONS:
-                raise MaxSessionsExceededError(f"Raggiunto il limite massimo di {settings.MAX_ACTIVE_SESSIONS} sessioni")
-            
+                raise MaxSessionsExceededError(f"Reached the maximum limit of {settings.MAX_ACTIVE_SESSIONS} sessions")
+
             session_id = str(uuid.uuid4())
-            
+
             try:
-                # Crea il wrapper MCP
+                # Create MCP wrapper
                 wrapper = MCPWrapper(
                     llm_provider=config.llm_provider.provider,
                     model=config.llm_provider.model,
@@ -86,76 +86,76 @@ class SessionManager:
                     disallowed_tools=config.disallowed_tools,
                     use_server_manager=config.use_server_manager
                 )
-                
-                # Inizializza il wrapper
+
+                # Initialize the wrapper
                 await wrapper.initialize()
-                
-                # Crea i dati della sessione
+
+                # Create session data
                 session_data = SessionData(session_id, config, wrapper)
-                
-                # Salva la sessione
+
+                # Save the session
                 self._sessions[session_id] = session_data
-                
-                logger.info(f"Sessione {session_id} creata con successo")
+
+                logger.info(f"Session {session_id} successfully created")
                 return session_id
-                
+
             except Exception as e:
-                logger.error(f"Errore nella creazione della sessione: {e}")
+                logger.error(f"Error creating session: {e}")
                 raise
-    
+
     async def get_session(self, session_id: str) -> SessionData:
         """
-        Recupera una sessione
-        
+        Retrieves a session
+
         Args:
-            session_id: ID della sessione
-            
+            session_id: ID of the session
+
         Returns:
-            Dati della sessione
-            
+            Session data
+
         Raises:
-            SessionNotFoundError: Se la sessione non esiste
+            SessionNotFoundError: If the session does not exist
         """
         if session_id not in self._sessions:
-            raise SessionNotFoundError(f"Sessione {session_id} non trovata")
-        
+            raise SessionNotFoundError(f"Session {session_id} not found")
+
         session_data = self._sessions[session_id]
         session_data.update_last_used()
-        
+
         return session_data
-    
+
     async def delete_session(self, session_id: str):
         """
-        Elimina una sessione
-        
+        Deletes a session
+
         Args:
-            session_id: ID della sessione da eliminare
-            
+            session_id: ID of the session to delete
+
         Raises:
-            SessionNotFoundError: Se la sessione non esiste
+            SessionNotFoundError: If the session does not exist
         """
         if session_id not in self._sessions:
-            raise SessionNotFoundError(f"Sessione {session_id} non trovata")
-        
+            raise SessionNotFoundError(f"Session {session_id} not found")
+
         async with self._lock:
             session_data = self._sessions[session_id]
-            
-            # Chiudi il wrapper
+
+            # Close the wrapper
             try:
                 await session_data.wrapper.close()
             except Exception as e:
-                logger.warning(f"Errore nella chiusura del wrapper per sessione {session_id}: {e}")
-            
-            # Rimuovi la sessione
+                logger.warning(f"Error closing wrapper for session {session_id}: {e}")
+
+            # Remove the session
             del self._sessions[session_id]
-            logger.info(f"Sessione {session_id} eliminata")
-    
+            logger.info(f"Session {session_id} deleted")
+
     async def list_sessions(self) -> List[Dict[str, Any]]:
         """
-        Lista tutte le sessioni attive
-        
+        Lists all active sessions
+
         Returns:
-            Lista delle informazioni delle sessioni
+            List of session information
         """
         sessions = []
         for session_data in self._sessions.values():
@@ -170,61 +170,61 @@ class SessionManager:
                 "llm_model": session_data.config.llm_provider.model
             })
         return sessions
-    
+
     async def get_session_count(self) -> int:
-        """Restituisce il numero di sessioni attive"""
+        """Returns the number of active sessions"""
         return len(self._sessions)
-    
+
     async def cleanup_all(self):
-        """Cleanup di tutte le sessioni"""
+        """Cleans up all sessions"""
         if self._cleanup_task:
             self._cleanup_task.cancel()
-        
+
         session_ids = list(self._sessions.keys())
         for session_id in session_ids:
             try:
                 await self.delete_session(session_id)
             except Exception as e:
-                logger.error(f"Errore nel cleanup della sessione {session_id}: {e}")
-        
-        logger.info("Cleanup completato di tutte le sessioni")
-    
+                logger.error(f"Error cleaning up session {session_id}: {e}")
+
+        logger.info("Cleanup completed for all sessions")
+
     async def _cleanup_expired_sessions(self):
-        """Task di cleanup automatico delle sessioni scadute"""
+        """Automatic cleanup task for expired sessions"""
         while True:
             try:
                 expired_sessions = []
-                
-                # Identifica sessioni scadute
+
+                # Identify expired sessions
                 for session_id, session_data in self._sessions.items():
                     if session_data.is_expired():
                         expired_sessions.append(session_id)
-                
-                # Elimina sessioni scadute
+
+                # Delete expired sessions
                 for session_id in expired_sessions:
                     try:
                         await self.delete_session(session_id)
-                        logger.info(f"Sessione scaduta {session_id} eliminata automaticamente")
+                        logger.info(f"Expired session {session_id} automatically deleted")
                     except Exception as e:
-                        logger.error(f"Errore nel cleanup automatico della sessione {session_id}: {e}")
-                
-                # Attendi prima del prossimo controllo
-                await asyncio.sleep(300)  # 5 minuti
-                
+                        logger.error(f"Error in automatic cleanup of session {session_id}: {e}")
+
+                # Wait before next check
+                await asyncio.sleep(300)  # 5 minutes
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Errore nel task di cleanup: {e}")
-                await asyncio.sleep(60)  # Riprova tra 1 minuto
-    
+                logger.error(f"Error in cleanup task: {e}")
+                await asyncio.sleep(60)  # Retry in 1 minute
+
     @staticmethod
     def _convert_mcp_servers(servers) -> Dict[str, Dict[str, Any]]:
-        """Converte la configurazione server dal formato API al formato wrapper"""
+        """Converts server configuration from API format to wrapper format"""
         mcp_servers = {}
-        
+
         for name, config in servers.items():
             server_config = {}
-            
+
             if config.url:
                 server_config["url"] = config.url
             else:
@@ -234,7 +234,7 @@ class SessionManager:
                     server_config["args"] = config.args
                 if config.env:
                     server_config["env"] = config.env
-            
+
             mcp_servers[name] = server_config
-        
+
         return mcp_servers

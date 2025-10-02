@@ -1,47 +1,47 @@
 """
-Eccezioni personalizzate per MCP-Use REST API
+Custom exceptions for MCP-Use REST API
 """
 
 class MCPAPIException(Exception):
-    """Eccezione base per l'API MCP"""
-    
+    """Base exception for MCP API"""
+
     def __init__(self, message: str, status_code: int = 500):
         self.message = message
         self.status_code = status_code
         super().__init__(self.message)
 
 class SessionNotFoundError(MCPAPIException):
-    """Eccezione per sessione non trovata"""
-    
-    def __init__(self, message: str = "Sessione non trovata"):
+    """Exception for session not found"""
+
+    def __init__(self, message: str = "Session not found"):
         super().__init__(message, status_code=404)
 
 class MaxSessionsExceededError(MCPAPIException):
-    """Eccezione per limite massimo sessioni raggiunto"""
-    
-    def __init__(self, message: str = "Limite massimo di sessioni raggiunto"):
+    """Exception for maximum sessions limit reached"""
+
+    def __init__(self, message: str = "Maximum sessions limit reached"):
         super().__init__(message, status_code=429)
 
 class MCPWrapperError(MCPAPIException):
-    """Eccezione per errori del wrapper MCP"""
-    
-    def __init__(self, message: str = "Errore nel wrapper MCP"):
+    """Exception for MCP wrapper errors"""
+
+    def __init__(self, message: str = "Error in MCP wrapper"):
         super().__init__(message, status_code=500)
 
 class QueryExecutionError(MCPAPIException):
-    """Eccezione per errori nell'esecuzione di query"""
-    
-    def __init__(self, message: str = "Errore nell'esecuzione della query"):
+    """Exception for query execution errors"""
+
+    def __init__(self, message: str = "Error executing query"):
         super().__init__(message, status_code=500)
 
 class ConfigurationError(MCPAPIException):
-    """Eccezione per errori di configurazione"""
-    
-    def __init__(self, message: str = "Errore di configurazione"):
+    """Exception for configuration errors"""
+
+    def __init__(self, message: str = "Configuration error"):
         super().__init__(message, status_code=400)
 
 class DependencyError(MCPAPIException):
-    """Eccezione per dipendenze mancanti"""
-    
-    def __init__(self, message: str = "Dipendenza mancante"):
+    """Exception for missing dependencies"""
+
+    def __init__(self, message: str = "Missing dependency"):
         super().__init__(message, status_code=500)

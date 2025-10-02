@@ -1,5 +1,5 @@
 """
-Wrapper raffinato per mcp-use con gestione errori migliorata
+Refined wrapper for mcp-use with enhanced error handling
 """
 
 import os
@@ -13,7 +13,7 @@ from app.utils.helpers import retry_async
 logger = get_logger(__name__)
 
 class MCPWrapper:
-    """Wrapper migliorato per mcp-use che incapsula completamente la libreria"""
+    """Enhanced wrapper for mcp-use that fully encapsulates the library"""
 
     def __init__(self,
                  llm_provider: str,
@@ -30,22 +30,22 @@ class MCPWrapper:
                  disallowed_tools: Optional[List[str]] = None,
                  use_server_manager: bool = False):
         """
-        Inizializza il wrapper MCP
+        Initializes the MCP wrapper
 
         Args:
-            llm_provider: Provider del modello (openai, anthropic, ollama)
-            model: Nome del modello
-            api_key: API key (opzionale se in env)
-            base_url: Base URL per provider custom
-            temperature: Temperatura del modello
-            max_tokens: Massimo numero di token
-            mcp_servers: Configurazione dei server MCP
-            max_steps: Numero massimo di passi per l'agent
-            verbose: Modalità verbose per debug
-            use_sandbox: Usa l'ambiente sandbox E2B
-            sandbox_options: Opzioni per il sandbox
-            disallowed_tools: Strumenti non consentiti
-            use_server_manager: Usa il server manager per selezione automatica
+            llm_provider: Model provider (openai, anthropic, ollama)
+            model: Model name
+            api_key: API key (optional if set in environment)
+            base_url: Base URL for custom providers
+            temperature: Model temperature
+            max_tokens: Maximum number of tokens
+            mcp_servers: MCP servers configuration
+            max_steps: Maximum steps for the agent
+            verbose: Verbose mode for debugging
+            use_sandbox: Use the E2B sandbox environment
+            sandbox_options: Options for the sandbox
+            disallowed_tools: Tools not allowed
+            use_server_manager: Use server manager for automatic selection
         """
         self.llm_provider = llm_provider.lower()
         self.model = model
@@ -61,37 +61,37 @@ class MCPWrapper:
         self.disallowed_tools = disallowed_tools
         self.use_server_manager = use_server_manager
 
-        # Stato interno
+        # Internal state
         self._agent = None
         self._client = None
         self._initialized = False
         self._steps_used = 0
         self._last_server_used = None
 
-        # Validazione iniziale
+        # Initial validation
         self._validate_config()
-        
-        # Import delle dipendenze
+
+        # Import dependencies
         self._import_dependencies()
 
     def _validate_config(self):
-        """Valida la configurazione iniziale"""
+        """Validates the initial configuration"""
         if not self.llm_provider:
-            raise ConfigurationError("Provider LLM non specificato")
-        
+            raise ConfigurationError("LLM provider not specified")
+
         if not self.model:
-            raise ConfigurationError("Modello non specificato")
-        
+            raise ConfigurationError("Model not specified")
+
         if not self.mcp_servers:
-            raise ConfigurationError("Nessun server MCP configurato")
-        
-        # Valida i server MCP
+            raise ConfigurationError("No MCP servers configured")
+
+        # Validate MCP servers
         for name, config in self.mcp_servers.items():
             if not config.get("command") and not config.get("url"):
-                raise ConfigurationError(f"Server {name}: deve avere 'command' o 'url'")
+                raise ConfigurationError(f"Server {name}: must have 'command' or 'url'")
 
     def _import_dependencies(self):
-        """Importa le dipendenze necessarie con gestione errori migliorata"""
+        """Imports required dependencies with enhanced error handling"""
         # Import mcp-use
         try:
             from mcp_use import MCPAgent, MCPClient
@@ -99,40 +99,40 @@ class MCPWrapper:
             self.MCPAgent = MCPAgent
             self.MCPClient = MCPClient
             self.SandboxOptions = SandboxOptions
-            logger.debug("mcp-use importato con successo")
+            logger.debug("mcp-use successfully imported")
         except ImportError as e:
-            raise DependencyError(f"mcp-use non installato: {e}")
+            raise DependencyError(f"mcp-use not installed: {e}")
 
         # Import LangChain providers
         if self.llm_provider == "openai":
             try:
                 from langchain_openai import ChatOpenAI
                 self.ChatLLM = ChatOpenAI
-                logger.debug("langchain-openai importato con successo")
+                logger.debug("langchain-openai successfully imported")
             except ImportError as e:
-                raise DependencyError(f"langchain-openai non installato: {e}")
+                raise DependencyError(f"langchain-openai not installed: {e}")
 
         elif self.llm_provider == "anthropic":
             try:
                 from langchain_anthropic import ChatAnthropic
                 self.ChatLLM = ChatAnthropic
-                logger.debug("langchain-anthropic importato con successo")
+                logger.debug("langchain-anthropic successfully imported")
             except ImportError as e:
-                raise DependencyError(f"langchain-anthropic non installato: {e}")
+                raise DependencyError(f"langchain-anthropic not installed: {e}")
 
         elif self.llm_provider == "ollama":
             try:
                 from langchain_ollama import ChatOllama
                 self.ChatLLM = ChatOllama
-                logger.debug("langchain-ollama importato con successo")
+                logger.debug("langchain-ollama successfully imported")
             except ImportError as e:
-                raise DependencyError(f"langchain-ollama non installato: {e}")
+                raise DependencyError(f"langchain-ollama not installed: {e}")
 
         else:
-            raise ConfigurationError(f"Provider non supportato: {self.llm_provider}")
+            raise ConfigurationError(f"Unsupported provider: {self.llm_provider}")
 
     def _create_llm(self):
-        """Crea l'istanza del modello LLM con gestione errori"""
+        """Creates the LLM model instance with error handling"""
         try:
             kwargs = {
                 "model": self.model,
@@ -146,8 +146,8 @@ class MCPWrapper:
                 if self.api_key:
                     kwargs["api_key"] = self.api_key
                 elif not os.getenv("OPENAI_API_KEY"):
-                    raise ConfigurationError("API key OpenAI non trovata")
-                
+                    raise ConfigurationError("OpenAI API key not found")
+
                 if self.base_url:
                     kwargs["base_url"] = self.base_url
 
@@ -155,7 +155,7 @@ class MCPWrapper:
                 if self.api_key:
                     kwargs["api_key"] = self.api_key
                 elif not os.getenv("ANTHROPIC_API_KEY"):
-                    raise ConfigurationError("API key Anthropic non trovata")
+                    raise ConfigurationError("Anthropic API key not found")
 
             elif self.llm_provider == "ollama":
                 if self.base_url:
@@ -164,42 +164,42 @@ class MCPWrapper:
                     kwargs["base_url"] = "http://localhost:11434"
 
             llm = self.ChatLLM(**kwargs)
-            logger.debug(f"LLM {self.llm_provider}/{self.model} creato con successo")
+            logger.debug(f"LLM {self.llm_provider}/{self.model} successfully created")
             return llm
-            
+
         except Exception as e:
-            raise MCPWrapperError(f"Errore nella creazione del modello LLM: {e}")
+            raise MCPWrapperError(f"Error creating LLM model: {e}")
 
     def _create_mcp_config(self) -> Dict[str, Any]:
-        """Crea la configurazione per i server MCP"""
+        """Creates the configuration for MCP servers"""
         return {"mcpServers": self.mcp_servers}
 
     async def initialize(self):
-        """Inizializza l'agent e i client MCP con retry automatico"""
+        """Initializes the MCP agent and clients with automatic retry"""
         if self._initialized:
-            logger.debug("MCPWrapper già inizializzato")
+            logger.debug("MCPWrapper already initialized")
             return
 
         try:
-            # Usa retry per operazioni di rete
+            # Use retry for network operations
             await retry_async(self._initialize_internal, max_retries=3, delay=1.0)
-            
+
             self._initialized = True
-            logger.info("MCPWrapper inizializzato con successo")
+            logger.info("MCPWrapper successfully initialized")
 
         except Exception as e:
-            logger.error(f"Errore nell'inizializzazione dopo tutti i tentativi: {e}")
-            raise MCPWrapperError(f"Inizializzazione fallita: {e}")
+            logger.error(f"Initialization error after all attempts: {e}")
+            raise MCPWrapperError(f"Initialization failed: {e}")
 
     async def _initialize_internal(self):
-        """Logica interna di inizializzazione"""
-        # Crea il modello LLM
+        """Internal initialization logic"""
+        # Create LLM model
         llm = self._create_llm()
 
-        # Crea la configurazione MCP
+        # Create MCP configuration
         mcp_config = self._create_mcp_config()
 
-        # Configura il client MCP
+        # Configure MCP client
         client_kwargs = {"config": mcp_config}
 
         if self.use_sandbox:
@@ -214,7 +214,7 @@ class MCPWrapper:
 
         self._client = self.MCPClient(**client_kwargs)
 
-        # Crea l'agent
+        # Create the agent
         agent_kwargs = {
             "llm": llm,
             "client": self._client,
@@ -233,26 +233,26 @@ class MCPWrapper:
                         max_steps: Optional[int] = None,
                         server_name: Optional[str] = None) -> str:
         """
-        Esegue una query utilizzando l'agent MCP
+        Executes a query using the MCP agent
 
         Args:
-            query: La query da elaborare
-            max_steps: Override del numero massimo di passi (opzionale)
-            server_name: Nome specifico del server da usare (opzionale)
+            query: The query to process
+            max_steps: Override for maximum steps (optional)
+            server_name: Specific server name to use (optional)
 
         Returns:
-            La risposta dell'agent come stringa
+            The agent's response as a string
         """
         if not self._initialized:
             await self.initialize()
 
         if not query.strip():
-            raise ValueError("Query vuota non consentita")
+            raise ValueError("Empty query not allowed")
 
         try:
-            logger.debug(f"Esecuzione query: {query[:100]}...")
+            logger.debug(f"Executing query: {query[:100]}...")
 
-            # Prepara i parametri
+            # Prepare parameters
             run_kwargs = {"query": query}
 
             if max_steps:
@@ -260,66 +260,66 @@ class MCPWrapper:
 
             if server_name:
                 if server_name not in self.mcp_servers:
-                    raise ValueError(f"Server '{server_name}' non configurato")
+                    raise ValueError(f"Server '{server_name}' not configured")
                 run_kwargs["server_name"] = server_name
                 self._last_server_used = server_name
 
-            # Definisci una funzione async separata per il retry
+            # Define a separate async function for retry
             async def execute_agent_run():
                 return await self._agent.run(**run_kwargs)
 
-            # Esegue la query con retry
+            # Execute the query with retry
             result = await retry_async(
                 execute_agent_run,
                 max_retries=2,
                 delay=0.5
             )
 
-            # Aggiorna le statistiche
+            # Update stats
             self._steps_used = getattr(self._agent, 'steps_used', 0)
 
             if not self._last_server_used and hasattr(self._agent, 'last_server_used'):
                 self._last_server_used = self._agent.last_server_used
 
-            logger.debug(f"Query completata in {self._steps_used} passi")
+            logger.debug(f"Query completed in {self._steps_used} steps")
             return str(result)
 
         except Exception as e:
-            logger.error(f"Errore nell'esecuzione della query: {e}")
-            raise MCPWrapperError(f"Esecuzione query fallita: {e}")
+            logger.error(f"Query execution error: {e}")
+            raise MCPWrapperError(f"Query execution failed: {e}")
 
 
     async def close(self):
-        """Chiude le connessioni e rilascia le risorse"""
+        """Closes connections and releases resources"""
         if self._client:
             try:
                 await self._client.close_all_sessions()
-                logger.debug("Client MCP chiuso correttamente")
+                logger.debug("MCP client closed successfully")
             except Exception as e:
-                logger.warning(f"Errore nella chiusura del client: {e}")
+                logger.warning(f"Error closing MCP client: {e}")
 
         self._agent = None
         self._client = None
         self._initialized = False
-        logger.debug("MCPWrapper chiuso")
+        logger.debug("MCPWrapper closed")
 
     @property
     def steps_used(self) -> int:
-        """Restituisce il numero di passi utilizzati nell'ultima esecuzione"""
+        """Returns the number of steps used in the last run"""
         return self._steps_used
 
     @property
     def last_server_used(self) -> Optional[str]:
-        """Restituisce l'ultimo server utilizzato"""
+        """Returns the last server used"""
         return self._last_server_used
 
     @property
     def is_initialized(self) -> bool:
-        """Indica se il wrapper è stato inizializzato"""
+        """Indicates if the wrapper has been initialized"""
         return self._initialized
 
     def get_config_summary(self) -> Dict[str, Any]:
-        """Restituisce un riassunto della configurazione"""
+        """Returns a summary of the configuration"""
         return {
             "llm_provider": self.llm_provider,
             "model": self.model,
@@ -331,20 +331,20 @@ class MCPWrapper:
         }
 
     async def test_connection(self) -> Dict[str, bool]:
-        """Testa la connessione ai server MCP configurati"""
+        """Tests the connection to configured MCP servers"""
         if not self._initialized:
             await self.initialize()
-        
+
         results = {}
         for server_name in self.mcp_servers.keys():
             try:
-                # Test semplice con una query minima
+                # Simple test with a minimal query
                 await self.run_query("ping", max_steps=1, server_name=server_name)
                 results[server_name] = True
             except Exception as e:
-                logger.warning(f"Test connessione fallito per {server_name}: {e}")
+                logger.warning(f"Connection test failed for {server_name}: {e}")
                 results[server_name] = False
-        
+
         return results
 
     def __repr__(self) -> str:
