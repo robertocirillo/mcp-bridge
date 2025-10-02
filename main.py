@@ -12,23 +12,23 @@ from app.api.routes import sessions, queries, health
 from app.utils.logging import setup_logging, get_logger
 from config import settings
 
-# Setup logging locale
+# Setup local logging
 setup_logging()
 logger = get_logger("main")
 
-# Session manager globale
+# Global session manager
 session_manager = SessionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Gestisce il ciclo di vita dell'applicazione"""
-    logger.info("Avvio del servizio MCP-Use REST API")
+    """Manages the application lifecycle"""
+    logger.info("Starting MCP-Use REST API service")
     await session_manager.initialize()
     yield
-    logger.info("Chiusura del servizio MCP-Use REST API")
+    logger.info("Shutting down MCP-Use REST API service")
     await session_manager.cleanup_all()
 
-# Crea l'app FastAPI
+# Create the FastAPI app
 app = FastAPI(
     title=settings.API_TITLE,
     description=settings.API_DESCRIPTION,
@@ -36,7 +36,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configurazione CORS
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -45,7 +45,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Registra le routes
+# Register routes
 app.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
 app.include_router(queries.router, prefix="/sessions", tags=["queries"])
 app.include_router(health.router, tags=["health"])
@@ -53,7 +53,7 @@ app.include_router(health.router, tags=["health"])
 # Root endpoint
 @app.get("/")
 async def root():
-    """Endpoint di health check base"""
+    """Basic health check endpoint"""
     return {
         "service": settings.API_TITLE,
         "version": settings.API_VERSION,

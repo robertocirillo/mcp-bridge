@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-# manteniamo nodejs + npm
+# Keep Node.js + npm
 RUN apt-get update \
     && apt-get install -y nodejs npm \
     && apt-get clean \
@@ -8,24 +8,24 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# copia solo i file di metadata per sfruttare la cache
+# Copy only metadata files to leverage cache
 COPY pyproject.toml uv.lock* ./
 
-# uv 
+# uv
 RUN pip install --no-cache-dir uv
 
-# crea il venv dentro l'immagine (portabile)
+# Create the virtual environment inside the image (portable)
 RUN python -m venv /app/venv
 
-# obblighiamo i processi successivi ad usare il venv
+# Force subsequent processes to use the venv
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="/app/venv/bin:$PATH"
 
-# sincronizza le dipendenze dal progetto/lockfile nel venv
-# --locked forza l'uso del lockfile (deterministico)
+# Sync dependencies from project/lockfile into the venv
+# --locked forces using the lockfile (deterministic)
 RUN uv sync --locked
 
-# poi copia il codice dell'app (dopo aver installato le dipendenze per caching)
+# Then copy the app code (after installing dependencies for caching)
 COPY . .
 
 ENV PORT=8000
@@ -36,4 +36,3 @@ ENV LANG=C.UTF-8
 EXPOSE 8000
 
 CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-

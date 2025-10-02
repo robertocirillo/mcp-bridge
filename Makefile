@@ -1,31 +1,31 @@
-# Nome del venv
+# Name of the virtual environment
 VENV = .venv
 PYTHON = python3.12
 PIP = $(VENV)/bin/pip
 
-# Target predefinito
+# Default target
 default: install
 
-# Crea un nuovo venv
+# Create a new virtual environment
 $(VENV)/bin/activate: requirements.txt
-	@echo "📦 Creazione venv..."
+	@echo "📦 Creating virtual environment..."
 	rm -rf $(VENV)
 	$(PYTHON) -m venv $(VENV)
 	$(PIP) install --upgrade pip setuptools wheel
 
-# Installa le dipendenze da requirements.txt
+# Install dependencies from requirements.txt
 install: $(VENV)/bin/activate
-	@echo "📥 Installazione requirements..."
+	@echo "📥 Installing requirements..."
 	$(PIP) install -r requirements.txt
 
-# Pulisce il venv
+# Clean the virtual environment
 clean:
-	@echo "🧹 Rimozione venv..."
+	@echo "🧹 Removing virtual environment..."
 	rm -rf $(VENV)
 
-# Rifa tutto da zero
+# Rebuild everything from scratch
 rebuild: clean install
 
-# Avvia l'app con uvicorn
+# Run the app with uvicorn
 run:
 	$(VENV)/bin/uvicorn main:app --reload
