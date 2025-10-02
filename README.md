@@ -48,7 +48,7 @@ mcp_bridge/
 1. **Clone the repository**
 ```bash
 git clone <repository-url>
-cd mcp_brdige
+cd mcp_bridge
 ```
 
 2. **Create a virtual environment**
@@ -206,12 +206,12 @@ The service exposes the `/health` endpoint for monitoring:
 
 ### Build Image
 ```bash
-docker build -t mcp-use-api .
+docker build -t mcp-bridge .
 ```
 
 ### Run Container
 ```bash
-docker run -p 8000:8000 --env-file .env mcp-use-api
+docker run -p 8000:8000 --env-file .env mcp-bridge
 ```
 
 ### Docker Compose
@@ -249,5 +249,4 @@ docker-compose down
 
 For issues or questions:
 - Open an issue on GitHub
-- Check the API documentation at `/docs`
-- Review logs in `logs/`
+- Contact the maintainer at (mailto: roberto.cirillo@isti.cnr.it)
