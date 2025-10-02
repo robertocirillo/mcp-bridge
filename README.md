@@ -1,6 +1,7 @@
 # MCP-BRIDGE REST API
 
-A modular and scalable REST service to interact with MCP servers using the `mcp-use` library: https://github.com/mcp-use/mcp-use
+A modular and scalable REST service to interact with MCP servers using the mcp-use library: https://github.com/mcp-use/mcp-use
+It is ready to work with a Docker MCP gateway in either DIND or DOD mode, which can be selected by using the appropriate Docker Compose file.
 
 ## 🚀 Features
 
