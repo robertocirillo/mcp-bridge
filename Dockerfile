@@ -15,11 +15,16 @@ COPY pyproject.toml uv.lock* ./
 RUN pip install --no-cache-dir uv
 
 # Create the virtual environment inside the image (portable)
-RUN python -m venv /app/venv
+#RUN python -m venv /app/venv
+RUN uv venv
+
+
+COPY ./vendor/mcp-use ./vendor/mcp-use
+RUN uv pip install -e ./vendor/mcp-use
 
 # Force subsequent processes to use the venv
 ENV VIRTUAL_ENV=/app/.venv
-ENV PATH="/app/venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Sync dependencies from project/lockfile into the venv
 # --locked forces using the lockfile (deterministic)
