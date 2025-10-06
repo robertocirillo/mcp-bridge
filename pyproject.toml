@@ -27,4 +27,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-mcp-use = { git = "https://github.com/mcp-use/mcp-use.git", rev = "main" }
+mcp-use = { path = "./vendor/mcp-use" }

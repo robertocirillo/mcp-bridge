@@ -1,6 +1,10 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
+resolution-markers = [
+    "python_full_version >= '3.13'",
+    "python_full_version < '3.13'",
+]
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -882,7 +886,7 @@ requires-dist = [
     { name = "langchain-anthropic", specifier = ">=0.1.0" },
     { name = "langchain-ollama", specifier = ">=0.1.0" },
     { name = "langchain-openai", specifier = ">=0.1.0" },
-    { name = "mcp-use", git = "https://github.com/mcp-use/mcp-use.git?rev=main" },
+    { name = "mcp-use", directory = "vendor/mcp-use" },
     { name = "mypy", specifier = ">=1.7.0" },
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pydantic", specifier = ">=2.5.0,<3.0" },
@@ -898,7 +902,7 @@ requires-dist = [
 [[package]]
 name = "mcp-use"
 version = "1.3.11"
-source = { git = "https://github.com/mcp-use/mcp-use.git?rev=main#dceb23e4c93460d8cfd53353501fb2450b4731d6" }
+source = { directory = "vendor/mcp-use" }
 dependencies = [
     { name = "aiohttp" },
     { name = "authlib" },
@@ -911,6 +915,34 @@ dependencies = [
     { name = "scarf-sdk" },
     { name = "websockets" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9.0" },
+    { name = "authlib", specifier = ">=1.6.3" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=23.9.0" },
+    { name = "e2b-code-interpreter", marker = "extra == 'e2b'", specifier = ">=1.5.0" },
+    { name = "fastapi", marker = "extra == 'dev'" },
+    { name = "fastembed", marker = "extra == 'search'", specifier = ">=0.0.1" },
+    { name = "fastmcp", marker = "extra == 'dev'", specifier = "==2.10.5" },
+    { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
+    { name = "jsonschema-pydantic", specifier = ">=0.1.0" },
+    { name = "langchain", specifier = ">=0.1.0" },
+    { name = "langchain-anthropic", marker = "extra == 'anthropic'" },
+    { name = "langchain-openai", marker = "extra == 'openai'" },
+    { name = "mcp", specifier = ">=1.10.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
+    { name = "posthog", specifier = ">=4.8.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "scarf-sdk", specifier = ">=0.1.0" },
+    { name = "websockets", specifier = ">=15.0" },
+]
+provides-extras = ["dev", "anthropic", "openai", "search", "e2b"]
 
 [[package]]
 name = "multidict"
