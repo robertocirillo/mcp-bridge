@@ -22,7 +22,7 @@ mcp_bridge/
 ├── config.py               # Global configurations
 ├── requirements.txt        # Dependencies
 ├── Dockerfile              # Container setup
-├── docker-compose.yml      # Service orchestration
+├── docker-compose*.yml      # Service orchestration
 ├── app/
 │   ├── api/
 │   │   ├── routes/         # REST endpoints

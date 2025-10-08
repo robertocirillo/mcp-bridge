@@ -1,5 +1,5 @@
 """
-Configurazioni globali per MCP-Use REST API
+MCP-BRIDGE REST API global settings
 """
 
 from pydantic_settings import BaseSettings
@@ -10,12 +10,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Settings(BaseSettings):
-    """Configurazioni dell'applicazione"""
+    """Global settings for MCP-BRIDGE"""
     
     # API Settings
     API_TITLE: str = "mcp-bridge: REST API for mcp-use library"
-    API_DESCRIPTION: str = "Servizio REST per interagire con MCP servers tramite la libreria mcp-use"
-    API_VERSION: str = "1.0.0"
+    API_DESCRIPTION: str = "A modular and scalable REST service to interact with MCP servers using the mcp-use library"
+    API_VERSION: str = "0.1.0-beta"
     
     # Server Settings
     HOST: str = "0.0.0.0"
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     
     # Session Settings
     MAX_ACTIVE_SESSIONS: int = 100
-    SESSION_TIMEOUT: int = 3600  # secondi
+    SESSION_TIMEOUT: int = 3600  # seconds
     
     # MCP Settings
     DEFAULT_MAX_STEPS: int = 30
@@ -53,5 +53,5 @@ class Settings(BaseSettings):
         env_file = ".env"
         case_sensitive = True
 
-# Istanza globale delle impostazioni
+# global settings instance
 settings = Settings()
