@@ -3,7 +3,6 @@ Refined wrapper for mcp-use with enhanced error handling
 """
 
 import os
-import logging
 from typing import Optional, Dict, Any, List
 
 from app.core.exceptions import MCPWrapperError, DependencyError, ConfigurationError
@@ -12,23 +11,33 @@ from app.utils.helpers import retry_async
 
 logger = get_logger(__name__)
 
+# Mapping provider -> LangChain class path
+PROVIDER_IMPORTS = {
+    "openai": ("langchain_openai", "ChatOpenAI"),
+    "anthropic": ("langchain_anthropic", "ChatAnthropic"),
+    "ollama": ("langchain_ollama", "ChatOllama"),
+}
+
+
 class MCPWrapper:
     """Enhanced wrapper for mcp-use that fully encapsulates the library"""
 
-    def __init__(self,
-                 llm_provider: str,
-                 model: str,
-                 api_key: Optional[str] = None,
-                 base_url: Optional[str] = None,
-                 temperature: float = 0.7,
-                 max_tokens: Optional[int] = None,
-                 mcp_servers: Dict[str, Dict[str, Any]] = None,
-                 max_steps: int = 30,
-                 verbose: bool = False,
-                 use_sandbox: bool = False,
-                 sandbox_options: Optional[Dict[str, Any]] = None,
-                 disallowed_tools: Optional[List[str]] = None,
-                 use_server_manager: bool = False):
+    def __init__(
+        self,
+        llm_provider: str,
+        model: str,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None,
+        max_steps: int = 30,
+        verbose: bool = False,
+        use_sandbox: bool = False,
+        sandbox_options: Optional[Dict[str, Any]] = None,
+        disallowed_tools: Optional[List[str]] = None,
+        use_server_manager: bool = False,
+    ):
         """
         Initializes the MCP wrapper
 
@@ -68,10 +77,8 @@ class MCPWrapper:
         self._steps_used = 0
         self._last_server_used = None
 
-        # Initial validation
+        # Validate and import dependencies
         self._validate_config()
-
-        # Import dependencies
         self._import_dependencies()
 
     def _validate_config(self):
@@ -88,7 +95,9 @@ class MCPWrapper:
         # Validate MCP servers
         for name, config in self.mcp_servers.items():
             if not config.get("command") and not config.get("url"):
-                raise ConfigurationError(f"Server {name}: must have 'command' or 'url'")
+                raise ConfigurationError(
+                    f"Server {name}: must have 'command' or 'url'"
+                )
 
     def _import_dependencies(self):
         """Imports required dependencies with enhanced error handling"""
@@ -96,6 +105,7 @@ class MCPWrapper:
         try:
             from mcp_use import MCPAgent, MCPClient
             from mcp_use.types.sandbox import SandboxOptions
+
             self.MCPAgent = MCPAgent
             self.MCPClient = MCPClient
             self.SandboxOptions = SandboxOptions
@@ -103,33 +113,17 @@ class MCPWrapper:
         except ImportError as e:
             raise DependencyError(f"mcp-use not installed: {e}")
 
-        # Import LangChain providers
-        if self.llm_provider == "openai":
-            try:
-                from langchain_openai import ChatOpenAI
-                self.ChatLLM = ChatOpenAI
-                logger.debug("langchain-openai successfully imported")
-            except ImportError as e:
-                raise DependencyError(f"langchain-openai not installed: {e}")
-
-        elif self.llm_provider == "anthropic":
-            try:
-                from langchain_anthropic import ChatAnthropic
-                self.ChatLLM = ChatAnthropic
-                logger.debug("langchain-anthropic successfully imported")
-            except ImportError as e:
-                raise DependencyError(f"langchain-anthropic not installed: {e}")
-
-        elif self.llm_provider == "ollama":
-            try:
-                from langchain_ollama import ChatOllama
-                self.ChatLLM = ChatOllama
-                logger.debug("langchain-ollama successfully imported")
-            except ImportError as e:
-                raise DependencyError(f"langchain-ollama not installed: {e}")
-
-        else:
+        # Import LangChain provider
+        if self.llm_provider not in PROVIDER_IMPORTS:
             raise ConfigurationError(f"Unsupported provider: {self.llm_provider}")
+
+        module_name, class_name = PROVIDER_IMPORTS[self.llm_provider]
+        try:
+            module = __import__(module_name, fromlist=[class_name])
+            self.ChatLLM = getattr(module, class_name)
+            logger.debug(f"{module_name} successfully imported")
+        except ImportError as e:
+            raise DependencyError(f"{module_name} not installed: {e}")
 
     def _create_llm(self):
         """Creates the LLM model instance with error handling"""
@@ -142,26 +136,19 @@ class MCPWrapper:
             if self.max_tokens:
                 kwargs["max_tokens"] = self.max_tokens
 
-            if self.llm_provider == "openai":
+            # Provider-specific configuration
+            if self.llm_provider in ("openai", "anthropic"):
+                env_key = f"{self.llm_provider.upper()}_API_KEY"
                 if self.api_key:
                     kwargs["api_key"] = self.api_key
-                elif not os.getenv("OPENAI_API_KEY"):
-                    raise ConfigurationError("OpenAI API key not found")
+                elif not os.getenv(env_key):
+                    raise ConfigurationError(f"{self.llm_provider.title()} API key not found")
 
                 if self.base_url:
                     kwargs["base_url"] = self.base_url
-
-            elif self.llm_provider == "anthropic":
-                if self.api_key:
-                    kwargs["api_key"] = self.api_key
-                elif not os.getenv("ANTHROPIC_API_KEY"):
-                    raise ConfigurationError("Anthropic API key not found")
 
             elif self.llm_provider == "ollama":
-                if self.base_url:
-                    kwargs["base_url"] = self.base_url
-                else:
-                    kwargs["base_url"] = "http://localhost:11434"
+                kwargs["base_url"] = self.base_url or "http://localhost:11434"
 
             llm = self.ChatLLM(**kwargs)
             logger.debug(f"LLM {self.llm_provider}/{self.model} successfully created")
@@ -170,10 +157,6 @@ class MCPWrapper:
         except Exception as e:
             raise MCPWrapperError(f"Error creating LLM model: {e}")
 
-    def _create_mcp_config(self) -> Dict[str, Any]:
-        """Creates the configuration for MCP servers"""
-        return {"mcpServers": self.mcp_servers}
-
     async def initialize(self):
         """Initializes the MCP agent and clients with automatic retry"""
         if self._initialized:
@@ -181,9 +164,7 @@ class MCPWrapper:
             return
 
         try:
-            # Use retry for network operations
             await retry_async(self._initialize_internal, max_retries=3, delay=1.0)
-
             self._initialized = True
             logger.info("MCPWrapper successfully initialized")
 
@@ -193,24 +174,19 @@ class MCPWrapper:
 
     async def _initialize_internal(self):
         """Internal initialization logic"""
-        # Create LLM model
         llm = self._create_llm()
 
-        # Create MCP configuration
-        mcp_config = self._create_mcp_config()
-
         # Configure MCP client
-        client_kwargs = {"config": mcp_config}
+        client_kwargs = {"config": {"mcpServers": self.mcp_servers}}
 
         if self.use_sandbox:
             client_kwargs["sandbox"] = True
             if self.sandbox_options:
-                sandbox_options = {
+                client_kwargs["sandbox_options"] = {
                     "api_key": self.sandbox_options.get("api_key", os.getenv("E2B_API_KEY")),
                     "sandbox_template_id": self.sandbox_options.get("sandbox_template_id", "base"),
-                    "supergateway_command": self.sandbox_options.get("supergateway_command", "npx -y supergateway")
+                    "supergateway_command": self.sandbox_options.get("supergateway_command", "npx -y supergateway"),
                 }
-                client_kwargs["sandbox_options"] = sandbox_options
 
         self._client = self.MCPClient(**client_kwargs)
 
@@ -220,7 +196,7 @@ class MCPWrapper:
             "client": self._client,
             "max_steps": self.max_steps,
             "use_server_manager": self.use_server_manager,
-            "verbose": self.verbose
+            "verbose": self.verbose,
         }
 
         if self.disallowed_tools:
@@ -228,10 +204,12 @@ class MCPWrapper:
 
         self._agent = self.MCPAgent(**agent_kwargs)
 
-    async def run_query(self,
-                        query: str,
-                        max_steps: Optional[int] = None,
-                        server_name: Optional[str] = None) -> str:
+    async def run_query(
+        self,
+        query: str,
+        max_steps: Optional[int] = None,
+        server_name: Optional[str] = None,
+    ) -> str:
         """
         Executes a query using the MCP agent
 
@@ -270,15 +248,13 @@ class MCPWrapper:
 
             # Execute the query with retry
             result = await retry_async(
-                execute_agent_run,
-                max_retries=2,
-                delay=0.5
+                execute_agent_run, max_retries=2, delay=0.5
             )
 
             # Update stats
-            self._steps_used = getattr(self._agent, 'steps_used', 0)
+            self._steps_used = getattr(self._agent, "steps_used", 0)
 
-            if not self._last_server_used and hasattr(self._agent, 'last_server_used'):
+            if not self._last_server_used and hasattr(self._agent, "last_server_used"):
                 self._last_server_used = self._agent.last_server_used
 
             logger.debug(f"Query completed in {self._steps_used} steps")
@@ -287,7 +263,6 @@ class MCPWrapper:
         except Exception as e:
             logger.error(f"Query execution error: {e}")
             raise MCPWrapperError(f"Query execution failed: {e}")
-
 
     async def close(self):
         """Closes connections and releases resources"""
@@ -327,7 +302,7 @@ class MCPWrapper:
             "use_sandbox": self.use_sandbox,
             "servers": list(self.mcp_servers.keys()),
             "use_server_manager": self.use_server_manager,
-            "initialized": self._initialized
+            "initialized": self._initialized,
         }
 
     async def test_connection(self) -> Dict[str, bool]:
@@ -338,7 +313,6 @@ class MCPWrapper:
         results = {}
         for server_name in self.mcp_servers.keys():
             try:
-                # Simple test with a minimal query
                 await self.run_query("ping", max_steps=1, server_name=server_name)
                 results[server_name] = True
             except Exception as e:
@@ -348,5 +322,7 @@ class MCPWrapper:
         return results
 
     def __repr__(self) -> str:
-        return (f"MCPWrapper(provider={self.llm_provider}, model={self.model}, "
-                f"servers={list(self.mcp_servers.keys())}, initialized={self._initialized})")
+        return (
+            f"MCPWrapper(provider={self.llm_provider}, model={self.model}, "
+            f"servers={list(self.mcp_servers.keys())}, initialized={self._initialized})"
+        )
