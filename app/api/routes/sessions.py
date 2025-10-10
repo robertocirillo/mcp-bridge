@@ -1,5 +1,5 @@
 """
-Endpoints per la gestione delle sessioni
+Endpoints for managing MCP-Bridge sessions.
 """
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
@@ -21,7 +21,7 @@ async def create_session(
     request: SessionCreateRequest,
     session_manager: SessionManager = Depends(get_session_manager)
 ):
-    """New MCP-Use session"""
+    """New session"""
     try:
         # Parsing and validation of the request
         config = SessionConfig(**request.dict())
