@@ -59,7 +59,7 @@ class MCPWrapper:
         self.llm_provider = llm_provider.lower()
         self.model = model
         self.api_key = api_key
-        self.base_url = base_url
+        self.base_url = base_url or (os.getenv("OLLAMA_BASE_URL") if llm_provider == "ollama" else None)
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.mcp_servers = mcp_servers or {}
