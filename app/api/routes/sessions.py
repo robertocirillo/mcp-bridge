@@ -21,12 +21,12 @@ async def create_session(
     request: SessionCreateRequest,
     session_manager: SessionManager = Depends(get_session_manager)
 ):
-    """Crea una nuova sessione MCP-Use"""
+    """New MCP-Use session"""
     try:
-        # Converte la richiesta in configurazione
+        # Parsing and validation of the request
         config = SessionConfig(**request.dict())
         
-        # Crea la sessione
+        # sessione creation
         session_id = await session_manager.create_session(config)
         
         return SessionResponse(
@@ -37,18 +37,18 @@ async def create_session(
         )
         
     except MaxSessionsExceededError as e:
-        logger.warning(f"Limite massimo sessioni raggiunto: {e}")
+        logger.warning(f"Limit exceeded {e}")
         raise HTTPException(status_code=429, detail=str(e))
     
     except Exception as e:
-        logger.error(f"Errore nella creazione della sessione: {e}")
-        raise HTTPException(status_code=500, detail=f"Errore interno: {str(e)}")
+        logger.error(f"Session creation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 @router.get("", response_model=List[SessionInfo])
 async def list_sessions(
     session_manager: SessionManager = Depends(get_session_manager)
 ):
-    """Lista tutte le sessioni attive"""
+    """Active sessions list"""
     try:
         sessions_data = await session_manager.list_sessions()
         
@@ -68,15 +68,15 @@ async def list_sessions(
         return sessions
         
     except Exception as e:
-        logger.error(f"Errore nel recupero delle sessioni: {e}")
-        raise HTTPException(status_code=500, detail=f"Errore interno: {str(e)}")
+        logger.error(f"Error during session retrieval: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 @router.get("/{session_id}", response_model=SessionInfo)
 async def get_session_info(
     session_id: str,
     session_manager: SessionManager = Depends(get_session_manager)
 ):
-    """Ottiene informazioni su una sessione specifica"""
+    """Got session info by ID"""
     try:
         session_data = await session_manager.get_session(session_id)
         
@@ -92,12 +92,12 @@ async def get_session_info(
         )
         
     except SessionNotFoundError as e:
-        logger.warning(f"Sessione non trovata: {e}")
+        logger.warning(f"Session not found: {e}")
         raise HTTPException(status_code=404, detail=str(e))
     
     except Exception as e:
-        logger.error(f"Errore nel recupero informazioni sessione {session_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Errore interno: {str(e)}")
+        logger.error(f"Error during session retrieval {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 @router.delete("/{session_id}")
 async def delete_session(
@@ -105,17 +105,17 @@ async def delete_session(
     background_tasks: BackgroundTasks,
     session_manager: SessionManager = Depends(get_session_manager)
 ):
-    """Elimina una sessione"""
+    """Delete a session by ID"""
     try:
         # Aggiunge il cleanup alle task di background
         background_tasks.add_task(session_manager.delete_session, session_id)
         
-        return {"message": f"Sessione {session_id} eliminata"}
+        return {"message": f"Session {session_id} deleted successfully"}
         
     except SessionNotFoundError as e:
-        logger.warning(f"Tentativo di eliminare sessione inesistente: {e}")
+        logger.warning(f"Deleting not found session: {e}")
         raise HTTPException(status_code=404, detail=str(e))
     
     except Exception as e:
-        logger.error(f"Errore nell'eliminazione della sessione {session_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Errore interno: {str(e)}")
+        logger.error(f"Error during session deletion  {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
