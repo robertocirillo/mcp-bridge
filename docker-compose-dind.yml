@@ -7,6 +7,7 @@ services:
       HOST: "0.0.0.0"
       PORT: "8000"
       DEBUG: "False"
+     # used when gateway is in another container
       MCP_HOST: "http://locahost:9011/mcp"
     env_file:
       - .env

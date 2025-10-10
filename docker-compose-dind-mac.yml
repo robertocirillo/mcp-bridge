@@ -7,6 +7,8 @@ services:
       HOST: "0.0.0.0"
       PORT: "8000"
       DEBUG: "False"
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      # used when gateway is in another container
       MCP_HOST: "http://gateway:9011/mcp"
     env_file:
       - .env
