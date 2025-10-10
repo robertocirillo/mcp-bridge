@@ -46,6 +46,7 @@ class SessionConfig(BaseModel):
     sandbox_options: Optional[SandboxOptions] = Field(None, description="Options for the sandbox")
     verbose: bool = Field(False, description="Verbose mode for debugging")
 
+
     def model_post_init(self, __context):
         """Post-initialization validation"""
         # If sandbox is enabled but no options are provided, use default options
