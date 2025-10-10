@@ -7,32 +7,34 @@ services:
       HOST: "0.0.0.0"
       PORT: "8000"
       DEBUG: "False"
-     # used when gateway is in another container
-      MCP_HOST: "http://locahost:9011/mcp"
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      # used when gateway is in another container
+      MCP_HOST: "http://gateway:9011/mcp"
     env_file:
       - .env
     volumes:
 #      - ./logs:/app/logs
-#      - /Users/roberto/python-test/mcp-national-rail:/app/servers/mcp-national-rails:ro
-       - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
+      - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
 #      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
-    network_mode: "host"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://mcp-bridge:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
     depends_on:
       - gateway
+    extra_hosts:
+      - host.docker.internal:host-gateway
   gateway:
     image: docker/mcp-gateway:dind
     privileged: true
+    ports:
+      - "9011:9011"
     command:
       - --transport=sse
       - --servers=duckduckgo
       - --port=9011
       - --memory=512Mb
-    network_mode: "host"
 
