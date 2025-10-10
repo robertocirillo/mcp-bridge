@@ -1,7 +1,12 @@
 FROM python:3.12-slim
 
 # Install Node.js (latest LTS) + npm
-RUN apt-get update     && apt-get install -y curl gnupg     && curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -     && apt-get install -y nodejs     && apt-get clean     && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    apt-get install -y curl gnupg && \
+    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
+    apt-get install -y nodejs && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -12,7 +17,7 @@ COPY pyproject.toml uv.lock* ./
 RUN pip install --no-cache-dir uv
 
 # Sync dependencies into a managed virtual environment
-RUN uv sync --frozen --locked
+RUN uv sync --frozen
 
 # Copy project files
 COPY . .
