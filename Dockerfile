@@ -6,6 +6,7 @@ RUN apt-get update && \
     curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
     apt-get install -y nodejs && \
     apt-get clean && \
+    apt-get install -y docker.io && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
