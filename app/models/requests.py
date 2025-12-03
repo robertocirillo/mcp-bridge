@@ -6,17 +6,13 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, List, Any
 
 from .config import LLMProvider, MCPServerConfig, SandboxOptions
+from ..core.config import SessionConfig
 
-class SessionCreateRequest(BaseModel):
-    """Request to create a new session"""
-    llm_provider: LLMProvider
-    mcp_servers: Dict[str, MCPServerConfig] = Field(..., min_items=1)
-    max_steps: int = Field(30, gt=0, le=100, description="Maximum number of agent steps")
-    use_server_manager: bool = Field(False, description="Use the server manager for automatic selection")
-    disallowed_tools: Optional[List[str]] = Field(None, description="Disallowed tools")
-    sandbox: bool = Field(False, description="Use the E2B sandbox environment")
-    sandbox_options: Optional[SandboxOptions] = Field(None, description="Options for the sandbox")
-    verbose: bool = Field(False, description="Verbose mode for debugging")
+
+class SessionCreateRequest(SessionConfig):
+    """Request to create a new session. For now it is the same as SessionConfig."""
+    pass
+
 
 class QueryRequest(BaseModel):
     """Request to execute a query"""

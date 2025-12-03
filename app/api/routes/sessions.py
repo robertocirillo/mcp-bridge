@@ -10,7 +10,7 @@ from app.models.config import SessionConfig
 from app.models.requests import SessionCreateRequest
 from app.models.responses import SessionResponse, SessionInfo
 from app.core.session_manager import SessionManager
-from app.core.exceptions import SessionNotFoundError, MaxSessionsExceededError
+from app.core.exceptions import SessionNotFoundError, MaxSessionsExceededError, ConfigurationError, MCPWrapperError
 from app.api.dependencies import get_session_manager
 
 logger = logging.getLogger(__name__)
@@ -39,10 +39,12 @@ async def create_session(
     except MaxSessionsExceededError as e:
         logger.warning(f"Limit exceeded {e}")
         raise HTTPException(status_code=429, detail=str(e))
-    
+    except ConfigurationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except MCPWrapperError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        logger.error(f"Session creation error: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal Error")
 
 @router.get("", response_model=List[SessionInfo])
 async def list_sessions(
@@ -51,25 +53,17 @@ async def list_sessions(
     """Active sessions list"""
     try:
         sessions_data = await session_manager.list_sessions()
-        
-        sessions = []
-        for data in sessions_data:
-            sessions.append(SessionInfo(
-                session_id=data["session_id"],
-                status=data["status"],
-                created_at=data["created_at"],
-                last_used=data["last_used"],
-                query_count=data["query_count"],
-                servers=data["servers"],
-                llm_provider=data["llm_provider"],
-                llm_model=data["llm_model"]
-            ))
-        
-        return sessions
-        
-    except Exception as e:
-        logger.error(f"Error during session retrieval: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+        return [SessionInfo(**data) for data in sessions_data]
+
+    except SessionNotFoundError as e:
+        logger.warning(f"Session not found {e}")
+        raise HTTPException(status_code=429, detail=str(e))
+    except ConfigurationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except MCPWrapperError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Internal Error")
 
 @router.get("/{session_id}", response_model=SessionInfo)
 async def get_session_info(
@@ -90,14 +84,16 @@ async def get_session_info(
             llm_provider=session_data.config.llm_provider.provider,
             llm_model=session_data.config.llm_provider.model
         )
-        
+
     except SessionNotFoundError as e:
-        logger.warning(f"Session not found: {e}")
-        raise HTTPException(status_code=404, detail=str(e))
-    
+        logger.warning(f"Session not found {e}")
+        raise HTTPException(status_code=429, detail=str(e))
+    except ConfigurationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except MCPWrapperError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        logger.error(f"Error during session retrieval {session_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal Error")
 
 @router.delete("/{session_id}")
 async def delete_session(
@@ -115,7 +111,9 @@ async def delete_session(
     except SessionNotFoundError as e:
         logger.warning(f"Deleting not found session: {e}")
         raise HTTPException(status_code=404, detail=str(e))
-    
+    except ConfigurationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except MCPWrapperError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        logger.error(f"Error during session deletion  {session_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal Error")
