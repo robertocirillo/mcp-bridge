@@ -10,8 +10,9 @@ from datetime import datetime
 from app.models.requests import QueryRequest
 from app.models.responses import QueryResponse
 from app.core.session_manager import SessionManager
-from app.core.exceptions import SessionNotFoundError, QueryExecutionError
+from app.core.exceptions import SessionNotFoundError, ConfigurationError, MCPWrapperError
 from app.api.dependencies import get_session_manager
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -42,8 +43,7 @@ async def execute_query(
         execution_time = end_time - start_time
         
         # Aggiorna le statistiche della sessione
-        session_data.query_count += 1
-        session_data.update_last_used()
+        session_data.register_query()
         
         # Ottiene i passi utilizzati e il server usato
         steps_used = wrapper.steps_used
@@ -59,12 +59,14 @@ async def execute_query(
         )
         
     except SessionNotFoundError as e:
-        logger.warning(f"Tentativo di query su sessione inesistente: {e}")
+        logger.warning(f"Session not found: {e}")
         raise HTTPException(status_code=404, detail=str(e))
-    
+    except ConfigurationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except MCPWrapperError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        logger.error(f"Errore nell'esecuzione della query per sessione {session_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Errore nell'esecuzione: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal Error")
 
 @router.get("/{session_id}/history")
 async def get_query_history(
@@ -87,9 +89,11 @@ async def get_query_history(
         }
         
     except SessionNotFoundError as e:
-        logger.warning(f"Tentativo di accesso cronologia su sessione inesistente: {e}")
+        logger.warning(f"Attempt failed: {e}")
         raise HTTPException(status_code=404, detail=str(e))
-    
+    except ConfigurationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except MCPWrapperError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        logger.error(f"Errore nel recupero cronologia per sessione {session_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Errore interno: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal Error")

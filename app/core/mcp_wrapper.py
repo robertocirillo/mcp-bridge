@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any, List
 from app.core.exceptions import MCPWrapperError, DependencyError, ConfigurationError
 from app.utils.logging import get_logger
 from app.utils.helpers import retry_async
+from app.models.config import SandboxOptions as SandboxOptionsModel  # rinomina per non confonderla con quella di mcp-use
 
 logger = get_logger(__name__)
 
@@ -33,8 +34,8 @@ class MCPWrapper:
         mcp_servers: Optional[Dict[str, Dict[str, Any]]] = None,
         max_steps: int = 30,
         verbose: bool = False,
-        use_sandbox: bool = False,
-        sandbox_options: Optional[Dict[str, Any]] = None,
+        sandbox: bool = False,
+        sandbox_options: Optional[Any] = None,  # può essere dict o Pydantic model
         disallowed_tools: Optional[List[str]] = None,
         use_server_manager: bool = False,
     ):
@@ -51,7 +52,7 @@ class MCPWrapper:
             mcp_servers: MCP servers configuration
             max_steps: Maximum steps for the agent
             verbose: Verbose mode for debugging
-            use_sandbox: Use the E2B sandbox environment
+            sandbox: Use the E2B sandbox environment
             sandbox_options: Options for the sandbox
             disallowed_tools: Tools not allowed
             use_server_manager: Use server manager for automatic selection
@@ -65,8 +66,8 @@ class MCPWrapper:
         self.mcp_servers = mcp_servers or {}
         self.max_steps = max_steps
         self.verbose = verbose
-        self.use_sandbox = use_sandbox
-        self.sandbox_options = sandbox_options or {}
+        self.sandbox = sandbox
+        self.sandbox_options = self._normalize_sandbox_options(sandbox_options)
         self.disallowed_tools = disallowed_tools
         self.use_server_manager = use_server_manager
 
@@ -80,6 +81,46 @@ class MCPWrapper:
         # Validate and import dependencies
         self._validate_config()
         self._import_dependencies()
+
+    @staticmethod
+    def _normalize_sandbox_options(sandbox_options: Optional[Any]) -> Dict[str, Any]:
+        """Normalizes sandbox options to a dictionary compatible with mcp-use
+           Accepts:
+           - my models.config.SandboxOptions (Pydantic model)
+           - dict
+           - None
+        """
+        if sandbox_options is None:
+            return {}
+
+        # Pydantic v2
+        if hasattr(sandbox_options, "model_dump"):
+            return sandbox_options.model_dump(exclude_none=True)
+
+        # Pydantic v1 (per sicurezza)
+        if hasattr(sandbox_options, "dict"):
+            return sandbox_options.dict(exclude_none=True)  # type: ignore[call-arg]
+
+        # Già un dict
+        if isinstance(sandbox_options, dict):
+            return sandbox_options
+
+        # Fallback generico per oggetti con attributi
+        try:
+            return {
+                "api_key": getattr(sandbox_options, "api_key", None),
+                "sandbox_template_id": getattr(sandbox_options, "sandbox_template_id", "base"),
+                "supergateway_command": getattr(
+                    sandbox_options,
+                    "supergateway_command",
+                    "npx -y supergateway",
+                ),
+            }
+        except Exception:
+            raise ConfigurationError(
+                f"Unsupported sandbox_options type: {type(sandbox_options)!r}. "
+                "Expected dict or Pydantic BaseModel."
+            )
 
     def _validate_config(self):
         """Validates the initial configuration"""
@@ -128,34 +169,64 @@ class MCPWrapper:
     def _create_llm(self):
         """Creates the LLM model instance with error handling"""
         try:
-            kwargs = {
-                "model": self.model,
-                "temperature": self.temperature,
-            }
-
-            if self.max_tokens:
-                kwargs["max_tokens"] = self.max_tokens
-
-            # Provider-specific configuration
-            if self.llm_provider in ("openai", "anthropic"):
-                env_key = f"{self.llm_provider.upper()}_API_KEY"
-                if self.api_key:
-                    kwargs["api_key"] = self.api_key
-                elif not os.getenv(env_key):
-                    raise ConfigurationError(f"{self.llm_provider.title()} API key not found")
-
-                if self.base_url:
-                    kwargs["base_url"] = self.base_url
-
-            elif self.llm_provider == "ollama":
-                kwargs["base_url"] = self.base_url or "http://localhost:11434"
+            # Costruzione centralizzata dei kwargs (base + provider-specific)
+            kwargs = self._build_llm_kwargs()
 
             llm = self.ChatLLM(**kwargs)
-            logger.debug(f"LLM {self.llm_provider}/{self.model} successfully created")
+            logger.debug(
+                f"LLM {self.llm_provider}/{self.model} successfully created "
+                f"with kwargs={ {k: v for k, v in kwargs.items() if k != 'api_key'} }"
+            )
             return llm
 
         except Exception as e:
             raise MCPWrapperError(f"Error creating LLM model: {e}")
+
+
+    def _build_llm_kwargs(self) -> Dict[str, Any]:
+        """
+        Costruisce i kwargs di base per il modello LLM e delega
+        la parte provider-specific a _apply_provider_specific_kwargs.
+        """
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "temperature": self.temperature,
+        }
+
+        if self.max_tokens:
+            kwargs["max_tokens"] = self.max_tokens
+
+        return self._apply_provider_specific_kwargs(kwargs)
+
+
+    def _apply_provider_specific_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Aggiunge ai kwargs le opzioni specifiche del provider
+        (API key, base_url, ecc.).
+        """
+        # OpenAI / Anthropic: gestione API key
+        if self.llm_provider in ("openai", "anthropic"):
+            env_key = f"{self.llm_provider.upper()}_API_KEY"
+            api_key = self.api_key or os.getenv(env_key)
+
+            if not api_key:
+                raise ConfigurationError(
+                    f"Missing API key for provider '{self.llm_provider}'. "
+                    f"Provide it explicitly or set {env_key} env var."
+                )
+
+            kwargs["api_key"] = api_key
+            return kwargs
+
+        # Ollama: gestione base_url
+        if self.llm_provider == "ollama":
+            base_url = self.base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+            kwargs["base_url"] = base_url
+            return kwargs
+
+        # Provider non supportato
+        raise ConfigurationError(f"Unsupported LLM provider: {self.llm_provider}")
+
 
     async def initialize(self):
         """Initializes the MCP agent and clients with automatic retry"""
@@ -179,7 +250,7 @@ class MCPWrapper:
         # Configure MCP client
         client_kwargs = {"config": {"mcpServers": self.mcp_servers}}
 
-        if self.use_sandbox:
+        if self.sandbox:
             client_kwargs["sandbox"] = True
             if self.sandbox_options:
                 client_kwargs["sandbox_options"] = {
@@ -231,14 +302,14 @@ class MCPWrapper:
             logger.debug(f"Executing query: {query[:100]}...")
 
             # Prepare parameters
-            run_kwargs = {"query": query}
+            run_kwargs: Dict[str, Any] = {"query": query}
 
-            if max_steps:
+            if max_steps is not None:
                 run_kwargs["max_steps"] = max_steps
 
             if server_name:
                 if server_name not in self.mcp_servers:
-                    raise ValueError(f"Server '{server_name}' not configured")
+                    raise ConfigurationError(f"Server '{server_name}' not configured")
                 run_kwargs["server_name"] = server_name
                 self._last_server_used = server_name
 
@@ -299,18 +370,20 @@ class MCPWrapper:
             "llm_provider": self.llm_provider,
             "model": self.model,
             "max_steps": self.max_steps,
-            "use_sandbox": self.use_sandbox,
+            "sandbox": self.sandbox,
             "servers": list(self.mcp_servers.keys()),
             "use_server_manager": self.use_server_manager,
             "initialized": self._initialized,
         }
+
+    from typing import Dict
 
     async def test_connection(self) -> Dict[str, bool]:
         """Tests the connection to configured MCP servers"""
         if not self._initialized:
             await self.initialize()
 
-        results = {}
+        results: Dict[str, bool] = {}
         for server_name in self.mcp_servers.keys():
             try:
                 await self.run_query("ping", max_steps=1, server_name=server_name)

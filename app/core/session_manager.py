@@ -35,6 +35,10 @@ class SessionData:
         """Checks if the session has expired"""
         return (datetime.now() - self.last_used).total_seconds() > settings.SESSION_TIMEOUT
 
+    def register_query(self):
+        self.query_count += 1
+        self.update_last_used()
+
 class SessionManager:
     """Central manager for MCP sessions"""
 
@@ -81,7 +85,7 @@ class SessionManager:
                     mcp_servers=self._convert_mcp_servers(config.mcp_servers),
                     max_steps=config.max_steps,
                     verbose=config.verbose,
-                    use_sandbox=config.sandbox,
+                    sandbox=config.sandbox,
                     sandbox_options=config.sandbox_options,
                     disallowed_tools=config.disallowed_tools,
                     use_server_manager=config.use_server_manager
@@ -116,13 +120,15 @@ class SessionManager:
         Raises:
             SessionNotFoundError: If the session does not exist
         """
-        if session_id not in self._sessions:
-            raise SessionNotFoundError(f"Session {session_id} not found")
+        async with self._lock:
+            if session_id not in self._sessions:
+                raise SessionNotFoundError(f"Session {session_id} not found")
 
-        session_data = self._sessions[session_id]
-        session_data.update_last_used()
+            session_data = self._sessions[session_id]
+            session_data.update_last_used()
 
-        return session_data
+            return session_data
+
 
     async def delete_session(self, session_id: str):
         """
@@ -157,19 +163,19 @@ class SessionManager:
         Returns:
             List of session information
         """
-        sessions = []
-        for session_data in self._sessions.values():
-            sessions.append({
-                "session_id": session_data.session_id,
-                "status": session_data.status,
-                "created_at": session_data.created_at,
-                "last_used": session_data.last_used,
-                "query_count": session_data.query_count,
-                "servers": list(session_data.config.mcp_servers.keys()),
-                "llm_provider": session_data.config.llm_provider.provider,
-                "llm_model": session_data.config.llm_provider.model
-            })
-        return sessions
+        return [
+            {
+                "session_id": s.session_id,
+                "status": s.status,
+                "created_at": s.created_at,
+                "last_used": s.last_used,
+                "query_count": s.query_count,
+                "servers": list(s.config.mcp_servers.keys()),
+                "llm_provider": s.config.llm_provider.provider,
+                "llm_model": s.config.llm_provider.model,
+            }
+            for s in self._sessions.values()
+        ]
 
     async def get_session_count(self) -> int:
         """Returns the number of active sessions"""
