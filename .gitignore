@@ -94,3 +94,7 @@ dmypy.json
 
 # VSCode (opzionale)
 .vscode/
+
+logs/
+*.log
+logs/**/*.log
