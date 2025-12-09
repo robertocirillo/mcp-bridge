@@ -121,14 +121,12 @@ class SessionManager:
             SessionNotFoundError: If the session does not exist
         """
         async with self._lock:
-            if session_id not in self._sessions:
+            session_data = self._sessions.get(session_id)
+            if session_data is None:
                 raise SessionNotFoundError(f"Session {session_id} not found")
 
-            session_data = self._sessions[session_id]
             session_data.update_last_used()
-
             return session_data
-
 
     async def delete_session(self, session_id: str):
         """
@@ -163,19 +161,20 @@ class SessionManager:
         Returns:
             List of session information
         """
-        return [
-            {
-                "session_id": s.session_id,
-                "status": s.status,
-                "created_at": s.created_at,
-                "last_used": s.last_used,
-                "query_count": s.query_count,
-                "servers": list(s.config.mcp_servers.keys()),
-                "llm_provider": s.config.llm_provider.provider,
-                "llm_model": s.config.llm_provider.model,
-            }
-            for s in self._sessions.values()
-        ]
+        async with self._lock:
+            sessions = []
+            for session_data in self._sessions.values():
+                sessions.append({
+                    "session_id": session_data.session_id,
+                    "status": session_data.status,
+                    "created_at": session_data.created_at,
+                    "last_used": session_data.last_used,
+                    "query_count": session_data.query_count,
+                    "servers": list(session_data.config.mcp_servers.keys()),
+                    "llm_provider": session_data.config.llm_provider.provider,
+                    "llm_model": session_data.config.llm_provider.model,
+                })
+            return sessions
 
     async def get_session_count(self) -> int:
         """Returns the number of active sessions"""

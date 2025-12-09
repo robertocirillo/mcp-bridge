@@ -23,19 +23,19 @@ async def create_session(
 ):
     """New session"""
     try:
-        # Parsing and validation of the request
-        config = SessionConfig(**request.dict())
-        
-        # sessione creation
+        # request è già un SessionConfig (eredita da SessionConfig)
+        config = request
+
+        # session creation
         session_id = await session_manager.create_session(config)
-        
+
         return SessionResponse(
             session_id=session_id,
             status="created",
-            message="Sessione creata con successo",
-            servers=list(config.mcp_servers.keys())
+            message="Session created successfully",
+            servers=list(config.mcp_servers.keys()),
         )
-        
+
     except MaxSessionsExceededError as e:
         logger.warning(f"Limit exceeded {e}")
         raise HTTPException(status_code=429, detail=str(e))
@@ -43,7 +43,7 @@ async def create_session(
         raise HTTPException(status_code=400, detail=str(e))
     except MCPWrapperError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Internal Error")
 
 @router.get("", response_model=List[SessionInfo])

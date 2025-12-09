@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings
 from typing import List
 import os
 from dotenv import load_dotenv
+from app.models.config import A2ASettings, A2AAgentConfig
 
 load_dotenv()
 
@@ -48,6 +49,20 @@ class Settings(BaseSettings):
     LANGFUSE_PUBLIC_KEY: str | None = None
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_HOST: str | None = None
+
+    # A2A
+  #  a2a: A2ASettings = A2ASettings()
+    a2a: A2ASettings = A2ASettings(
+        enabled=True,
+        agents={
+            "local_echo_agent": A2AAgentConfig(
+                base_url="http://localhost:9001",
+                card_path="/.well-known/agent.json",
+                task_endpoint="/tasks",
+                timeout_seconds=60,
+            )
+        },
+    )
     
     class Config:
         env_file = ".env"

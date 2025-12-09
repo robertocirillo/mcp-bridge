@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from app.core.session_manager import SessionManager
-from app.api.routes import sessions, queries, health
+from app.api.routes import sessions, queries, health, a2a
 from app.utils.logging import setup_logging, get_logger
 from config import settings
 
@@ -49,6 +49,8 @@ app.add_middleware(
 app.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
 app.include_router(queries.router, prefix="/sessions", tags=["queries"])
 app.include_router(health.router, tags=["health"])
+if settings.a2a.enabled:
+    app.include_router(a2a.router)
 
 # Root endpoint
 @app.get("/")

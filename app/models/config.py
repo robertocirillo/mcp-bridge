@@ -2,8 +2,10 @@
 Pydantic models for configurations
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, List, Any
+from pydantic import BaseModel, Field, AnyHttpUrl
+from typing import Optional, Dict, List
+
+
 
 class LLMProvider(BaseModel):
     """LLM provider configuration"""
@@ -52,3 +54,23 @@ class SessionConfig(BaseModel):
         # If sandbox is enabled but no options are provided, use default options
         if self.sandbox and not self.sandbox_options:
             self.sandbox_options = SandboxOptions()
+
+
+
+class A2AAgentConfig(BaseModel):
+    """Configuration for a remote A2A agent/server."""
+
+    base_url: AnyHttpUrl
+    card_path: str = "/.well-known/agent.json"
+    task_endpoint: str = "/tasks"
+    auth_header: Optional[str] = None       # e.g. "Authorization"
+    auth_token: Optional[str] = None        # e.g. "Bearer xxx"
+    timeout_seconds: int = 60
+
+
+class A2ASettings(BaseModel):
+    """Global A2A settings."""
+
+    enabled: bool = True
+    agents: Dict[str, A2AAgentConfig] = {}
+
