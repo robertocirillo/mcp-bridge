@@ -3,7 +3,7 @@ Pydantic models for HTTP responses
 """
 
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
 
 class SessionResponse(BaseModel):
@@ -55,3 +55,25 @@ class SessionStatsResponse(BaseModel):
     total_queries: int = Field(..., description="Total queries executed")
     avg_execution_time: float = Field(..., description="Average execution time")
     providers_usage: Dict[str, int] = Field(..., description="Usage per provider")
+
+class A2AAgentInfo(BaseModel):
+    """Information about a configured remote A2A agent."""
+
+    agent_id: str
+    name: str
+    description: Optional[str] = None
+    base_url: str
+    capabilities: Optional[List[str]] = None
+
+
+class A2ATaskResponse(BaseModel):
+    """Minimal wrapper around a remote A2A task response."""
+
+    task_id: str = Field(..., description="Task identifier (from remote or local).")
+    status: Literal["pending", "running", "completed", "failed", "unknown"] = "unknown"
+    output: Optional[Dict[str, Any]] = None
+    message: Optional[str] = None
+    raw_response: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Raw JSON response from the remote A2A agent."
+    )
