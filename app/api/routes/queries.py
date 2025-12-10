@@ -3,6 +3,7 @@ Endpoints per l'esecuzione delle query
 """
 
 from fastapi import APIRouter, HTTPException, Depends
+from typing import Annotated
 import asyncio
 import logging
 from datetime import datetime
@@ -11,44 +12,49 @@ from app.models.requests import QueryRequest
 from app.models.responses import QueryResponse
 from app.core.session_manager import SessionManager
 from app.core.exceptions import SessionNotFoundError, ConfigurationError, MCPWrapperError
-from app.api.dependencies import get_session_manager
+from app.api.dependencies import get_session_manager, get_tenant_context, TenantContext
 
-
+TenantDep = Annotated[TenantContext, Depends(get_tenant_context)]
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
 @router.post("/{session_id}/query", response_model=QueryResponse)
 async def execute_query(
-    session_id: str,
-    request: QueryRequest,
-    session_manager: SessionManager = Depends(get_session_manager)
+        session_id: str,
+        request: QueryRequest,
+        tenant_ctx: TenantDep,
+        session_manager: SessionManager = Depends(get_session_manager),
 ):
-    """Esegue una query su una sessione esistente"""
+    """Execute a query on an existing session."""
     try:
-        # Recupera la sessione
-        session_data = await session_manager.get_session(session_id)
+        # Retrieve the session for the current tenant (or default tenant)
+        session_data = await session_manager.get_session(
+            session_id=session_id,
+            tenant_id=tenant_ctx.tenant_id,
+        )
         wrapper = session_data.wrapper
-        
-        # Misura il tempo di esecuzione
+
+        # Measure execution time
         start_time = asyncio.get_event_loop().time()
-        
-        # Esegue la query usando il wrapper
+
+        # Execute the query using the wrapper
         result = await wrapper.run_query(
             query=request.query,
             max_steps=request.max_steps,
             server_name=request.server_name
         )
-        
+
         end_time = asyncio.get_event_loop().time()
         execution_time = end_time - start_time
-        
-        # Aggiorna le statistiche della sessione
+
+        # Update session statistics
         session_data.register_query()
-        
-        # Ottiene i passi utilizzati e il server usato
+
+        # Get steps used and server used
         steps_used = wrapper.steps_used
         server_used = getattr(wrapper, 'last_server_used', None)
-        
+
         return QueryResponse(
             session_id=session_id,
             result=result,
@@ -57,7 +63,7 @@ async def execute_query(
             timestamp=datetime.now(),
             server_used=server_used
         )
-        
+
     except SessionNotFoundError as e:
         logger.warning(f"Session not found: {e}")
         raise HTTPException(status_code=404, detail=str(e))
@@ -65,8 +71,9 @@ async def execute_query(
         raise HTTPException(status_code=400, detail=str(e))
     except MCPWrapperError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Internal Error")
+
 
 @router.get("/{session_id}/history")
 async def get_query_history(

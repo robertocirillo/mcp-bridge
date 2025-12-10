@@ -19,6 +19,8 @@ logger = get_logger("main")
 # Global session manager
 session_manager = SessionManager()
 
+print("DEBUG MULTI TENANCY:", settings.multi_tenancy)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manages the application lifecycle"""
