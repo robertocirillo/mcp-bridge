@@ -16,12 +16,12 @@ load_dotenv()
 class Settings(BaseSettings):
     """Global settings for MCP-BRIDGE"""
 
-    # <<< QUI: nuova configurazione Pydantic Settings v2 >>>
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_nested_delimiter="__",
         case_sensitive=False,
-        extra="ignore",  # così eventuali env sconosciute non esplodono
+        extra="ignore",
     )
 
     # API Settings
