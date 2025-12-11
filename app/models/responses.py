@@ -21,6 +21,7 @@ class QueryResponse(BaseModel):
     steps_used: int = Field(..., description="Number of steps used")
     timestamp: datetime = Field(..., description="Execution timestamp")
     server_used: Optional[str] = Field(None, description="Server used for execution")
+    has_mcp_servers: Optional[bool] = Field(None, description="True if session configured with one or more mcp servers")
 
 class SessionInfo(BaseModel):
     """Detailed information about a session"""

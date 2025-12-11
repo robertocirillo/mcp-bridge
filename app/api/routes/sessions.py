@@ -78,12 +78,17 @@ async def list_sessions(
 @router.get("/{session_id}", response_model=SessionInfo)
 async def get_session_info(
     session_id: str,
-    session_manager: SessionManager = Depends(get_session_manager)
+    tenant_ctx: TenantDep,
+    session_manager: SessionManager = Depends(get_session_manager),
 ):
-    """Got session info by ID"""
+    """Get session info for the current tenant."""
     try:
-        session_data = await session_manager.get_session(session_id)
-        
+        # Enforce tenant isolation when retrieving the session
+        session_data = await session_manager.get_session(
+            session_id=session_id,
+            tenant_id=tenant_ctx.tenant_id,
+        )
+
         return SessionInfo(
             session_id=session_data.session_id,
             status=session_data.status,
@@ -92,38 +97,52 @@ async def get_session_info(
             query_count=session_data.query_count,
             servers=list(session_data.config.mcp_servers.keys()),
             llm_provider=session_data.config.llm_provider.provider,
-            llm_model=session_data.config.llm_provider.model
+            llm_model=session_data.config.llm_provider.model,
         )
 
     except SessionNotFoundError as e:
         logger.warning(f"Session not found {e}")
-        raise HTTPException(status_code=429, detail=str(e))
-    except ConfigurationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except MCPWrapperError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail="Internal Error")
-
-@router.delete("/{session_id}")
-async def delete_session(
-    session_id: str,
-    background_tasks: BackgroundTasks,
-    session_manager: SessionManager = Depends(get_session_manager)
-):
-    """Delete a session by ID"""
-    try:
-        # Aggiunge il cleanup alle task di background
-        background_tasks.add_task(session_manager.delete_session, session_id)
-        
-        return {"message": f"Session {session_id} deleted successfully"}
-        
-    except SessionNotFoundError as e:
-        logger.warning(f"Deleting not found session: {e}")
+        # 404: esiste per altri tenant o non esiste proprio
         raise HTTPException(status_code=404, detail=str(e))
     except ConfigurationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except MCPWrapperError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    except Exception as e:
+    except Exception:
+        raise HTTPException(status_code=500, detail="Internal Error")
+
+
+@router.delete("/{session_id}")
+async def delete_session(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    tenant_ctx: TenantDep,
+    session_manager: SessionManager = Depends(get_session_manager),
+):
+    """Delete a session by ID for the current tenant."""
+    try:
+        # First, ensure the session exists and belongs to the current tenant.
+        # get_session will raise SessionNotFoundError if:
+        # - the session does not exist, or
+        # - it exists but belongs to a different tenant.
+        await session_manager.get_session(
+            session_id=session_id,
+            tenant_id=tenant_ctx.tenant_id,
+        )
+
+        # If we reach here, the session belongs to this tenant.
+        # We can safely schedule the cleanup in the background.
+        background_tasks.add_task(session_manager.delete_session, session_id)
+
+        return {"message": f"Session {session_id} deleted successfully"}
+
+    except SessionNotFoundError as e:
+        logger.warning(f"Deleting not found session: {e}")
+        # 404 even if the session exists for another tenant (isolation)
+        raise HTTPException(status_code=404, detail=str(e))
+    except ConfigurationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except MCPWrapperError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
         raise HTTPException(status_code=500, detail="Internal Error")

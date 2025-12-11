@@ -55,13 +55,19 @@ async def execute_query(
         steps_used = wrapper.steps_used
         server_used = getattr(wrapper, 'last_server_used', None)
 
+        # Get number of mcp servers
+        has_mcp_servers = getattr(wrapper, "has_mcp_servers", None)
+        if has_mcp_servers is False:
+            server_used = None
+
         return QueryResponse(
             session_id=session_id,
             result=result,
             execution_time=execution_time,
             steps_used=steps_used,
             timestamp=datetime.now(),
-            server_used=server_used
+            server_used=server_used,
+            has_mcp_servers = has_mcp_servers
         )
 
     except SessionNotFoundError as e:

@@ -64,6 +64,7 @@ class MCPWrapper:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.mcp_servers = mcp_servers or {}
+        self.has_mcp_servers = bool(self.mcp_servers)
         self.max_steps = max_steps
         self.verbose = verbose
         self.sandbox = sandbox
@@ -130,15 +131,15 @@ class MCPWrapper:
         if not self.model:
             raise ConfigurationError("Model not specified")
 
-        if not self.mcp_servers:
-            raise ConfigurationError("No MCP servers configured")
-
-        # Validate MCP servers
-        for name, config in self.mcp_servers.items():
-            if not config.get("command") and not config.get("url"):
-                raise ConfigurationError(
-                    f"Server {name}: must have 'command' or 'url'"
-                )
+        # if not self.mcp_servers:
+        #     raise ConfigurationError("No MCP servers configured")
+        if self.has_mcp_servers:
+            # Validate MCP servers
+            for name, config in self.mcp_servers.items():
+                if not config.get("command") and not config.get("url"):
+                    raise ConfigurationError(
+                        f"Server {name}: must have 'command' or 'url'"
+                    )
 
     def _import_dependencies(self):
         """Imports required dependencies with enhanced error handling"""

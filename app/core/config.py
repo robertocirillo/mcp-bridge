@@ -38,7 +38,13 @@ class SandboxOptions(BaseModel):
 class SessionConfig(BaseModel):
     """Configuration to create a new session"""
     llm_provider: LLMProvider
-    mcp_servers: Dict[str, MCPServerConfig] = Field(..., min_items=1)
+    # Allow sessions without MCP servers:
+    # - request can omit "mcp_servers"
+    # - or send "mcp_servers": {}
+    mcp_servers: Dict[str, MCPServerConfig] = Field(
+        default_factory=dict,
+        description="Optional MCP servers configuration. Can be empty for LLM-only sessions.",
+    )
     max_steps: int = Field(30, gt=0, le=100, description="maximum number of steps")
     use_server_manager: bool = Field(False, description="Use the server manager for automatic selection")
     disallowed_tools: Optional[List[str]] = Field(None, description="List of disallowed tools")
