@@ -2,7 +2,7 @@
 Pydantic models for configurations
 """
 
-from pydantic import BaseModel, Field, AnyHttpUrl
+from pydantic import BaseModel, Field, AnyUrl
 from typing import Optional, Dict, List
 
 
@@ -60,7 +60,7 @@ class SessionConfig(BaseModel):
 class A2AAgentConfig(BaseModel):
     """Configuration for a remote A2A agent/server."""
 
-    base_url: AnyHttpUrl
+    base_url: AnyUrl
     card_path: str = "/.well-known/agent.json"
     task_endpoint: str = "/tasks"
     auth_header: Optional[str] = None       # e.g. "Authorization"
@@ -74,3 +74,16 @@ class A2ASettings(BaseModel):
     enabled: bool = True
     agents: Dict[str, A2AAgentConfig] = {}
 
+
+
+class MultiTenancySettings(BaseModel):
+    """Multi-tenancy configuration.
+
+    - enabled: if False, the app behaves as single-tenant.
+    - require_header: if True, X-Tenant-Id must be present on incoming requests.
+    - default_tenant_id: used when tenant headers are missing and require_header is False.
+    """
+
+    enabled: bool = False
+    require_header: bool = False
+    default_tenant_id: Optional[str] = "default"

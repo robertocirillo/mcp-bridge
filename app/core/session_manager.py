@@ -27,6 +27,26 @@ class SessionData:
         self.status = "active"
         self.query_count = 0
 
+    def __init__(
+        self,
+        session_id: str,
+        config: SessionConfig,
+        wrapper: MCPWrapper,
+        tenant_id: Optional[str] = None,
+        last_run_id: Optional[str] = None,
+    ):
+        self.session_id = session_id
+        self.config = config
+        self.wrapper = wrapper
+        self.created_at = datetime.now()
+        self.last_used = datetime.now()
+        self.status = "active"
+        self.query_count = 0
+
+        # Multi-tenancy context (optional for now)
+        self.tenant_id = tenant_id
+        self.last_run_id = last_run_id
+
     def update_last_used(self):
         """Updates the last used timestamp"""
         self.last_used = datetime.now()
@@ -53,18 +73,22 @@ class SessionManager:
         # Start the automatic cleanup task
         self._cleanup_task = asyncio.create_task(self._cleanup_expired_sessions())
 
-    async def create_session(self, config: SessionConfig) -> str:
+    async def create_session(
+            self,
+            config: SessionConfig,
+            tenant_id: str | None = None,
+            run_id: str | None = None,
+    ) -> str:
         """
-        Creates a new session
+        Create a new MCP session.
 
         Args:
-            config: Session configuration
+            config: Session configuration.
+            tenant_id: Optional tenant identifier (used for multi-tenancy).
+            run_id: Optional run identifier (used for tracing/correlation).
 
         Returns:
-            ID of the created session
-
-        Raises:
-            MaxSessionsExceededError: If the maximum number of sessions is reached
+            The created session ID.
         """
         async with self._lock:
             # Check session limit
@@ -95,7 +119,13 @@ class SessionManager:
                 await wrapper.initialize()
 
                 # Create session data
-                session_data = SessionData(session_id, config, wrapper)
+                session_data = SessionData(
+                    session_id=session_id,
+                    config=config,
+                    wrapper=wrapper,
+                    tenant_id=tenant_id,
+                    last_run_id=run_id,
+                )
 
                 # Save the session
                 self._sessions[session_id] = session_data
@@ -107,23 +137,38 @@ class SessionManager:
                 logger.error(f"Error creating session: {e}")
                 raise
 
-    async def get_session(self, session_id: str) -> SessionData:
+    async def get_session(
+            self,
+            session_id: str,
+            tenant_id: Optional[str] = None,
+    ) -> SessionData:
         """
-        Retrieves a session
+        Retrieves a session.
 
         Args:
-            session_id: ID of the session
+            session_id: ID of the session.
+            tenant_id: Optional tenant identifier. If provided, the session
+                       must belong to this tenant.
 
         Returns:
-            Session data
+            Session data.
 
         Raises:
-            SessionNotFoundError: If the session does not exist
+            SessionNotFoundError:
+                - If the session does not exist.
+                - Or if it does not belong to the given tenant.
         """
         async with self._lock:
             session_data = self._sessions.get(session_id)
             if session_data is None:
                 raise SessionNotFoundError(f"Session {session_id} not found")
+
+            # If tenant_id is specified, enforce tenant ownership
+            if tenant_id is not None and session_data.tenant_id != tenant_id:
+                # For security, behave as if the session does not exist
+                raise SessionNotFoundError(
+                    f"Session {session_id} not found for the specified tenant"
+                )
 
             session_data.update_last_used()
             return session_data
@@ -154,27 +199,36 @@ class SessionManager:
             del self._sessions[session_id]
             logger.info(f"Session {session_id} deleted")
 
-    async def list_sessions(self) -> List[Dict[str, Any]]:
+    async def list_sessions(
+        self,
+        tenant_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
-        Lists all active sessions
+        Lists active sessions.
 
-        Returns:
-            List of session information
+        If tenant_id is provided, only sessions that belong to that tenant
+        are returned. If tenant_id is None, all sessions are returned.
         """
-        async with self._lock:
-            sessions = []
-            for session_data in self._sessions.values():
-                sessions.append({
-                    "session_id": session_data.session_id,
-                    "status": session_data.status,
-                    "created_at": session_data.created_at,
-                    "last_used": session_data.last_used,
-                    "query_count": session_data.query_count,
-                    "servers": list(session_data.config.mcp_servers.keys()),
-                    "llm_provider": session_data.config.llm_provider.provider,
-                    "llm_model": session_data.config.llm_provider.model,
-                })
-            return sessions
+        sessions: List[Dict[str, Any]] = []
+
+        for session_data in self._sessions.values():
+            # If tenant_id is specified, filter by tenant
+            if tenant_id is not None and session_data.tenant_id != tenant_id:
+                continue
+
+            sessions.append({
+                "session_id": session_data.session_id,
+                "status": session_data.status,
+                "created_at": session_data.created_at,
+                "last_used": session_data.last_used,
+                "query_count": session_data.query_count,
+                "servers": list(session_data.config.mcp_servers.keys()),
+                "llm_provider": session_data.config.llm_provider.provider,
+                "llm_model": session_data.config.llm_provider.model,
+            })
+
+        return sessions
+
 
     async def get_session_count(self) -> int:
         """Returns the number of active sessions"""
