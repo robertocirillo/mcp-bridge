@@ -1,5 +1,6 @@
 services:
   mcp-bridge:
+    container_name: mcp-bridge
     build: .
     environment:
       HOST: "0.0.0.0"
@@ -9,7 +10,7 @@ services:
     env_file:
       - .env
     volumes:
-      - /Users/roberto/python-test/mcp-national-rail:/app/servers/mcp-national-rails:ro
+      - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8000:8000"
