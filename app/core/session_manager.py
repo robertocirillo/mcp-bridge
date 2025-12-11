@@ -162,7 +162,6 @@ class SessionManager:
             session_data = self._sessions.get(session_id)
             if session_data is None:
                 raise SessionNotFoundError(f"Session {session_id} not found")
-
             # If tenant_id is specified, enforce tenant ownership
             if tenant_id is not None and session_data.tenant_id != tenant_id:
                 # For security, behave as if the session does not exist
@@ -173,22 +172,26 @@ class SessionManager:
             session_data.update_last_used()
             return session_data
 
-    async def delete_session(self, session_id: str):
+    async def delete_session(self, session_id: str, tenant_id: str | None = None):
         """
         Deletes a session
 
         Args:
             session_id: ID of the session to delete
-
+            tenant_id: Optional tenant identifier. If provided, the session
+                       must belong to this tenant or a SessionNotFoundError
+                       will be raised (to preserve tenant isolation).
         Raises:
-            SessionNotFoundError: If the session does not exist
+            SessionNotFoundError: If the session does not exist  or does not
+                                  belong to the given tenant.
         """
         if session_id not in self._sessions:
             raise SessionNotFoundError(f"Session {session_id} not found")
 
         async with self._lock:
             session_data = self._sessions[session_id]
-
+            if tenant_id is not None and session_data.tenant_id != tenant_id:
+                raise SessionNotFoundError(f"Session {session_id} not found")
             # Close the wrapper
             try:
                 await session_data.wrapper.close()
@@ -197,7 +200,11 @@ class SessionManager:
 
             # Remove the session
             del self._sessions[session_id]
-            logger.info(f"Session {session_id} deleted")
+            logger.info(
+                "Session %s deleted (tenant_id=%s)",
+                session_id,
+                session_data.tenant_id,
+            )
 
     async def list_sessions(
         self,
