@@ -3,7 +3,7 @@ Endpoints for managing MCP-Bridge sessions.
 """
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
-from typing import List
+from typing import List, Annotated
 import logging
 
 from app.models.config import SessionConfig
@@ -11,23 +11,29 @@ from app.models.requests import SessionCreateRequest
 from app.models.responses import SessionResponse, SessionInfo
 from app.core.session_manager import SessionManager
 from app.core.exceptions import SessionNotFoundError, MaxSessionsExceededError, ConfigurationError, MCPWrapperError
-from app.api.dependencies import get_session_manager
+from app.api.dependencies import get_session_manager, get_tenant_context, TenantContext
 
+TenantDep = Annotated[TenantContext, Depends(get_tenant_context)]
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.post("", response_model=SessionResponse)
 async def create_session(
     request: SessionCreateRequest,
-    session_manager: SessionManager = Depends(get_session_manager)
+    tenant_ctx: TenantDep,
+    session_manager: SessionManager = Depends(get_session_manager),
 ):
     """New session"""
     try:
-        # request è già un SessionConfig (eredita da SessionConfig)
+        # request is already a SessionConfig (inherits from SessionConfig)
         config = request
 
-        # session creation
-        session_id = await session_manager.create_session(config)
+        # session creation (SessionManager will be updated to accept tenant_id / run_id)
+        session_id = await session_manager.create_session(
+            config=config,
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+        )
 
         return SessionResponse(
             session_id=session_id,
@@ -46,13 +52,17 @@ async def create_session(
     except Exception:
         raise HTTPException(status_code=500, detail="Internal Error")
 
+
 @router.get("", response_model=List[SessionInfo])
 async def list_sessions(
-    session_manager: SessionManager = Depends(get_session_manager)
+    tenant_ctx: TenantDep,
+    session_manager: SessionManager = Depends(get_session_manager),
 ):
-    """Active sessions list"""
+    """Active sessions list for the current tenant (or default tenant)."""
     try:
-        sessions_data = await session_manager.list_sessions()
+        sessions_data = await session_manager.list_sessions(
+            tenant_id=tenant_ctx.tenant_id
+        )
         return [SessionInfo(**data) for data in sessions_data]
 
     except SessionNotFoundError as e:
