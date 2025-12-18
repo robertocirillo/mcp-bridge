@@ -67,11 +67,14 @@ class Settings(BaseSettings):
     a2a: A2ASettings = A2ASettings(
         enabled=True,
         agents={
+            # Example local A2A agent configuration.
             "local_echo_agent": A2AAgentConfig(
-                base_url="http://localhost:9001",  # type: ignore
-                card_path="/.well-known/agent.json",
-                task_endpoint="/tasks",
+                card_url="http://localhost:9001/.well-known/agent.json",
+                runtime_url="http://localhost:9001",
                 timeout_seconds=60,
+                enabled=True,
+                label="Local Echo Agent",
+                description="Simple local A2A agent used for testing.",
             )
         },
     )

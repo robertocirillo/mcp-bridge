@@ -3,7 +3,7 @@ Pydantic models for HTTP requests
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, Any
 from ..core.config import SessionConfig
 
 
@@ -38,4 +38,43 @@ class A2ATaskRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Optional metadata for routing, tenant info, etc."
+    )
+
+
+
+
+class A2AMessageRequest(BaseModel):
+    """
+    High-level request to send a message to an A2A agent.
+
+    This is the REST-facing model used by mcp-bridge. Internally it will be
+    mapped to A2A messages/tasks via the python-a2a SDK.
+    """
+
+    goal: str = Field(
+        ...,
+        description="High-level goal or instruction for the agent.",
+    )
+    input: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional structured input payload for the task.",
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional metadata (channel, tags, etc.).",
+    )
+    blocking: bool = Field(
+        default=True,
+        description=(
+            "If true, the bridge waits for the agent to complete the task and "
+            "returns the final result. If false, the bridge creates an A2A "
+            "task and returns immediately with its initial status."
+        ),
+    )
+    client_task_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional client-provided identifier for this logical task. "
+            "If not provided, the bridge or the A2A agent will generate one."
+        ),
     )

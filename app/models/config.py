@@ -2,8 +2,8 @@
 Pydantic models for configurations
 """
 
-from pydantic import BaseModel, Field, AnyUrl
-from typing import Optional, Dict, List
+from typing import Dict, Optional, Literal, List
+from pydantic import BaseModel, Field
 
 
 
@@ -55,24 +55,57 @@ class SessionConfig(BaseModel):
         if self.sandbox and not self.sandbox_options:
             self.sandbox_options = SandboxOptions()
 
+class A2AAuthConfig(BaseModel):
+    """
+    Authentication configuration for a single A2A agent.
+
+    This is purely local to mcp-bridge and does not change the A2A protocol.
+    It just tells the bridge how to add auth headers when calling the agent.
+    """
+
+    type: Literal["none", "api_key_header", "bearer_token"] = "none"
+    header_name: Optional[str] = None       # e.g. "Authorization" or "X-API-Key"
+    env_var: Optional[str] = None           # e.g. "PAYMENTS_AGENT_API_KEY"
+
+
+
 
 
 class A2AAgentConfig(BaseModel):
-    """Configuration for a remote A2A agent/server."""
+    """
+    Base configuration for a single A2A agent.
 
-    base_url: AnyUrl
-    card_path: str = "/.well-known/agent.json"
-    task_endpoint: str = "/tasks"
-    auth_header: Optional[str] = None       # e.g. "Authorization"
-    auth_token: Optional[str] = None        # e.g. "Bearer xxx"
+    This is intentionally minimal and protocol-agnostic:
+    - card_url points to the A2A Agent Card (/.well-known/agent.json or similar)
+    - runtime_url (optional) can be used later by the a2a-sdk client
+    """
+
+    # Identity / presentation
+    enabled: bool = True
+    label: Optional[str] = None
+    description: Optional[str] = None
+
+    # Discovery / endpoints
+    card_url: str                    # Full URL to the Agent Card
+    runtime_url: Optional[str] = None  # Optional base URL for JSON-RPC runtime
     timeout_seconds: int = 60
+
+    # Auth & headers (local to mcp-bridge)
+    auth: Optional[A2AAuthConfig] = None
+    extra_headers: Dict[str, str] = Field(default_factory=dict)
 
 
 class A2ASettings(BaseModel):
-    """Global A2A settings."""
+    """
+    Global A2A integration settings for mcp-bridge.
+
+    - enabled: master switch for all A2A features
+    - agents: logical agent_id -> configuration
+    """
 
     enabled: bool = True
-    agents: Dict[str, A2AAgentConfig] = {}
+    agents: Dict[str, A2AAgentConfig] = Field(default_factory=dict)
+
 
 
 

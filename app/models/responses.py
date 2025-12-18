@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
 
+
 class SessionResponse(BaseModel):
     """Response for session creation"""
     session_id: str
@@ -77,4 +78,131 @@ class A2ATaskResponse(BaseModel):
     raw_response: Dict[str, Any] = Field(
         default_factory=dict,
         description="Raw JSON response from the remote A2A agent."
+    )
+
+
+
+class A2AAgentSummary(BaseModel):
+    """
+    Summary information about an A2A agent, returned by the REST API.
+
+    This is derived from the agent's A2A Agent Card plus local configuration.
+    """
+
+    agent_id: str = Field(
+        ...,
+        description="Logical identifier of the agent inside mcp-bridge.",
+    )
+    name: str = Field(
+        ...,
+        description="Human-readable agent name (from the Agent Card or config label).",
+    )
+    description: Optional[str] = Field(
+        default=None,
+        description="Optional human-readable description of the agent.",
+    )
+    card_url: Optional[str] = Field(
+        default=None,
+        description="URL of the agent's A2A Agent Card.",
+    )
+    skills: List[str] = Field(
+        default_factory=list,
+        description="Optional list of skill names exposed by the agent.",
+    )
+    labels: List[str] = Field(
+        default_factory=list,
+        description="Optional labels/tags for UI grouping or filtering.",
+    )
+
+
+class A2AMessageResponse(BaseModel):
+    """
+    Response for POST /a2a/agents/{agent_id}/messages.
+
+    - mode = 'blocking': the agent has completed the task and output is final.
+    - mode = 'task': a long-running task has been created; use the task_id
+      with GET /a2a/agents/{agent_id}/tasks/{task_id} to check status.
+    """
+
+    mode: Literal["blocking", "task"] = Field(
+        ...,
+        description="Indicates whether the call was handled in blocking or task mode.",
+    )
+    agent_id: str = Field(
+        ...,
+        description="Logical identifier of the agent that handled the message.",
+    )
+    task_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Identifier of the underlying A2A task, if available. "
+            "Always present in 'task' mode; may also be present in 'blocking' mode."
+        ),
+    )
+    status: Optional[str] = Field(
+        default=None,
+        description=(
+            "High-level status of the task (e.g. pending, running, completed, "
+            "failed, cancelled). Exact values depend on the A2A task status."
+        ),
+    )
+    output: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Simplified, UI-friendly representation of the agent output "
+            "(e.g. main text, structured payload)."
+        ),
+    )
+    message: Optional[str] = Field(
+        default=None,
+        description="Optional human-readable message describing the result.",
+    )
+    raw_response: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Raw A2A response object (Task, Message, etc.) serialized as a dict. "
+            "Useful for debugging or advanced clients."
+        ),
+    )
+
+
+class A2ATaskStatusResponse(BaseModel):
+    """
+    Response for GET /a2a/agents/{agent_id}/tasks/{task_id}.
+
+    Provides the current status of an A2A task and, if available, its output.
+    """
+
+    agent_id: str = Field(
+        ...,
+        description="Logical identifier of the agent that owns the task.",
+    )
+    task_id: str = Field(
+        ...,
+        description="Identifier of the A2A task.",
+    )
+    status: str = Field(
+        ...,
+        description=(
+            "Current status of the task (e.g. pending, running, completed, "
+            "failed, cancelled). Exact values depend on the A2A backend."
+        ),
+    )
+    output: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Simplified representation of the task's output, if the task "
+            "has produced a result."
+        ),
+    )
+    message: Optional[str] = Field(
+        default=None,
+        description="Optional human-readable message describing the current state.",
+    )
+    raw_response: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Raw A2A task object (Task, TaskStatus, etc.) serialized as a dict. "
+            "Useful for debugging or advanced clients."
+        ),
     )

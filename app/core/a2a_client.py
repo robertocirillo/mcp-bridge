@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, List, Optional
 
 import httpx
-
+from os import getenv
 from app.models.config import A2AAgentConfig
 from app.models.requests import A2ATaskRequest
 from app.models.responses import A2AAgentInfo, A2ATaskResponse
@@ -38,31 +38,6 @@ class A2AClient:
             raise A2AAgentNotFoundError(f"A2A agent '{agent_id}' is not configured.")
         return config
 
-    async def _fetch_agent_card(
-            self,
-            agent_id: str,
-            config: A2AAgentConfig,
-    ) -> Dict[str, Any]:
-        """
-        Fetches the agent card from the remote A2A agent, if available.
-
-        The result is cached in memory.
-        """
-        if agent_id in self._cards_cache:
-            return self._cards_cache[agent_id]
-
-        # Convert AnyHttpUrl to string before using string methods
-        base_url = str(config.base_url).rstrip("/")
-        url = base_url + config.card_path
-        logger.debug(f"Fetching A2A agent card for '{agent_id}' from {url}")
-
-        async with httpx.AsyncClient(timeout=config.timeout_seconds) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            card = response.json()
-
-        self._cards_cache[agent_id] = card
-        return card
 
     async def list_agents(self) -> List[A2AAgentInfo]:
         """
@@ -99,43 +74,79 @@ class A2AClient:
 
         return agents
 
-    async def send_task(
-        self,
-        agent_id: str,
-        task: A2ATaskRequest,
-    ) -> A2ATaskResponse:
+    def _build_headers(self, cfg: A2AAgentConfig) -> Dict[str, str]:
         """
-        Forwards a task to the remote A2A agent and wraps the response.
+        Builds request headers based on cfg.extra_headers and cfg.auth.
+        Compatible with the project config model (runtime_url/card_url/auth/extra_headers).
+        """
+        headers: Dict[str, str] = dict(getattr(cfg, "extra_headers", None) or {})
 
-        This method does NOT attempt to implement full A2A server semantics;
-        it simply forwards the request and wraps the response in a stable shape.
+        auth = getattr(cfg, "auth", None)
+        if not auth or getattr(auth, "type", "none") == "none":
+            return headers
+
+        auth_type = auth.type
+        if auth_type == "api_key_header":
+            header_name = auth.header_name
+            token = getenv(auth.env_var or "", "")
+            if header_name and token:
+                headers[header_name] = token
+
+        elif auth_type == "bearer_token":
+            token = getenv(auth.env_var or "", "")
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+
+        return headers
+
+    async def _fetch_agent_card(self, agent_id: str, cfg: A2AAgentConfig) -> Dict[str, Any]:
+        """
+        Fetch agent card using cfg.card_url (full URL), as defined in PROJECT_CONTEXT.
+        """
+        if agent_id in self._cards_cache:
+            return self._cards_cache[agent_id]
+
+        url = str(cfg.card_url)
+        headers = self._build_headers(cfg)
+
+        logger.debug("Fetching A2A agent card for '%s' from %s", agent_id, url)
+
+        async with httpx.AsyncClient(timeout=cfg.timeout_seconds) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            card = response.json()
+
+        self._cards_cache[agent_id] = card
+        return card
+
+    async def send_task(self, agent_id: str, task: A2ATaskRequest) -> A2ATaskResponse:
+        """
+        Post task to cfg.runtime_url + '/tasks' (HTTP shim), compatible with the local echo agent.
         """
         cfg = self._get_agent_config(agent_id)
 
-        base_url = str(cfg.base_url).rstrip("/")
-        url = base_url + "/" + cfg.task_endpoint.lstrip("/")
-        headers: Dict[str, str] = {}
+        runtime_url = getattr(cfg, "runtime_url", None)
+        if not runtime_url:
+            raise A2AClientError(f"A2A agent '{agent_id}' runtime_url is not configured.")
 
-        if cfg.auth_header and cfg.auth_token:
-            headers[cfg.auth_header] = cfg.auth_token
+        url = str(runtime_url).rstrip("/") + "/tasks"
+        headers = self._build_headers(cfg)
 
         payload: Dict[str, Any] = {
             "goal": task.goal,
             "input": task.input,
             "metadata": task.metadata or {},
         }
-
         if task.task_id:
             payload["taskId"] = task.task_id
 
-        logger.debug(f"Sending A2A task to '{agent_id}' at {url}")
+        logger.debug("Sending A2A task to '%s' at %s", agent_id, url)
 
         async with httpx.AsyncClient(timeout=cfg.timeout_seconds) as client:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
 
-        # Map the remote response into our wrapper model
         remote_task_id = data.get("taskId") or task.task_id or ""
         status = data.get("status", "unknown")
         output = data.get("output")
