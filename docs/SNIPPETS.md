@@ -541,7 +541,9 @@ async def delete_session(
 
 ---
 
-## 6. A2A REST Models and Routes (Current HTTP Shim)
+## 6. A2A REST Models and Routes (A2A integration)
+
+> Note: The bridge now uses **a2a-sdk**. Any HTTP-shim snippets are legacy and kept only for historical context.
 
 ### 6.1 A2A Request/Response Models (`app/models/requests.py`, `app/models/responses.py`)
 
@@ -644,11 +646,14 @@ async def list_a2a_agents(
         raise HTTPException(status_code=500, detail="Error listing A2A agents")
 ```
 
-### 6.3 A2A Task Status (HTTP shim)
+### 6.3 A2A Task Status (SDK-based)
 
-`GET /a2a/agents/{agent_id}/tasks/{task_id}` tries `GET {runtime_url}/tasks/{task_id}` and falls back gracefully if the runtime doesn’t implement polling (common for the local echo agent).
-It builds outbound headers from `conf.extra_headers` + `conf.auth` (env_var-based).
+`GET /a2a/agents/{agent_id}/tasks/{task_id}` uses the official **a2a-sdk** `get_task(...)` via `A2AClient`.
 
+Notes:
+
+* Some agents may never return a Task (message-only behavior), so task polling may be inapplicable for those agents.
+* Auth headers are built from `conf.extra_headers` + `conf.auth` (env_var-based).
 
 ---
 
@@ -826,39 +831,44 @@ curl -X POST "http://localhost:8000/a2a/agents/local_echo_agent/messages" \
 
 ## 9. A2AClient Compatibility Note
 
-`A2AClient.send_task()` must build:
+`A2AClient` uses **a2a-sdk** and resolves agents via `cfg.card_url` (full URL).
 
-* Agent card URL from `cfg.card_url` (full URL)
-* Tasks URL from `cfg.runtime_url.rstrip("/") + "/tasks"`
+Important SDK details:
 
-Headers must be built from:
+* Create a text message using keyword argument:
 
-* `cfg.extra_headers`
-* `cfg.auth` (api_key_header / bearer_token via env var)
+  * ✅ `create_text_message_object(content=text)`
+  * ❌ `create_text_message_object(text)` (the first positional argument is `role` and will fail validation)
 
-Do not use legacy/alternative URL fields like `base_url`, `task_endpoint`, or `card_path` in this project version.
-
+* Different `a2a-sdk` versions may have different `send_message(...)` signatures
+  (e.g., `request_metadata` may be supported or not). The bridge should align its wrapper
+  with the installed SDK version or gate optional kwargs based on the available signature.
 
 ## A2A SDK smoke test (HelloWorld agent)
 
 Agent card:
+
 ```bash
 curl -s http://localhost:9999/.well-known/agent.json | jq
+```
 
+Blocking call via mcp-bridge:
+
+```bash
 curl -s -X POST "http://localhost:8000/a2a/agents/helloworld/messages" \
   -H "Content-Type: application/json" \
   -d '{ "goal": "hi", "blocking": true, "metadata": {} }' | jq
 ```
 
-## A2A SDK smoke test (HelloWorld agent)
+Non-blocking call (agent may still return Message-only):
 
-Agent card:
 ```bash
-curl -s http://localhost:9999/.well-known/agent.json | jq
-
 curl -s -X POST "http://localhost:8000/a2a/agents/helloworld/messages" \
   -H "Content-Type: application/json" \
   -d '{ "goal": "hi", "blocking": false, "metadata": {} }' | jq
-
-
 ```
+
+Expected with HelloWorld:
+
+* `task_id` may be `null` because the agent can return a final `Message` directly.
+* REST `mode` should reflect the actual response (`"task"` only when `task_id` is present).

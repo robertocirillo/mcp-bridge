@@ -18,7 +18,7 @@ Project: **mcp-bridge – MCP + A2A integration**
 
    * Visual builders / UIs / workflow tools (HTTP/JSON)
    * The **MCP ecosystem** (via `mcp-use`)
-   * The **A2A ecosystem** (today: minimal HTTP integration, target: official A2A SDK)
+   * The **A2A ecosystem** (today: SDK-based integration)
 
 3. Supports **multi-tenancy**, so the same mcp-bridge deployment can be safely used by multiple tenants (e.g. multiple users/applications) without leaking sessions between them.
 
@@ -37,6 +37,7 @@ Project: **mcp-bridge – MCP + A2A integration**
     * `/sessions/{id}/query` (MCP queries)
     * `/a2a/agents` (A2A discovery)
     * `/a2a/agents/{agent_id}/messages` (A2A invocation)
+    * `/a2a/agents/{agent_id}/tasks/{task_id}` (A2A task polling)
     * `/health` and other monitoring endpoints
 
 * **Configuration (`config.py`)**
@@ -65,6 +66,11 @@ Project: **mcp-bridge – MCP + A2A integration**
     * Responsible for creating, storing, retrieving, listing, and deleting sessions
     * Enforces `MAX_ACTIVE_SESSIONS`
     * Uses an `asyncio.Lock` for concurrency safety
+  * `A2AClient`:
+
+    * Wrapper around **`a2a-sdk`**
+    * Resolves Agent Cards and communicates with agents
+    * Provides `send_message(...)` and `get_task(...)`
   * `exceptions.py`:
 
     * `MaxSessionsExceededError`
@@ -87,12 +93,12 @@ Project: **mcp-bridge – MCP + A2A integration**
     * Health check endpoints
   * `routes/a2a.py`:
 
-    * New A2A discovery and invocation endpoints
+    * A2A discovery, message send, and task polling endpoints
   * `dependencies.py`:
 
     * `get_session_manager()`
     * `get_settings()`
-    * `get_a2a_client()` (historically; currently A2A routes use `settings` directly)
+    * `get_a2a_client()`
     * `get_tenant_context()` returning `TenantContext`
 
 * **Models (`app/models/`)**
@@ -107,7 +113,6 @@ Project: **mcp-bridge – MCP + A2A integration**
     * `SessionCreateRequest` (inherits from `SessionConfig` + maybe extra fields)
     * `QueryRequest`
     * `A2AMessageRequest`
-    * (legacy `A2ATaskRequest` used previously; currently phased out from routes)
   * `responses.py`:
 
     * `SessionResponse`, `SessionInfo`
@@ -259,46 +264,19 @@ Project: **mcp-bridge – MCP + A2A integration**
 
 ### 4.1 Current State vs Target
 
-The current HTTP-based A2A integration is considered a temporary compatibility layer and must not be treated as a reference implementation of the A2A protocol.
+The A2A integration uses the official **a2a-sdk**.
 
-* **Current implementation (working, but NOT A2A protocol compliant):**
+* **Current implementation (SDK-based):**
 
-  * Uses a custom HTTP pattern:
+  * Resolves the Agent Card from `card_url` using the SDK and communicates using the transport advertised by the agent (commonly JSON-RPC).
+  * `POST /a2a/agents/{agent_id}/messages` uses the SDK `send_message(...)`.
+  * `GET /a2a/agents/{agent_id}/tasks/{task_id}` uses the SDK `get_task(...)`.
+  * The REST field `blocking` is a bridge-level convenience flag (not an A2A protocol field).
+  * `blocking=false` does **not** guarantee a Task: some agents may return a final `Message` directly (so `task_id` can be null).
 
-    * `runtime_url + "/tasks"` endpoint on the A2A agent
-    * `TaskRequest` / `TaskResponse` payloads:
+* **Legacy / compatibility note:**
 
-      * Request:
-
-        * `goal: str`
-        * `input: Dict[str, Any] | None`
-        * `taskId: str`
-        * `metadata: Dict[str, Any] | None`
-      * Response:
-
-        * `taskId: str`
-        * `status: str`
-        * `output: Dict[str, Any] | None`
-        * `message: str | None`
-  * A2A REST endpoints in mcp-bridge are shaped to be future-proof, but internally they call this custom `/tasks` endpoint on an echo agent.
-
-  * **Note on `blocking` semantics (shim limitation):**
-    * `POST /a2a/agents/{agent_id}/messages` with `blocking=false` currently returns `mode="task"` and a `task_id`,
-      but the underlying HTTP shim call is still synchronous (`POST {runtime_url}/tasks`) and may return `status="completed"` immediately.
-    * Real asynchronous task execution and polling are not provided by the shim unless the agent runtime implements its own task persistence and `GET {runtime_url}/tasks/{task_id}`.
-
-
-* **Target implementation (planned, NOT yet implemented):**
-
-  * Use the **official A2A SDK** (e.g. `python-a2a`) to:
-
-    * Load Agent Cards (`AgentCard`)
-    * Use JSON-RPC 2.0 A2A methods (`message/send`, `tasks/get`, etc.)
-  * Keep mcp-bridge’s REST APIs stable:
-
-    * `GET /a2a/agents`
-    * `POST /a2a/agents/{agent_id}/messages`
-    * `GET /a2a/agents/{agent_id}/tasks/{task_id}`
+  * Earlier versions used a bridge-specific HTTP shim (`POST {runtime_url}/tasks`). This is not the reference path in SDK mode.
 
 ### 4.2 A2A Configuration Model
 
@@ -316,8 +294,8 @@ class A2AAgentConfig(BaseModel):
     label: Optional[str] = None
     description: Optional[str] = None
 
-    card_url: str                   # full URL to Agent Card (future)
-    runtime_url: Optional[str] = None  # base URL used now to call /tasks
+    card_url: str                      # full URL to Agent Card (used by a2a-sdk)
+    runtime_url: Optional[str] = None  # legacy shim field (optional, avoid relying on it in SDK mode)
     timeout_seconds: int = 60
 
     auth: Optional[A2AAuthConfig] = None
@@ -347,15 +325,18 @@ a2a: A2ASettings = A2ASettings(
 )
 ```
 
-#### 4.2.1 A2A HTTP Shim – Client URL Fields (Implementation Note)
+#### 4.2.1 Legacy HTTP Shim Fields (Implementation Note)
 
-The current A2A HTTP shim uses only the following fields from `A2AAgentConfig`:
+In SDK mode, only:
 
-* `card_url`: full URL to the agent card (e.g. `http://localhost:9001/.well-known/agent.json`)
-* `runtime_url`: base URL for the runtime shim (e.g. `http://localhost:9001`)
-* tasks endpoint is fixed to: `runtime_url.rstrip("/") + "/tasks"`
+* `card_url` (full URL to the Agent Card)
 
-Do **not** use alternative/legacy fields such as `base_url`, `task_endpoint`, `card_path`, `auth_header`, or `auth_token` in this project version (they are not part of the authoritative config model). Auth must be derived from `auth` + `extra_headers`.
+is required for communication.
+
+`runtime_url` exists for legacy shim compatibility and should not be relied on for SDK-based agents.
+If an agent exposes `runtime_url`, it may still be useful for ad-hoc debugging, but the bridge should prefer SDK calls.
+
+Auth headers must be derived from `auth` + `extra_headers`.
 
 ### 4.3 A2A REST Models
 
@@ -412,104 +393,50 @@ class A2ATaskStatusResponse(BaseModel):
   * Steps:
 
     * Load `a2a_settings = settings.a2a`
+
     * If `a2a_settings.enabled` is False → return `[]`
+
     * For each `(agent_id, conf)` in `a2a_settings.agents.items()`:
 
       * Skip if `conf.enabled` is False
       * `name = conf.label or agent_id`
       * `description = conf.description`
       * `card_url = conf.card_url`
-      * `skills = []` (placeholder)
+      * `skills = []` (placeholder until Agent Card parsing is surfaced)
       * `labels = []` (placeholder)
+
     * Wrap in `A2AAgentSummary` and return
 
 * `POST /a2a/agents/{agent_id}/messages`:
 
   * Input: `A2AMessageRequest`
-  * Current implementation uses the **A2AClient HTTP shim** calling the agent `/tasks` endpoint.
+  * Uses the A2A SDK client (resolved from `conf.card_url`) via `A2AClient`.
   * Steps (simplified):
 
     1. Get `a2a_settings = settings.a2a`, ensure `enabled=True`
+    2. Look up `conf = a2a_settings.agents.get(agent_id)` and ensure enabled
+    3. Create an outbound A2A text message using:
 
-    2. Look up `conf = a2a_settings.agents.get(agent_id)`
+       * ✅ `create_text_message_object(content=request.goal)`
+       * (do not pass the text positionally; the first positional argument is `role`)
+    4. Call `a2a_client.send_message(...)` with:
 
-    3. Ensure `conf.enabled` and `conf.runtime_url` are present
+       * `blocking=request.blocking`
+       * `request_metadata=request.metadata` (when supported by the installed `a2a-sdk`)
+    5. Map the SDK result to `A2AMessageResponse`:
 
-    4. Determine `mode`:
+       * `task_id` may be null if the agent returns a final `Message` directly
+       * `status` may be null in message-only responses
+       * `mode` reflects the actual response:
 
-       * `"blocking"` if `request.blocking` is True
-       * `"task"` otherwise
+         * `"task"` only when `task_id` is present
+         * otherwise `"blocking"`
 
-    5. Determine `effective_task_id`:
+* `GET /a2a/agents/{agent_id}/tasks/{task_id}`:
 
-       * `request.client_task_id` or `uuid.uuid4()`
-
-    6. Build `agent_payload`:
-
-       ```python
-       {
-         "goal": request.goal,
-         "input": request.input,
-         "taskId": effective_task_id,
-         "metadata": request.metadata or {}
-       }
-       ```
-
-    7. POST to `tasks_url = conf.runtime_url.rstrip("/") + "/tasks"` using `httpx.AsyncClient`
-
-    8. Handle HTTP errors (propagate status code via HTTPException)
-
-    9. Parse JSON response as `data`
-
-    10. Map:
-
-        * `task_id = data.get("taskId", effective_task_id)`
-        * `status = data.get("status")`
-        * `output = data.get("output")`
-        * `message = data.get("message")`
-
-        into `A2AMessageResponse`.
-
-**Important:**
-The current A2A implementation is **bridge-specific**, not A2A protocol compliant. It is intended as a temporary shim until the A2A SDK is integrated.
-
-### A2A SDK behavior: blocking responses may not include a task_id
-
-When using the official A2A SDK, a blocking `POST /a2a/agents/{agent_id}/messages`
-may return a final `Message` directly (no Task created/returned by the agent).
-
-In this case:
-- `A2AMessageResponse.task_id` can be null
-- `A2AMessageResponse.status` can be null
-- the agent output is available under `output.message` (raw SDK message model)
-
-### A2A SDK Notes (implementation details)
-
-#### Text message creation
-
-When building an A2A `Message` via the SDK helper, always pass the text as `content=...`:
-
-- ✅ `create_text_message_object(content=text)`
-- ❌ `create_text_message_object(text)` (interprets the string as `role` and fails validation)
-
-#### Task vs Message responses
-
-Even if the REST request uses `blocking=false`, an agent may still return a final `Message`
-directly (no Task is created/returned). In this case:
-- `A2AMessageResponse.task_id` can be null
-- `A2AMessageResponse.status` can be null
-- the agent output is under `output.message`
-
-`mode` should reflect the actual response:
-- `mode="task"` only when a `task_id` is present
-- otherwise `mode="blocking"`
-
-#### SDK version compatibility
-
-Different `a2a-sdk` versions may have different `send_message(...)` signatures
-(e.g. support for `request_metadata`). Keep the bridge aligned with the installed
-SDK version (preferred), or gate optional kwargs based on the available signature.
-
+  * Uses the A2A SDK `get_task(...)` via `A2AClient`.
+  * Returns `A2ATaskStatusResponse`.
+  * Note: some agents may never return a Task (message-only behavior); in that case task polling is not applicable.
 
 ---
 
@@ -541,17 +468,17 @@ SDK version (preferred), or gate optional kwargs based on the available signatur
      * Uses `wrapper.steps_used` and `wrapper.last_server_used`
      * Returns `QueryResponse` (session_id, result, execution_time, steps_used, timestamp, server_used)
 
-### A2A Flow (Current HTTP-based Implementation)
+### A2A Flow (SDK-based implementation)
 
 1. **Client** calls `GET /a2a/agents` to list configured agents.
+
 2. **Client** chooses an `agent_id` and calls `POST /a2a/agents/{agent_id}/messages`:
 
-   * The REST layer:
+   * The REST layer sends the message via **a2a-sdk**, resolving the Agent Card from `card_url`.
+   * `blocking` controls whether the REST call waits for completion, but agents may still respond with a final `Message` directly (no Task).
+   * REST `mode` reflects the actual SDK response (`"task"` only when `task_id` is present).
 
-     * Maps `A2AMessageRequest` to the echo-agent’s `/tasks` endpoint payload.
-     * For now, executes synchronously, but still marks `mode` based on `blocking`.
-3. Underlying agent handles the request and returns a `TaskResponse`.
-4. The REST endpoint wraps it in `A2AMessageResponse`.
+3. If the agent returns a Task, the client can call `GET /a2a/agents/{agent_id}/tasks/{task_id}` to poll task status.
 
 ---
 
@@ -599,29 +526,27 @@ SDK version (preferred), or gate optional kwargs based on the available signatur
     * Filtering in `list_sessions` works.
     * Tenant-specific checks on `get_session` and `delete_session` are in place.
 
-* **A2A side (temporary HTTP adapter):**
+* **A2A side (SDK-based integration):**
 
   * `GET /a2a/agents`:
 
     * Returns list of agents from static config (`settings.a2a.agents`).
   * `POST /a2a/agents/{agent_id}/messages`:
 
-    * Works with the **local echo agent** that exposes `/tasks`.
-    * Correctly maps request/response into `A2AMessageRequest` / `A2AMessageResponse`.
+    * Works with SDK-compatible third-party agents (e.g. JSON-RPC agents advertising an Agent Card at `card_url`).
+    * Maps SDK responses into `A2AMessageRequest` / `A2AMessageResponse` (message-only responses may have null `task_id`).
 
 ### Not Yet Implemented / Broken
 
-* **A2A protocol compliance:**
+* **A2A protocol coverage (SDK-based):**
 
-  * No use of official A2A SDK yet.
-  * No JSON-RPC / `message/send` / `tasks/get` integration.
-  * No use of A2A’s `AgentCard` beyond `card_url` being stored; `GET /a2a/agents` does not fetch/parsing the card.
+  * The bridge uses `a2a-sdk` for sending messages and (when applicable) task polling.
+  * `GET /a2a/agents` is still config-driven and does not yet expose Agent Card-derived metadata (skills/interfaces) in the REST response.
 
 * **A2A task status endpoint:**
-  * `GET /a2a/agents/{agent_id}/tasks/{task_id}` is implemented using the current HTTP shim:
-    * It attempts `GET {runtime_url}/tasks/{task_id}` on the agent runtime.
-    * If the runtime does not support task polling (e.g., the local echo agent), it returns a graceful shim response (e.g., `status="not_found"` / `status="unsupported"`) including the remote HTTP status code in `raw_response`.
 
+  * `GET /a2a/agents/{agent_id}/tasks/{task_id}` is implemented via the A2A SDK (`get_task`).
+  * Some agents may never return a Task (message-only behavior); in that case task polling is not applicable.
 
 * **Multi-tenancy for A2A:**
 
@@ -662,10 +587,10 @@ See also `DECISIONS.md`, but key points:
 
   * No per-tenant configuration for LLM providers or A2A agents yet.
   * Only session visibility and deletion are tenant-aware.
-* A2A integration is currently an HTTP shim:
+* A2A integration is SDK-based (a2a-sdk), but protocol coverage is still evolving:
 
-  * Limited to echo-like agents that accept a specific `/tasks` schema.
-  * Not interoperable yet for arbitrary third-party A2A agents.
+  * Some agents return Message-only responses (no Task), so polling semantics vary.
+  * Streaming and richer task/event handling may require additional normalization at the REST layer.
 * Error feedback:
 
   * Some 500s still map to generic `"Internal Error"` or `"Error executing A2A message"` without fine-grained error codes exposed to clients.
@@ -679,9 +604,9 @@ See also `DECISIONS.md`, but key points:
 
 **Short-term (A2A & stability)**
 
-1. Implement `GET /a2a/agents/{agent_id}/tasks/{task_id}` using `A2ATaskStatusResponse`.
+1. Validate and harden `GET /a2a/agents/{agent_id}/tasks/{task_id}` behavior across real third-party agents.
 
-   * For the echo agent, this might be a stub or return the same info as `/messages` for now.
+   * Some agents may return Message-only responses (no Task), so polling may be inapplicable for those agents.
 2. Improve error visibility:
 
    * Return more specific messages in A2A errors (e.g., propagate remote `status` and error descriptions).
@@ -689,13 +614,11 @@ See also `DECISIONS.md`, but key points:
 
 **Medium-term (A2A protocol integration)**
 
-4. Integrate official **A2A SDK** (e.g. `python-a2a`):
+4. Expand **a2a-sdk** coverage:
 
-   * Introduce an internal `A2AClient` that:
-
-     * Loads `AgentCard` from `card_url`.
-     * Uses JSON-RPC A2A methods for messaging/tasks.
-   * Keep REST surface stable while changing internals.
+   * Clarify semantics for message-only vs task-based agents.
+   * Improve streaming/task handling and error reporting.
+   * Optionally surface selected Agent Card metadata (skills, interfaces) in `GET /a2a/agents`.
 
 5. Extend `GET /a2a/agents`:
 
