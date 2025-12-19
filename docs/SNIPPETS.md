@@ -849,3 +849,16 @@ curl -s -X POST "http://localhost:8000/a2a/agents/helloworld/messages" \
   -H "Content-Type: application/json" \
   -d '{ "goal": "hi", "blocking": true, "metadata": {} }' | jq
 ```
+
+## A2A SDK smoke test (HelloWorld agent)
+
+Agent card:
+```bash
+curl -s http://localhost:9999/.well-known/agent.json | jq
+
+curl -s -X POST "http://localhost:8000/a2a/agents/helloworld/messages" \
+  -H "Content-Type: application/json" \
+  -d '{ "goal": "hi", "blocking": false, "metadata": {} }' | jq
+
+
+```

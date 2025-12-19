@@ -9,7 +9,7 @@ IMPORTANT:
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -77,9 +77,6 @@ async def send_a2a_message(
     conf = (a2a_settings.agents or {}).get(agent_id)
     if conf is None or not conf.enabled:
         raise HTTPException(status_code=404, detail=f"Unknown or disabled agent_id: {agent_id}")
-
-    mode = "blocking" if request.blocking else "task"
-
     try:
         result = await a2a_client.send_message(
             agent_id=agent_id,
@@ -87,9 +84,11 @@ async def send_a2a_message(
             blocking=request.blocking,
             request_metadata=request.metadata,
         )
+        Mode = Literal["blocking", "task"]
 
+        effective_mode: Mode = "task" if result.task_id else "blocking"
         return A2AMessageResponse(
-            mode=mode,
+            mode=effective_mode,
             agent_id=agent_id,
             task_id=result.task_id,
             status=result.status,

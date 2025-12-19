@@ -483,6 +483,33 @@ In this case:
 - `A2AMessageResponse.status` can be null
 - the agent output is available under `output.message` (raw SDK message model)
 
+### A2A SDK Notes (implementation details)
+
+#### Text message creation
+
+When building an A2A `Message` via the SDK helper, always pass the text as `content=...`:
+
+- ✅ `create_text_message_object(content=text)`
+- ❌ `create_text_message_object(text)` (interprets the string as `role` and fails validation)
+
+#### Task vs Message responses
+
+Even if the REST request uses `blocking=false`, an agent may still return a final `Message`
+directly (no Task is created/returned). In this case:
+- `A2AMessageResponse.task_id` can be null
+- `A2AMessageResponse.status` can be null
+- the agent output is under `output.message`
+
+`mode` should reflect the actual response:
+- `mode="task"` only when a `task_id` is present
+- otherwise `mode="blocking"`
+
+#### SDK version compatibility
+
+Different `a2a-sdk` versions may have different `send_message(...)` signatures
+(e.g. support for `request_metadata`). Keep the bridge aligned with the installed
+SDK version (preferred), or gate optional kwargs based on the available signature.
+
 
 ---
 

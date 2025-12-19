@@ -69,25 +69,34 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 
 ---
 
-### D4 – A2A integration uses a custom HTTP shim for now
+### D4 – A2A integration uses the official A2A SDK (a2a-sdk)
 
-**Status:** Accepted (temporary)
+**Status:** Accepted
 
 **Decision:**
 
-- mcp-bridge currently integrates A2A-like agents via HTTP endpoints:
-  - `runtime_url + "/tasks"`
-  - `TaskRequest` / `TaskResponse` JSON schema.
-- REST surface is:
-  - `GET /a2a/agents` → list configured agents
-  - `POST /a2a/agents/{agent_id}/messages` → send message/task
-- Implementation is intentionally simple and **not** protocol-compliant with official A2A.
+- mcp-bridge integrates A2A agents using the official **a2a-sdk**.
+- The bridge does **not** maintain a parallel custom HTTP shim in production code.
+- Agent discovery remains configuration-driven (by `agent_id`), and the SDK resolves the Agent Card from `card_url`.
+- The REST surface remains stable:
+  - `GET /a2a/agents`
+  - `POST /a2a/agents/{agent_id}/messages`
+  - `GET /a2a/agents/{agent_id}/tasks/{task_id}`
+
+**Notes:**
+
+- The REST field `blocking` is a REST convenience flag (not an A2A protocol field).
+- `blocking=false` does **not** guarantee that the agent returns a Task: some agents may return a final `Message` directly (so `task_id` can be null).
+- REST `mode` must reflect the actual response:
+  - `mode="task"` only when `task_id` is present
+  - otherwise `mode="blocking"`
 
 **Rationale:**
 
-- Allows quickly validating A2A flows end-to-end.
-- Keeps code small and explicit.
-- The REST API is shaped so it can later sit on top of the official A2A SDK.
+- Avoid implementing bridge-specific behavior that would be thrown away later.
+- Maximize interoperability with third-party A2A servers.
+- Align early with the official protocol semantics and SDK evolution.
+
 
 ---
 
@@ -266,11 +275,13 @@ These are intentionally left undecided for future iterations.
 - Should `run_id` be added as metadata to A2A requests (optionally)?
 - How should logs/traces be structured to leverage `run_id`?
 
-### Q4 – When and how to bring in the official A2A SDK
+### Q4 – SDK coverage and compatibility across third-party A2A agents
 
-- At what point is it worth migrating from the HTTP shim to the official SDK?
-- Which subset of the A2A spec should be implemented first?
-- How should we gracefully handle agents that are not fully compliant?
+- Which `a2a-sdk` version should be pinned, and how do we manage breaking API changes?
+- How should we handle agents that return Message-only responses (no Task) even when `blocking=false`?
+- What is the minimum subset of A2A features we must support first (tasks/get, streaming, extensions, etc.)?
+- How should we gracefully handle partially compliant agents (fallbacks, clearer error reporting, capability checks)?
+
 
 ### Q5 – Error model unification
 
