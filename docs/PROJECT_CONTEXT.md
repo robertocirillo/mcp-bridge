@@ -473,6 +473,17 @@ class A2ATaskStatusResponse(BaseModel):
 **Important:**
 The current A2A implementation is **bridge-specific**, not A2A protocol compliant. It is intended as a temporary shim until the A2A SDK is integrated.
 
+### A2A SDK behavior: blocking responses may not include a task_id
+
+When using the official A2A SDK, a blocking `POST /a2a/agents/{agent_id}/messages`
+may return a final `Message` directly (no Task created/returned by the agent).
+
+In this case:
+- `A2AMessageResponse.task_id` can be null
+- `A2AMessageResponse.status` can be null
+- the agent output is available under `output.message` (raw SDK message model)
+
+
 ---
 
 ## 5. Message Flow Overview

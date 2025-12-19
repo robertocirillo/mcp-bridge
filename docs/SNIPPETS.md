@@ -837,3 +837,15 @@ Headers must be built from:
 * `cfg.auth` (api_key_header / bearer_token via env var)
 
 Do not use legacy/alternative URL fields like `base_url`, `task_endpoint`, or `card_path` in this project version.
+
+
+## A2A SDK smoke test (HelloWorld agent)
+
+Agent card:
+```bash
+curl -s http://localhost:9999/.well-known/agent.json | jq
+
+curl -s -X POST "http://localhost:8000/a2a/agents/helloworld/messages" \
+  -H "Content-Type: application/json" \
+  -d '{ "goal": "hi", "blocking": true, "metadata": {} }' | jq
+```
