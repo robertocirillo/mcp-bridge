@@ -644,6 +644,12 @@ async def list_a2a_agents(
         raise HTTPException(status_code=500, detail="Error listing A2A agents")
 ```
 
+### 6.3 A2A Task Status (HTTP shim)
+
+`GET /a2a/agents/{agent_id}/tasks/{task_id}` tries `GET {runtime_url}/tasks/{task_id}` and falls back gracefully if the runtime doesn’t implement polling (common for the local echo agent).
+It builds outbound headers from `conf.extra_headers` + `conf.auth` (env_var-based).
+
+
 ---
 
 ## 7. Local Echo A2A Agent Example

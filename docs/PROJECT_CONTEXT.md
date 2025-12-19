@@ -282,6 +282,12 @@ The current HTTP-based A2A integration is considered a temporary compatibility l
         * `message: str | None`
   * A2A REST endpoints in mcp-bridge are shaped to be future-proof, but internally they call this custom `/tasks` endpoint on an echo agent.
 
+  * **Note on `blocking` semantics (shim limitation):**
+    * `POST /a2a/agents/{agent_id}/messages` with `blocking=false` currently returns `mode="task"` and a `task_id`,
+      but the underlying HTTP shim call is still synchronous (`POST {runtime_url}/tasks`) and may return `status="completed"` immediately.
+    * Real asynchronous task execution and polling are not provided by the shim unless the agent runtime implements its own task persistence and `GET {runtime_url}/tasks/{task_id}`.
+
+
 * **Target implementation (planned, NOT yet implemented):**
 
   * Use the **official A2A SDK** (e.g. `python-a2a`) to:
@@ -574,8 +580,10 @@ The current A2A implementation is **bridge-specific**, not A2A protocol complian
   * No use of A2A’s `AgentCard` beyond `card_url` being stored; `GET /a2a/agents` does not fetch/parsing the card.
 
 * **A2A task status endpoint:**
+  * `GET /a2a/agents/{agent_id}/tasks/{task_id}` is implemented using the current HTTP shim:
+    * It attempts `GET {runtime_url}/tasks/{task_id}` on the agent runtime.
+    * If the runtime does not support task polling (e.g., the local echo agent), it returns a graceful shim response (e.g., `status="not_found"` / `status="unsupported"`) including the remote HTTP status code in `raw_response`.
 
-  * `GET /a2a/agents/{agent_id}/tasks/{task_id}` is **not implemented** yet, despite having a response model (`A2ATaskStatusResponse`).
 
 * **Multi-tenancy for A2A:**
 

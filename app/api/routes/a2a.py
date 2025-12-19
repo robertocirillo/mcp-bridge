@@ -16,8 +16,9 @@ the official A2A SDK, while keeping these REST contracts stable.
 
 from typing import List, Annotated, Any, Dict
 import uuid
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
-
+from os import getenv
 from app.api.dependencies import (
     get_tenant_context,
     TenantContext,
@@ -32,12 +33,60 @@ from app.models.responses import (
     A2ATaskStatusResponse,
 )
 from app.utils.logging import get_logger
+from config import Settings
 
 router = APIRouter(prefix="/a2a/agents", tags=["A2A Agents"])
 
 logger = get_logger(__name__)
 
 TenantDep = Annotated[TenantContext, Depends(get_tenant_context)]
+
+
+def _build_a2a_headers(conf) -> Dict[str, str]:
+    """Build outbound headers for the A2A HTTP shim from config."""
+    headers: Dict[str, str] = dict(conf.extra_headers or {})
+
+    auth = conf.auth
+    if not auth or auth.type == "none":
+        return headers
+
+    if not auth.env_var:
+        raise HTTPException(status_code=500, detail="A2A auth is configured but env_var is missing")
+
+    token = getenv(auth.env_var)
+    if not token:
+        raise HTTPException(
+            status_code=500,
+            detail=f"A2A auth token is missing: environment variable '{auth.env_var}' is not set",
+        )
+
+    if auth.type == "api_key_header":
+        header_name = auth.header_name or "X-API-Key"
+        headers[header_name] = token
+    elif auth.type == "bearer_token":
+        headers["Authorization"] = f"Bearer {token}"
+    else:
+        raise HTTPException(status_code=500, detail=f"Unsupported A2A auth type: {auth.type}")
+
+    return headers
+
+
+def _get_agent_conf(settings: Settings, agent_id: str):
+    a2a_settings = settings.a2a
+    if not a2a_settings.enabled:
+        raise HTTPException(status_code=404, detail="A2A is disabled")
+
+    conf = (a2a_settings.agents or {}).get(agent_id)
+    if not conf or not conf.enabled:
+        raise HTTPException(status_code=404, detail=f"Unknown or disabled agent_id: {agent_id}")
+
+    if not conf.runtime_url:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent '{agent_id}' has no runtime_url configured (HTTP shim requires runtime_url)",
+        )
+
+    return conf
 
 
 @router.get("", response_model=List[A2AAgentSummary])
@@ -151,3 +200,95 @@ async def send_a2a_message(
             exc_info=True,
         )
         raise HTTPException(status_code=500, detail="Error executing A2A message") from e
+
+
+@router.get("/{agent_id}/tasks/{task_id}", response_model=A2ATaskStatusResponse)
+async def get_a2a_task_status(
+    agent_id: str,
+    task_id: str,
+    settings: Settings = Depends(get_settings),
+):
+    """Return task status via the current HTTP shim.
+
+    It attempts GET {runtime_url}/tasks/{task_id}.
+    If the agent runtime does not implement task polling, returns a graceful shim response.
+    """
+    conf = _get_agent_conf(settings, agent_id)
+
+    tasks_get_url = conf.runtime_url.rstrip("/") + f"/tasks/{task_id}"
+    headers = _build_a2a_headers(conf)
+
+    timeout = httpx.Timeout(conf.timeout_seconds)
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
+            resp = await client.get(tasks_get_url)
+
+        # Some shim agents (like the echo agent) won't have this endpoint.
+        if resp.status_code in (404, 405, 501):
+            status = (
+                "not_found" if resp.status_code == 404 else
+                "unsupported" if resp.status_code in (405, 501) else
+                "unknown"
+            )
+            return A2ATaskStatusResponse(
+                agent_id=agent_id,
+                task_id=task_id,
+                status=status,
+                output=None,
+                message=(
+                    f"Task polling is not available via HTTP shim at GET {tasks_get_url} "
+                    f"(agent returned HTTP {resp.status_code})."
+                ),
+                raw_response={
+                    "status_code": resp.status_code,
+                    "body": resp.text,
+                },
+            )
+
+        resp.raise_for_status()
+
+        data: Dict[str, Any] = resp.json()
+
+        return A2ATaskStatusResponse(
+            agent_id=agent_id,
+            task_id=data.get("taskId", task_id),
+            status=data.get("status", "unknown"),
+            output=data.get("output"),
+            message=data.get("message"),
+            raw_response=data,
+        )
+
+    except httpx.HTTPStatusError as e:
+        # propagate remote HTTP status code
+        body = None
+        try:
+            body = e.response.text
+        except Exception:
+            body = None
+
+        logger.warning("A2A task status error for %s/%s: %s", agent_id, task_id, e)
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail={
+                "error": "A2A agent returned an error",
+                "agent_id": agent_id,
+                "task_id": task_id,
+                "status_code": e.response.status_code,
+                "body": body,
+            },
+        )
+    except httpx.RequestError as e:
+        logger.warning("A2A task status request error for %s/%s: %s", agent_id, task_id, e)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "Error contacting A2A agent runtime",
+                "agent_id": agent_id,
+                "task_id": task_id,
+                "message": str(e),
+            },
+        )
+    except Exception as e:
+        logger.exception("Unexpected error getting A2A task status for %s/%s: %s", agent_id, task_id, e)
+        raise HTTPException(status_code=500, detail="Internal Error")
