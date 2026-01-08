@@ -139,7 +139,7 @@ class A2AClient:
             status=getattr(task, "status", None) or "unknown",
             output={"task": self._safe_dump(task)},
             message=None,
-            raw_response=None,
+            raw_response=output,
         )
 
     async def aclose(self) -> None:
@@ -258,20 +258,29 @@ class A2AClient:
 
     @staticmethod
     def _safe_dump(obj: Any) -> Any:
-        """Best-effort serialization for SDK objects."""
+        """Best-effort serialization for SDK objects.
+
+        Ensures the returned value is JSON-serializable (fallback to str()).
+        """
 
         if obj is None:
             return None
 
         dump = getattr(obj, "model_dump", None)
         if callable(dump):
-            return dump()
+            candidate = dump()
+        else:
+            asdict = getattr(obj, "dict", None)
+            if callable(asdict):
+                candidate = asdict()
+            else:
+                candidate = obj
 
-        asdict = getattr(obj, "dict", None)
-        if callable(asdict):
-            return asdict()
-
-        return obj
+        try:
+            json.dumps(candidate)
+            return candidate
+        except Exception:
+            return str(candidate)
 
     def _to_result(
         self,
@@ -302,13 +311,17 @@ class A2AClient:
 
         # Fallback: final Message
         if last_message is not None:
+            output = {"message": self._safe_dump(last_message)}
+            msg_task_id = getattr(last_message, "task_id", None)
+            if isinstance(msg_task_id, str):
+                msg_task_id = msg_task_id.strip() or None
             return A2AResult(
                 agent_id=agent_id,
-                task_id=None,
+                task_id=msg_task_id,
                 status=None,
-                output={"message": self._safe_dump(last_message)},
+                output=output,
                 message=None,
-                raw_response=None,
+                raw_response=output,
             )
 
         # Nothing received

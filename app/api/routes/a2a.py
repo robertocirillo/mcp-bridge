@@ -20,8 +20,36 @@ from app.models.responses import A2AAgentSummary, A2AMessageResponse, A2ATaskSta
 from app.utils.logging import get_logger
 from config import Settings
 
+import json
+
+
+
 router = APIRouter(prefix="/a2a", tags=["a2a"])
 logger = get_logger(__name__)
+
+
+def _normalize_goal(goal: str) -> str:
+    if goal is None:
+        raise HTTPException(status_code=422, detail="Field 'goal' is required")
+    g = goal.strip()
+    if not g:
+        raise HTTPException(status_code=422, detail="Field 'goal' must be a non-empty string")
+    return g
+
+def _ensure_jsonable(value, field_name: str) -> None:
+    try:
+        json.dumps(value)
+    except Exception:
+        raise HTTPException(status_code=422, detail=f"Field '{field_name}' must be JSON-serializable")
+
+def _normalize_task_id(task_id):
+    if task_id is None:
+        return None
+    if isinstance(task_id, str):
+        t = task_id.strip()
+        return t or None
+    return task_id
+
 
 
 @router.get("/agents", response_model=List[A2AAgentSummary])
@@ -77,21 +105,26 @@ async def send_a2a_message(
     conf = (a2a_settings.agents or {}).get(agent_id)
     if conf is None or not conf.enabled:
         raise HTTPException(status_code=404, detail=f"Unknown or disabled agent_id: {agent_id}")
+    goal = _normalize_goal(request.goal)
+    if request.metadata is not None:
+        _ensure_jsonable(request.metadata, "metadata")
+
     try:
         result = await a2a_client.send_message(
             agent_id=agent_id,
-            text=request.goal,
+            text=goal,
             blocking=request.blocking,
             request_metadata=request.metadata,
         )
         Mode = Literal["blocking", "task"]
 
-        effective_mode: Mode = "task" if result.task_id else "blocking"
+        task_id = _normalize_task_id(result.task_id)
+        effective_mode: Mode = "task" if task_id else "blocking"
         return A2AMessageResponse(
             mode=effective_mode,
             agent_id=agent_id,
-            task_id=result.task_id,
-            status=result.status,
+            task_id=task_id,
+            status=result.status or "unknown",
             output=result.output,
             message=result.message,
             raw_response=result.raw_response,
