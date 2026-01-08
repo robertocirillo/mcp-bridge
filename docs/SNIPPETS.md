@@ -69,7 +69,7 @@ class Settings(BaseSettings):
         agents={
             "local_echo_agent": A2AAgentConfig(
                 card_url="http://localhost:9001/.well-known/agent.json",
-                runtime_url="http://localhost:9001",
+                runtime_url="http://localhost:9001",  # legacy (HTTP shim); not used by the SDK-based A2AClient
                 timeout_seconds=60,
                 enabled=True,
                 label="Local Echo Agent",
@@ -110,7 +110,7 @@ class A2AAgentConfig(BaseModel):
     description: Optional[str] = None
 
     card_url: str
-    runtime_url: Optional[str] = None
+    runtime_url: Optional[str] = None  # legacy (HTTP shim); not used by the SDK-based A2AClient
     timeout_seconds: int = 60
 
     auth: Optional[A2AAuthConfig] = None

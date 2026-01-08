@@ -45,8 +45,8 @@ Immediately after the bootstrap prompt, write the task in **1–3 lines**, for e
 I want to continue development on the mcp-bridge project.
 
 Current task:
-Implement GET /a2a/agents/{agent_id}/tasks/{task_id}
-using the existing HTTP shim, without introducing the A2A SDK yet.
+Implement hardening for GET /a2a/agents/{agent_id}/tasks/{task_id}
+(using the existing **a2a-sdk** integration) and normalize `blocking=false` behavior.
 ```
 
 Rules:

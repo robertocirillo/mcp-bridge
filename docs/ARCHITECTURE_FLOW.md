@@ -262,185 +262,95 @@ background_tasks.add_task(
 
 ---
 
-## 3. A2A Flow: Client → mcp-bridge → A2A-like Agent
+## 3. A2A Flow: Client → mcp-bridge → A2A Agent (via a2a-sdk)
 
-### 3.1 Current A2A Architecture
+### 3.1 Current A2A Architecture (SDK-based)
 
-- REST surface is designed with future compliance in mind:
-  - `GET /a2a/agents`
-  - `POST /a2a/agents/{agent_id}/messages`
-  - (planned: `GET /a2a/agents/{agent_id}/tasks/{task_id}`)
+- A2A agents are configured in `settings.a2a.agents` (config-driven). Each agent entry includes:
+  - `enabled`, `label`
+  - `card_url` (full URL to the Agent Card; used as the source of truth)
+  - optional auth + headers + timeouts
+  - (legacy/compat) `runtime_url` may exist, but is not required for SDK-based calls.
 
-- Internally, **current implementation is a custom HTTP adapter**:
-  - Each configured `A2AAgentConfig` has a `runtime_url`.
-  - mcp-bridge calls `runtime_url + "/tasks"` with a simple JSON payload.
-  - Response is shaped into `A2AMessageResponse`.
+- At runtime, mcp-bridge uses an internal `A2AClient` wrapper (see `a2a_client.py`) that:
+  1. Lazily builds a per-agent `httpx.AsyncClient` using configured headers and timeout.
+  2. Derives `(base_url, relative_card_path)` from `card_url`.
+  3. Connects via the official SDK (`ClientFactory.connect(...)`) to resolve the Agent Card and obtain an SDK client.
+  4. Reuses the per-agent SDK client for subsequent requests.
 
-- The official A2A SDK is **not yet integrated**; JSON-RPC, NATS, and protocol-level semantics are still future work.
+This keeps the REST surface stable while delegating protocol specifics (Agent Card resolution, message streaming, task polling)
+to the official A2A SDK.
 
 ### 3.2 List A2A Agents (`GET /a2a/agents`)
-
-**Flow:**
 
 1. Route fetches `a2a_settings = settings.a2a`.
 2. If `not a2a_settings.enabled`: returns `[]`.
 3. Iterates over `a2a_settings.agents.items()`.
-4. For each `(agent_id, conf)` where `conf.enabled`:
-   - Creates `A2AAgentSummary`:
+4. Returns a list of `A2AAgentInfo` entries.
 
-```json
-{
-  "agent_id": "local_echo_agent",
-  "name": "Local Echo Agent",
-  "description": "Simple local A2A agent used for testing.",
-  "card_url": "http://localhost:9001/.well-known/agent.json",
-  "skills": [],
-  "labels": []
-}
-```
+Notes:
+- Today this is primarily a **config listing** (useful for UIs/visual builders).
+- A future enhancement can enrich this with Agent Card-derived capabilities (skills) by resolving cards on-demand.
 
-5. Returns the list.
-
-**Failure modes:**
-
-- Misconfigured `settings.a2a` may cause 500; current implementation wraps in HTTP 500 with generic error.
-
----
+Failure modes:
+- Misconfigured `settings.a2a` may cause 500; current implementation should wrap errors with a clear message.
 
 ### 3.3 Execute A2A Message (`POST /a2a/agents/{agent_id}/messages`)
 
-**Body:** `A2AMessageRequest`:
+Request model: `A2AMessageRequest`
+- `text: str`
+- `blocking: bool = true`
+- `request_metadata: dict | null` (optional)
 
-```json
-{
-  "goal": "Test the echo agent through mcp-bridge",
-  "input": { "foo": "bar", "number": 42 },
-  "metadata": {},
-  "blocking": true,
-  "client_task_id": "optional-client-defined-id"
-}
-```
-
-**Flow (current HTTP shim):**
-
+Flow (high-level):
 1. Route retrieves `a2a_settings = settings.a2a`.
-2. If `not a2a_settings.enabled` → HTTP 503 or 400 (depending on implementation).
+2. If `not a2a_settings.enabled` → HTTP 503 (A2A disabled).
 3. Looks up `conf = a2a_settings.agents.get(agent_id)`:
-   - If not found or `not conf.enabled` → HTTP 404.
-4. Validates that `conf.runtime_url` is set; otherwise HTTP 500/400.
-5. Determines **mode**:
-   - `mode = "blocking"` if `request.blocking` is `True`.
-   - `mode = "task"` otherwise.
+   - if missing → HTTP 404
+   - if `conf.enabled is False` → HTTP 404 (treat as not found)
+4. Calls `A2AClient.send_message(agent_id, text, blocking=..., request_metadata=...)`.
 
-> Currently, only "blocking" semantics are effectively implemented.
+SDK behavior (as implemented in `a2a_client.py`):
+- Builds an SDK message object via `create_text_message_object(content=text)`.
+- Streams events from `client.send_message(...)`.
+  - The SDK can yield either:
+    - `(Task, UpdateEvent|None)` tuples (task-based execution), or
+    - a final `Message` (message-only execution).
+- If `blocking=false`, the wrapper returns as soon as it receives the first Task event (task id).
+- If the agent is message-only (no task emitted), the wrapper returns a message-style result.
 
-6. Decides **effective task id**:
+Response mapping:
+- If a Task was observed → return `mode="task"`, include `task_id` and `status`.
+- Otherwise → return `mode="message"` with the final message content.
 
-```python
-effective_task_id = request.client_task_id or str(uuid.uuid4())
-```
+Failure modes:
+- Invalid `card_url` → 4xx/5xx surfaced as an A2A client error.
+- Remote connectivity issues / timeouts → 502/504 style error (depending on error mapping).
+- Remote protocol/schema errors → returned with a descriptive error payload when possible.
 
-7. Builds payload for the echo agent:
-
-```json
-{
-  "goal": "Test the echo agent through mcp-bridge",
-  "input": { "foo": "bar", "number": 42 },
-  "taskId": "same-as-effective_task_id",
-  "metadata": {}
-}
-```
-
-8. Builds `tasks_url = conf.runtime_url.rstrip("/") + "/tasks"`.
-9. Uses `httpx.AsyncClient` to send `POST tasks_url`:
-   - Applies `conf.timeout_seconds` as timeout.
-   - Applies authentication / headers based on `conf.auth` and `conf.extra_headers` (future extension).
-
-10. On HTTP error status:
-   - Raises HTTPException with the remote status / message.
-
-11. On success:
-   - Parses JSON as `data`:
-
-```json
-{
-  "taskId": "string",
-  "status": "completed",
-  "output": {
-    "echo_goal": "Test the echo agent through mcp-bridge",
-    "echo_input": {
-      "foo": "bar",
-      "number": 42
-    },
-    "info": "This is a test echo agent. Replace this logic with real work."
-  },
-  "message": "Task handled successfully by Local Echo Agent."
-}
-```
-
-12. Maps into `A2AMessageResponse`:
-
-```json
-{
-  "mode": "blocking",
-  "agent_id": "local_echo_agent",
-  "task_id": "string",
-  "status": "completed",
-  "output": {
-    "echo_goal": "Test the echo agent through mcp-bridge",
-    "echo_input": { "foo": "bar", "number": 42 },
-    "info": "This is a test echo agent. Replace this logic with real work."
-  },
-  "message": "Task handled successfully by Local Echo Agent.",
-  "raw_response": {
-    "taskId": "string",
-    "status": "completed",
-    "output": { ... },
-    "message": "Task handled successfully by Local Echo Agent."
-  }
-}
-```
-
-**Failure modes:**
-
-- Agent not configured or disabled → HTTP 404.
-- Remote agent not reachable or times out → HTTP 504/502.
-- Remote agent returns non-2xx → HTTPException with that status.
-- JSON parse failure → HTTP 502.
-- Any other error → HTTP 500 with "Error executing A2A message".
-
----
 
 ## 4. Blocking vs Task-Based A2A Execution
 
-### 4.1 Current Behavior
+### 4.1 Current Behavior (SDK-based)
 
-- `A2AMessageRequest.blocking` is accepted and used to set `mode` in the response.
-- Actual behavior is **always blocking**:
-  - The route waits for the remote `/tasks` call to complete.
-  - There is no separate task tracking.
+- `A2AMessageRequest.blocking` controls how long mcp-bridge waits while streaming SDK events.
+- The bridge does **not** maintain a separate local task store; task identity and state live on the remote A2A agent.
 
-So at the moment:
-
-- `blocking=true` → returns final result (blocking).
-- `blocking=false` → still behaves like blocking, but the response is labeled `"task"` logically.
-
-### 4.2 Target Behavior with Official A2A SDK
-
-With A2A integration, the plan is:
-
+Observed behaviors:
 - `blocking=true`:
-  - Use a high-level `message/send` method that blocks until completion or until a reasonable timeout.
-  - Return final `output` in a single `A2AMessageResponse`.
+  - The bridge consumes the SDK event stream until completion (or timeout).
+  - The response may be task-based (if the agent emits a Task) or message-only (if it does not).
 
 - `blocking=false`:
-  - Use a task-creation API (`message/send` returning a task handle, or `tasks/create`).
-  - Generate a `task_id` consistent with A2A’s notion.
-  - Return immediately with `mode="task"`, `status="pending"` and `task_id`.
-  - Introduce `GET /a2a/agents/{agent_id}/tasks/{task_id}`:
-    - Use A2A SDK (`tasks/get` or similar) to retrieve current state.
+  - The bridge returns as soon as it receives the first Task event (task id).
+  - If the agent never emits a Task (message-only agent), the bridge will still return a message-only result.
 
----
+### 4.2 Poll Task Status (`GET /a2a/agents/{agent_id}/tasks/{task_id}`)
+
+- This endpoint uses the official SDK to retrieve the latest task status from the remote A2A agent.
+- Internally it calls `A2AClient.get_task(agent_id, task_id, history_length=...)` and maps the returned SDK Task object
+  into `A2ATaskStatusResponse` (status + output).
+
 
 ## 5. Who Decides Agent Collaboration?
 
@@ -500,19 +410,22 @@ Therefore:
 ### 7.2 A2A Side
 
 - **Misconfiguration**:
-  - Missing `runtime_url`, disabled `settings.a2a` or `conf.enabled=False` → HTTP 404/503/500 depending on context.
+  - Disabled `settings.a2a` or `conf.enabled=False` → HTTP 503/404 depending on context.
+  - Missing/invalid `card_url` → A2A client error (cannot resolve Agent Card).
+  - Invalid auth config (e.g. missing token/header_name for the selected auth type) → A2A client error.
 
 - **Remote agent unreachable**:
-  - TCP timeout, DNS failure, etc. → `httpx` error.
-  - Mapped to HTTP 502/504 with a generic error message.
+  - TCP timeout, DNS failure, etc. (during card resolution, message send, or task polling) → `httpx` error via the SDK.
+  - Mapped to HTTP 502/504 with a generic error message (unless more specific mapping is implemented).
 
 - **Remote agent returns error**:
-  - Non-2xx response is propagated to client as HTTP error.
+  - Remote transport/protocol errors surfaced by the SDK are propagated as HTTP errors (best-effort mapping).
 
-- **Protocol mismatch**:
-  - Because current integration is custom, any third-party agent that expects strict A2A protocol may not be compatible.
-  - This is a known limitation; the future SDK-based integration is meant to fix this.
-
+- **Compatibility / partial compliance**:
+  - SDK-based integration maximizes interoperability, but real agents may differ:
+    - some agents are message-only (no Task), so polling is not applicable;
+    - some agents emit Tasks but with limited status granularity;
+    - SDK/version mismatches may surface as schema/validation errors.
 ### 7.3 System Constraints
 
 - In-memory session store:
@@ -533,13 +446,12 @@ Therefore:
    - `DELETE /sessions/{id}` → tenant-checked cleanup.
 
 2. **A2A agent usage (current)**:
-   - `GET /a2a/agents` → static config listing.
-   - `POST /a2a/agents/{id}/messages` → HTTP call to `runtime_url/tasks` → `A2AMessageResponse`.
-
+   - `GET /a2a/agents` → static config listing (UI-friendly).
+   - `POST /a2a/agents/{id}/messages` → a2a-sdk `send_message` (Agent Card via `card_url`) → `A2AMessageResponse`.
+   - `GET /a2a/agents/{id}/tasks/{task_id}` → a2a-sdk `get_task` → `A2ATaskStatusResponse`.
 3. **Blocking vs task**:
-   - Exposed in API, but currently only blocking semantics are implemented; task-style semantics will be added with the A2A SDK.
-
+   - `blocking=true` → wait for completion (may still return a task-based result if the agent emits a task).
+   - `blocking=false` → return early on first Task event when available; message-only agents may still return a final message.
 4. **Orchestration & NATS**:
    - Orchestration lives outside mcp-bridge.
    - NATS is not part of mcp-bridge; any NATS usage is within remote A2A agents.
-

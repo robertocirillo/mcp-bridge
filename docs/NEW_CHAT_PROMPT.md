@@ -16,7 +16,7 @@ You are an assistant helping maintain and evolve a project called "mcp-bridge".
 mcp-bridge is a FastAPI-based REST service that:
 - Manages MCP sessions (LLM + MCP servers) via the `mcp-use` library.
 - Exposes REST endpoints for MCP session lifecycle and query execution.
-- Exposes REST endpoints for interacting with A2A agents (currently via an HTTP shim; future target is the official A2A SDK).
+- Exposes REST endpoints for interacting with A2A agents via the official **a2a-sdk** (Agent Card resolved from `card_url`).
 - Supports multi-tenancy at the REST layer via X-Tenant-Id and X-Run-Id headers.
 
 IMPORTANT: Project knowledge is stored in local documentation files.
@@ -76,8 +76,8 @@ Multi-tenancy:
 - Do NOT push tenant_id into MCP or A2A protocol payloads unless explicitly requested.
 
 A2A integration:
-- Current implementation uses an HTTP shim calling `/tasks` or `/messages` on configured agents.
-- Long-term goal is to integrate the official A2A SDK and JSON-RPC.
+- Current implementation uses the official **a2a-sdk** (Agent Card resolved from `card_url`).
+- Keep the REST API surface stable when possible.
 - Keep the REST API surface stable when possible.
 
 If something contradicts the docs:
