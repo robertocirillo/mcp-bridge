@@ -74,6 +74,7 @@ Project: **mcp-bridge – MCP + A2A integration**
   * `exceptions.py`:
 
     * `MaxSessionsExceededError`
+    * NOTE: `app/core/a2a_client.py` must not import `app/api/*` (to avoid circular imports); the API layer injects the client via `dependencies.py`.
     * `SessionNotFoundError`
     * `ConfigurationError`
     * `MCPWrapperError`
@@ -384,6 +385,30 @@ class A2ATaskStatusResponse(BaseModel):
 
 ### 4.4 A2A REST Endpoints
 
+
+#### Error format (A2A)
+
+All A2A endpoints return errors using a consistent JSON structure:
+
+```json
+{
+  "detail": {
+    "code": "A2A_UPSTREAM_ERROR",
+    "message": "Timed out contacting agent",
+    "agent_id": "local_echo_agent",
+    "task_id": "optional",
+    "upstream": { "optional": "payload" }
+  }
+}
+```
+
+Common `code` values:
+- `A2A_DISABLED` (A2A integration disabled)
+- `A2A_AGENT_NOT_FOUND` (unknown/disabled agent_id)
+- `A2A_SCHEMA_ERROR` (invalid/missing request fields)
+- `A2A_UPSTREAM_ERROR` (A2AClientError default mapping; may include `upstream`)
+- `A2A_INTERNAL_ERROR` (unexpected server-side error)
+
 `app/api/routes/a2a.py` (current working version):
 
 * `GET /a2a/agents`:
@@ -591,9 +616,11 @@ See also `DECISIONS.md`, but key points:
 
   * Some agents return Message-only responses (no Task), so polling semantics vary.
   * Streaming and richer task/event handling may require additional normalization at the REST layer.
-* Error feedback:
+* Error feedback (A2A):
 
-  * Some 500s still map to generic `"Internal Error"` or `"Error executing A2A message"` without fine-grained error codes exposed to clients.
+  * A2A endpoints now return a consistent structured error payload under `detail`:
+    `{ "detail": { "code": "...", "message": "...", "agent_id"?: "...", "task_id"?: "...", "upstream"?: {...} } }`.
+  * Errors are mapped from `A2AClientError` when possible (status_code/code/upstream), with safe fallbacks.
 * README/Docs:
 
   * README has been updated multiple times; keep `PROJECT_CONTEXT.md` as the more precise technical reference.
