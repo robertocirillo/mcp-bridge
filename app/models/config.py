@@ -40,7 +40,7 @@ class SandboxOptions(BaseModel):
 class SessionConfig(BaseModel):
     """Configuration to create a new session"""
     llm_provider: LLMProvider
-    mcp_servers: Dict[str, MCPServerConfig] = Field(..., min_items=1)
+    mcp_servers: Dict[str, MCPServerConfig] = Field(..., min_length=1)
     max_steps: int = Field(30, gt=0, le=100, description="Maximum number of agent steps")
     use_server_manager: bool = Field(False, description="Use the server manager for automatic selection")
     disallowed_tools: Optional[List[str]] = Field(None, description="Disallowed tools")
