@@ -1,4 +1,5 @@
-"""A2A client wrapper used by mcp-bridge.
+"""
+A2A client wrapper used by mcp-bridge.
 
 This implementation uses the official `a2a-sdk` package.
 
@@ -18,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
+import json
 import httpx
 
 from a2a.client import ClientConfig, ClientFactory, create_text_message_object
@@ -27,6 +29,8 @@ from app.models.config import A2AAgentConfig
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+__all__ = ["A2AClient", "A2AClientError", "A2AResult"]
 
 
 @dataclass
@@ -41,8 +45,20 @@ class A2AResult:
     raw_response: Optional[Dict[str, Any]]
 
 
-class A2AClientError(RuntimeError):
-    """Raised for A2A client wrapper errors."""
+class A2AClientError(Exception):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 502,
+        code: str = "A2A_UPSTREAM_ERROR",
+        upstream: Optional[dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.code = code
+        self.upstream = upstream
 
 
 class A2AClient:
@@ -78,13 +94,11 @@ class A2AClient:
 
         If blocking=False we return as soon as we receive the first Task event (task id).
         """
-
         client = await self._get_sdk_client(agent_id)
 
         # IMPORTANT:
-        # create_text_message_object(role=..., content=...) has `role` as the first argument.
-        # If you pass a string positionally (create_text_message_object(text)), that string is
-        # interpreted as `role` and triggers the validation error you saw.
+        # a2a-sdk's create_text_message_object expects role/content; passing a positional string
+        # may be interpreted as `role`. We always pass content explicitly.
         message = create_text_message_object(content=text)
 
         last_task: Optional[Any] = None
@@ -106,7 +120,12 @@ class A2AClient:
 
         except Exception as exc:
             logger.exception("A2A send_message failed for %s: %s", agent_id, exc)
-            raise A2AClientError(str(exc)) from exc
+            raise A2AClientError(
+                str(exc),
+                status_code=502,
+                code="A2A_UPSTREAM_ERROR",
+                upstream={"exception": str(exc)},
+            ) from exc
 
         return self._to_result(agent_id, last_task=last_task, last_message=last_message, last_update=last_update)
 
@@ -118,7 +137,6 @@ class A2AClient:
         history_length: Optional[int] = None,
     ) -> A2AResult:
         """Fetch task status from an A2A agent."""
-
         client = await self._get_sdk_client(agent_id)
 
         try:
@@ -130,24 +148,29 @@ class A2AClient:
 
         except Exception as exc:
             logger.exception("A2A get_task failed for %s/%s: %s", agent_id, task_id, exc)
-            raise A2AClientError(str(exc)) from exc
+            raise A2AClientError(
+                str(exc),
+                status_code=502,
+                code="A2A_UPSTREAM_ERROR",
+                upstream={"exception": str(exc)},
+            ) from exc
 
-        # NOTE: We intentionally keep the mapping conservative.
+        # Keep mapping conservative and JSON-safe.
+        payload: Dict[str, Any] = {"task": self._safe_dump(task)}
+
         return A2AResult(
             agent_id=agent_id,
             task_id=getattr(task, "id", task_id),
             status=getattr(task, "status", None) or "unknown",
-            output={"task": self._safe_dump(task)},
+            output=payload,
             message=None,
-            raw_response=output,
+            raw_response=payload,
         )
 
     async def aclose(self) -> None:
         """Close underlying http clients."""
-
         for agent_id, sdk_client in list(self._sdk_clients.items()):
             try:
-                # SDK client has close() on BaseClient
                 close = getattr(sdk_client, "close", None)
                 if callable(close):
                     await close()
@@ -173,9 +196,9 @@ class A2AClient:
 
         cfg = self._agent_configs.get(agent_id)
         if cfg is None:
-            raise A2AClientError(f"Unknown agent_id: {agent_id}")
+            raise A2AClientError(f"Unknown agent_id: {agent_id}", status_code=404, code="A2A_AGENT_NOT_FOUND")
         if not cfg.enabled:
-            raise A2AClientError(f"Agent is disabled: {agent_id}")
+            raise A2AClientError(f"Agent is disabled: {agent_id}", status_code=404, code="A2A_AGENT_NOT_FOUND")
 
         base_url, relative_card_path = self._split_card_url(cfg.card_url)
         headers = self._build_headers(cfg)
@@ -187,12 +210,10 @@ class A2AClient:
             follow_redirects=True,
         )
 
-        # Keep reference for later close
         self._httpx_clients[agent_id] = httpx_client
 
         client_config = ClientConfig(httpx_client=httpx_client)
 
-        # Resolver kwargs are used when fetching the card.
         resolver_http_kwargs = {"headers": headers} if headers else None
 
         try:
@@ -203,8 +224,24 @@ class A2AClient:
                 resolver_http_kwargs=resolver_http_kwargs,
             )
         except Exception as exc:
-            logger.exception("Failed to connect to A2A agent %s at %s%s: %s", agent_id, base_url, relative_card_path, exc)
-            raise A2AClientError(str(exc)) from exc
+            logger.exception(
+                "Failed to connect to A2A agent %s at %s%s: %s",
+                agent_id,
+                base_url,
+                relative_card_path,
+                exc,
+            )
+            raise A2AClientError(
+                str(exc),
+                status_code=502,
+                code="A2A_CONNECT_ERROR",
+                upstream={
+                    "agent": agent_id,
+                    "base_url": base_url,
+                    "card_path": relative_card_path,
+                    "exception": str(exc),
+                },
+            ) from exc
 
         self._sdk_clients[agent_id] = sdk_client
         return sdk_client
@@ -212,10 +249,13 @@ class A2AClient:
     @staticmethod
     def _split_card_url(card_url: str) -> Tuple[str, str]:
         """Return (base_url, relative_path) from a full card URL."""
-
         parsed = urlparse(card_url)
         if not parsed.scheme or not parsed.netloc:
-            raise A2AClientError(f"Invalid card_url (expected full URL): {card_url}")
+            raise A2AClientError(
+                f"Invalid card_url (expected full URL): {card_url}",
+                status_code=500,
+                code="A2A_CONFIG_ERROR",
+            )
 
         base_url = f"{parsed.scheme}://{parsed.netloc}"
         relative_path = parsed.path or "/"
@@ -233,14 +273,20 @@ class A2AClient:
             return headers
 
         if not auth.env_var:
-            raise A2AClientError(f"A2A auth configured for agent but env_var is missing (agent label={cfg.label!r})")
+            raise A2AClientError(
+                f"A2A auth configured for agent but env_var is missing (agent label={cfg.label!r})",
+                status_code=500,
+                code="A2A_CONFIG_ERROR",
+            )
 
         import os
 
         token = os.getenv(auth.env_var)
         if not token:
             raise A2AClientError(
-                f"Missing env var {auth.env_var!r} for A2A agent auth (agent label={cfg.label!r})."
+                f"Missing env var {auth.env_var!r} for A2A agent auth (agent label={cfg.label!r}).",
+                status_code=500,
+                code="A2A_CONFIG_ERROR",
             )
 
         if auth.type == "bearer_token":
@@ -248,11 +294,17 @@ class A2AClient:
         elif auth.type == "api_key_header":
             if not auth.header_name:
                 raise A2AClientError(
-                    f"A2A auth type api_key_header requires header_name (agent label={cfg.label!r})"
+                    f"A2A auth type api_key_header requires header_name (agent label={cfg.label!r})",
+                    status_code=500,
+                    code="A2A_CONFIG_ERROR",
                 )
             headers[auth.header_name] = token
         else:
-            raise A2AClientError(f"Unsupported auth type: {auth.type}")
+            raise A2AClientError(
+                f"Unsupported auth type: {auth.type}",
+                status_code=500,
+                code="A2A_CONFIG_ERROR",
+            )
 
         return headers
 
@@ -262,7 +314,6 @@ class A2AClient:
 
         Ensures the returned value is JSON-serializable (fallback to str()).
         """
-
         if obj is None:
             return None
 
@@ -294,9 +345,8 @@ class A2AClient:
         if last_task is not None:
             task_id = getattr(last_task, "id", None)
             status = getattr(last_task, "status", None)
-            output: Optional[Dict[str, Any]] = {"task": self._safe_dump(last_task)}
+            output: Dict[str, Any] = {"task": self._safe_dump(last_task)}
 
-            # Try to include artifact updates if present (optional)
             if last_update is not None:
                 output["last_update"] = self._safe_dump(last_update)
 

@@ -9,7 +9,8 @@ IMPORTANT:
 
 from __future__ import annotations
 
-from typing import List, Literal
+import json
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -20,29 +21,64 @@ from app.models.responses import A2AAgentSummary, A2AMessageResponse, A2ATaskSta
 from app.utils.logging import get_logger
 from config import Settings
 
-import json
-
-
-
 router = APIRouter(prefix="/a2a", tags=["a2a"])
 logger = get_logger(__name__)
 
 
+def _raise_a2a_http_error(
+    *,
+    status_code: int,
+    code: str,
+    message: str,
+    agent_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+    upstream: Optional[Dict[str, Any]] = None,
+    field: Optional[str] = None,
+) -> None:
+    detail: Dict[str, Any] = {"code": code, "message": message}
+    if agent_id is not None:
+        detail["agent_id"] = agent_id
+    if task_id is not None:
+        detail["task_id"] = task_id
+    if upstream is not None:
+        detail["upstream"] = upstream
+    if field is not None:
+        detail["field"] = field
+    raise HTTPException(status_code=status_code, detail=detail)
+
+
 def _normalize_goal(goal: str) -> str:
     if goal is None:
-        raise HTTPException(status_code=422, detail="Field 'goal' is required")
+        _raise_a2a_http_error(
+            status_code=422,
+            code="A2A_SCHEMA_ERROR",
+            message="Field 'goal' is required",
+            field="goal",
+        )
     g = goal.strip()
     if not g:
-        raise HTTPException(status_code=422, detail="Field 'goal' must be a non-empty string")
+        _raise_a2a_http_error(
+            status_code=422,
+            code="A2A_SCHEMA_ERROR",
+            message="Field 'goal' must be a non-empty string",
+            field="goal",
+        )
     return g
 
-def _ensure_jsonable(value, field_name: str) -> None:
+
+def _ensure_jsonable(value: Any, field_name: str) -> None:
     try:
         json.dumps(value)
     except Exception:
-        raise HTTPException(status_code=422, detail=f"Field '{field_name}' must be JSON-serializable")
+        _raise_a2a_http_error(
+            status_code=422,
+            code="A2A_SCHEMA_ERROR",
+            message=f"Field '{field_name}' must be JSON-serializable",
+            field=field_name,
+        )
 
-def _normalize_task_id(task_id):
+
+def _normalize_task_id(task_id: Any) -> Any:
     if task_id is None:
         return None
     if isinstance(task_id, str):
@@ -50,6 +86,38 @@ def _normalize_task_id(task_id):
         return t or None
     return task_id
 
+
+def _ensure_a2a_enabled(settings: Settings) -> None:
+    if not settings.a2a.enabled:
+        _raise_a2a_http_error(
+            status_code=400,
+            code="A2A_DISABLED",
+            message="A2A integration is disabled",
+        )
+
+
+def _ensure_agent_enabled(settings: Settings, agent_id: str) -> None:
+    conf = (settings.a2a.agents or {}).get(agent_id)
+    if conf is None or not conf.enabled:
+        _raise_a2a_http_error(
+            status_code=404,
+            code="A2A_AGENT_NOT_FOUND",
+            message=f"Unknown or disabled agent_id: {agent_id}",
+            agent_id=agent_id,
+        )
+
+
+def _map_a2a_client_error(exc: A2AClientError) -> Dict[str, Any]:
+    # Be defensive: attributes may or may not exist depending on implementation.
+    upstream = getattr(exc, "upstream", None)
+    if upstream is not None and not isinstance(upstream, dict):
+        upstream = {"value": upstream}
+    return {
+        "status_code": getattr(exc, "status_code", 502),
+        "code": getattr(exc, "code", "A2A_UPSTREAM_ERROR"),
+        "message": getattr(exc, "message", None) or str(exc),
+        "upstream": upstream,
+    }
 
 
 @router.get("/agents", response_model=List[A2AAgentSummary])
@@ -81,7 +149,11 @@ async def list_a2a_agents(
 
     except Exception as exc:
         logger.exception("Error listing A2A agents: %s", exc)
-        raise HTTPException(status_code=500, detail="Error listing A2A agents")
+        _raise_a2a_http_error(
+            status_code=500,
+            code="A2A_INTERNAL_ERROR",
+            message="Error listing A2A agents",
+        )
 
 
 @router.post("/agents/{agent_id}/messages", response_model=A2AMessageResponse)
@@ -97,14 +169,9 @@ async def send_a2a_message(
     - blocking=true  -> wait for task completion as much as SDK allows
     - blocking=false -> return early (best-effort) with a task_id
     """
+    _ensure_a2a_enabled(settings)
+    _ensure_agent_enabled(settings, agent_id)
 
-    a2a_settings = settings.a2a
-    if not a2a_settings.enabled:
-        raise HTTPException(status_code=400, detail="A2A integration is disabled")
-
-    conf = (a2a_settings.agents or {}).get(agent_id)
-    if conf is None or not conf.enabled:
-        raise HTTPException(status_code=404, detail=f"Unknown or disabled agent_id: {agent_id}")
     goal = _normalize_goal(request.goal)
     if request.metadata is not None:
         _ensure_jsonable(request.metadata, "metadata")
@@ -131,12 +198,24 @@ async def send_a2a_message(
         )
 
     except A2AClientError as exc:
+        mapped = _map_a2a_client_error(exc)
         logger.error("Error executing A2A message for %s: %s", agent_id, exc)
-        raise HTTPException(status_code=502, detail=str(exc))
+        _raise_a2a_http_error(
+            status_code=mapped["status_code"],
+            code=mapped["code"],
+            message=mapped["message"],
+            agent_id=agent_id,
+            upstream=mapped.get("upstream"),
+        )
 
     except Exception as exc:
         logger.exception("Unexpected error executing A2A message for %s: %s", agent_id, exc)
-        raise HTTPException(status_code=500, detail="Error executing A2A message")
+        _raise_a2a_http_error(
+            status_code=500,
+            code="A2A_INTERNAL_ERROR",
+            message="Error executing A2A message",
+            agent_id=agent_id,
+        )
 
 
 @router.get("/agents/{agent_id}/tasks/{task_id}", response_model=A2ATaskStatusResponse)
@@ -146,13 +225,8 @@ async def get_a2a_task(
     settings: Settings = Depends(get_settings),
     a2a_client: A2AClient = Depends(get_a2a_client),
 ) -> A2ATaskStatusResponse:
-    a2a_settings = settings.a2a
-    if not a2a_settings.enabled:
-        raise HTTPException(status_code=400, detail="A2A integration is disabled")
-
-    conf = (a2a_settings.agents or {}).get(agent_id)
-    if conf is None or not conf.enabled:
-        raise HTTPException(status_code=404, detail=f"Unknown or disabled agent_id: {agent_id}")
+    _ensure_a2a_enabled(settings)
+    _ensure_agent_enabled(settings, agent_id)
 
     try:
         result = await a2a_client.get_task(agent_id=agent_id, task_id=task_id)
@@ -167,9 +241,23 @@ async def get_a2a_task(
         )
 
     except A2AClientError as exc:
+        mapped = _map_a2a_client_error(exc)
         logger.error("Error getting A2A task for %s/%s: %s", agent_id, task_id, exc)
-        raise HTTPException(status_code=502, detail=str(exc))
+        _raise_a2a_http_error(
+            status_code=mapped["status_code"],
+            code=mapped["code"],
+            message=mapped["message"],
+            agent_id=agent_id,
+            task_id=task_id,
+            upstream=mapped.get("upstream"),
+        )
 
     except Exception as exc:
         logger.exception("Unexpected error getting A2A task for %s/%s: %s", agent_id, task_id, exc)
-        raise HTTPException(status_code=500, detail="Error getting A2A task")
+        _raise_a2a_http_error(
+            status_code=500,
+            code="A2A_INTERNAL_ERROR",
+            message="Error getting A2A task",
+            agent_id=agent_id,
+            task_id=task_id,
+        )
