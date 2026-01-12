@@ -326,6 +326,14 @@ Response mapping:
 - Otherwise → return `mode="blocking"` with the final message content (`task_id=null`).
 
 Failure modes:
+
+- All A2A endpoint errors are returned under `detail` using a consistent schema:
+  - `detail.code`, `detail.message`
+  - `detail.operation` (e.g. `send_message`, `get_task`)
+  - `detail.agent_id` for agent-scoped endpoints
+  - `detail.task_id` for task-scoped endpoints
+  - optional `detail.field` (schema validation) and `detail.upstream` (pass-through/debug)
+
 - Invalid `card_url` → 4xx/5xx surfaced as an A2A client error.
 - Remote connectivity issues / timeouts → 502/504 style error (depending on error mapping).
 - Remote protocol/schema errors → returned with a descriptive error payload when possible.
@@ -356,7 +364,7 @@ Observed behaviors:
 Hardened/normalized REST behavior:
 - Message-only agents (task polling not applicable) → HTTP **409** with structured error `code="A2A_TASK_NOT_APPLICABLE"` and `operation="get_task"`.
 - Task id not found → HTTP **404** with structured error `code="A2A_TASK_NOT_FOUND"` and `operation="get_task"`.
-- Transport/connect/timeout issues are mapped using the same structured A2A error schema (`detail.code`, `detail.message`, `operation`, optional `upstream`).
+- Transport/connect/timeout issues are mapped using the same structured A2A error schema (`detail.code`, `detail.message`, `detail.operation`, `detail.agent_id`, `detail.task_id` when applicable, optional `detail.upstream`).
 - Returned `status` is normalized to one of: `queued|running|succeeded|failed|unknown`.
 
 

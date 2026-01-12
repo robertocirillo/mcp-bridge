@@ -95,7 +95,7 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
   - message-only agents → HTTP 409 `A2A_TASK_NOT_APPLICABLE`
   - task not found → HTTP 404 `A2A_TASK_NOT_FOUND`
   - `status` is normalized to `queued|running|succeeded|failed|unknown`
-  - errors include `operation` (e.g. `send_message`, `get_task`) in the structured `detail` payload
+  - errors include `operation` (e.g. `send_message`, `get_task`) and relevant identifiers (`agent_id`, `task_id` when applicable) in the structured `detail` payload
 
 **Rationale:**
 
