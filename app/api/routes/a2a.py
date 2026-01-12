@@ -196,16 +196,33 @@ async def list_a2a_agents(
 
         summaries: List[A2AAgentSummary] = []
         for agent_id, conf in (a2a_settings.agents or {}).items():
-            if not conf.enabled:
+            if not getattr(conf, "enabled", False):
                 continue
+
+            # Be robust across config schema variants:
+            # - some configs may have `label` but not `name`
+            # - others may have `display_name`
+            name = (
+                getattr(conf, "name", None)
+                or getattr(conf, "label", None)
+                or getattr(conf, "display_name", None)
+                or agent_id
+            )
+
+            description = getattr(conf, "description", None)
+
+            # Keep backward compatibility: some configs use runtime_url rather than endpoint
+            endpoint = getattr(conf, "endpoint", None) or getattr(conf, "runtime_url", None)
+            card_url = getattr(conf, "card_url", None)
+
             summaries.append(
                 A2AAgentSummary(
                     agent_id=agent_id,
-                    name=conf.name or agent_id,
-                    description=conf.description,
+                    name=name,
+                    description=description,
                     enabled=True,
-                    endpoint=conf.endpoint,
-                    card_url=conf.card_url,
+                    endpoint=endpoint,
+                    card_url=card_url,
                 )
             )
 
