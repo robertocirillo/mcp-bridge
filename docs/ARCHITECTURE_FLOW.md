@@ -5,7 +5,7 @@
 This document describes how requests flow through **mcp-bridge**, spanning:
 
 - MCP sessions and queries (via `mcp-use`)
-- A2A agent invocation (current HTTP shim, future A2A SDK)
+- A2A agent invocation (via official a2a-sdk)
 - Multi-tenancy
 - Failure modes and current constraints
 
@@ -286,7 +286,7 @@ to the official A2A SDK.
 1. Route fetches `a2a_settings = settings.a2a`.
 2. If `not a2a_settings.enabled`: returns `[]`.
 3. Iterates over `a2a_settings.agents.items()`.
-4. Returns a list of `A2AAgentInfo` entries.
+4. Returns a list of `A2AAgentSummary` entries.
 
 Notes:
 - Today this is primarily a **config listing** (useful for UIs/visual builders).
@@ -298,20 +298,22 @@ Failure modes:
 ### 3.3 Execute A2A Message (`POST /a2a/agents/{agent_id}/messages`)
 
 Request model: `A2AMessageRequest`
-- `text: str`
-- `blocking: bool = true`
-- `request_metadata: dict | null` (optional)
+- `goal: str` (required, non-empty)
+- `input: dict | null` (optional)
+- `metadata: dict | null` (optional)
+- `blocking: bool = true` (REST convenience flag)
+- `client_task_id: str | null` (optional)
 
 Flow (high-level):
 1. Route retrieves `a2a_settings = settings.a2a`.
-2. If `not a2a_settings.enabled` → HTTP 503 (A2A disabled).
+2. If `not a2a_settings.enabled` → HTTP 400 with structured A2A error (`code="A2A_DISABLED"`).
 3. Looks up `conf = a2a_settings.agents.get(agent_id)`:
    - if missing → HTTP 404
    - if `conf.enabled is False` → HTTP 404 (treat as not found)
-4. Calls `A2AClient.send_message(agent_id, text, blocking=..., request_metadata=...)`.
+4. Calls `A2AClient.send_message(agent_id, goal, blocking=..., request_metadata=...)`.
 
 SDK behavior (as implemented in `a2a_client.py`):
-- Builds an SDK message object via `create_text_message_object(content=text)`.
+- Builds an SDK message object via `create_text_message_object(content=goal)`.
 - Streams events from `client.send_message(...)`.
   - The SDK can yield either:
     - `(Task, UpdateEvent|None)` tuples (task-based execution), or
@@ -321,7 +323,7 @@ SDK behavior (as implemented in `a2a_client.py`):
 
 Response mapping:
 - If a Task was observed → return `mode="task"`, include `task_id` and `status`.
-- Otherwise → return `mode="message"` with the final message content.
+- Otherwise → return `mode="blocking"` with the final message content (`task_id=null`).
 
 Failure modes:
 - Invalid `card_url` → 4xx/5xx surfaced as an A2A client error.
@@ -343,14 +345,25 @@ Observed behaviors:
 
 - `blocking=false`:
   - The bridge returns as soon as it receives the first Task event (task id).
-  - If the agent never emits a Task (message-only agent), the bridge will still return a message-only result.
+  - If the agent never emits a Task (message-only agent), the bridge will return a blocking-style response with `task_id=null` and `mode="blocking"`.
 
 ### 4.2 Poll Task Status (`GET /a2a/agents/{agent_id}/tasks/{task_id}`)
 
 - This endpoint uses the official SDK to retrieve the latest task status from the remote A2A agent.
 - Internally it calls `A2AClient.get_task(agent_id, task_id, history_length=...)` and maps the returned SDK Task object
-  into `A2ATaskStatusResponse` (status + output).
+  into `A2ATaskStatusResponse`.
 
+Hardened/normalized REST behavior:
+- Message-only agents (task polling not applicable) → HTTP **409** with structured error `code="A2A_TASK_NOT_APPLICABLE"` and `operation="get_task"`.
+- Task id not found → HTTP **404** with structured error `code="A2A_TASK_NOT_FOUND"` and `operation="get_task"`.
+- Transport/connect/timeout issues are mapped using the same structured A2A error schema (`detail.code`, `detail.message`, `operation`, optional `upstream`).
+- Returned `status` is normalized to one of: `queued|running|succeeded|failed|unknown`.
+
+
+
+Status normalization (mapping):
+- Upstream task status strings are mapped best-effort into the canonical set above.
+- Missing/unknown statuses are returned as `unknown`.
 
 ## 5. Who Decides Agent Collaboration?
 
@@ -410,7 +423,7 @@ Therefore:
 ### 7.2 A2A Side
 
 - **Misconfiguration**:
-  - Disabled `settings.a2a` or `conf.enabled=False` → HTTP 503/404 depending on context.
+  - Disabled `settings.a2a` → HTTP 400 (`A2A_DISABLED`); unknown/disabled `agent_id` → HTTP 404 (`A2A_AGENT_NOT_FOUND`).
   - Missing/invalid `card_url` → A2A client error (cannot resolve Agent Card).
   - Invalid auth config (e.g. missing token/header_name for the selected auth type) → A2A client error.
 

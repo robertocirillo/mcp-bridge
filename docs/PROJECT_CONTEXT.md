@@ -388,15 +388,17 @@ class A2ATaskStatusResponse(BaseModel):
 
 #### Error format (A2A)
 
-All A2A endpoints return errors using a consistent JSON structure:
+All A2A endpoints return errors using a consistent JSON structure under `detail`:
 
 ```json
 {
   "detail": {
     "code": "A2A_UPSTREAM_ERROR",
     "message": "Timed out contacting agent",
+    "operation": "send_message",
     "agent_id": "local_echo_agent",
     "task_id": "optional",
+    "field": "optional",
     "upstream": { "optional": "payload" }
   }
 }
@@ -406,7 +408,9 @@ Common `code` values:
 - `A2A_DISABLED` (A2A integration disabled)
 - `A2A_AGENT_NOT_FOUND` (unknown/disabled agent_id)
 - `A2A_SCHEMA_ERROR` (invalid/missing request fields)
-- `A2A_UPSTREAM_ERROR` (A2AClientError default mapping; may include `upstream`)
+- `A2A_TASK_NOT_APPLICABLE` (task polling not applicable for this agent)
+- `A2A_TASK_NOT_FOUND` (task_id not found on the agent)
+- `A2A_UPSTREAM_ERROR` (upstream/SDK or transport error; may include `upstream`)
 - `A2A_INTERNAL_ERROR` (unexpected server-side error)
 
 `app/api/routes/a2a.py` (current working version):
@@ -460,8 +464,9 @@ Common `code` values:
 * `GET /a2a/agents/{agent_id}/tasks/{task_id}`:
 
   * Uses the A2A SDK `get_task(...)` via `A2AClient`.
-  * Returns `A2ATaskStatusResponse`.
-  * Note: some agents may never return a Task (message-only behavior); in that case task polling is not applicable.
+  * Returns `A2ATaskStatusResponse` with `status` normalized to `queued|running|succeeded|failed|unknown`.
+  * Message-only agents (task polling not applicable) → HTTP **409** with structured error `code="A2A_TASK_NOT_APPLICABLE"` and `operation="get_task"`.
+  * Task id not found → HTTP **404** with structured error `code="A2A_TASK_NOT_FOUND"` and `operation="get_task"`.
 
 ---
 
@@ -631,13 +636,20 @@ See also `DECISIONS.md`, but key points:
 
 **Short-term (A2A & stability)**
 
-1. Validate and harden `GET /a2a/agents/{agent_id}/tasks/{task_id}` behavior across real third-party agents.
+Recently completed (Sprint Week 1):
+1. Harden `POST /a2a/agents/{agent_id}/messages`:
+   * `goal` required + non-empty
+   * `mode="task"` only when `task_id` is present; otherwise `mode="blocking"`
+   * consistent structured errors under `detail` (stable `code/message`, optional `agent_id/task_id/upstream`)
+2. Harden `GET /a2a/agents/{agent_id}/tasks/{task_id}`:
+   * message-only agents → HTTP 409 (`A2A_TASK_NOT_APPLICABLE`)
+   * task not found → HTTP 404 (`A2A_TASK_NOT_FOUND`)
+   * status normalization: `queued|running|succeeded|failed|unknown`
+   * transport/connect/timeout mapped into the same structured error schema
+3. Add/extend pytest contract tests for A2A behaviors (blocking/message-only, task-based + polling, task not found, transport/timeout).
 
-   * Some agents may return Message-only responses (no Task), so polling may be inapplicable for those agents.
-2. Improve error visibility:
-
-   * Return more specific messages in A2A errors (e.g., propagate remote `status` and error descriptions).
-3. Add basic input validation for A2A requests (e.g. mandatory `goal`).
+Next validation step:
+4. Validate the hardened task polling behavior across real third-party agents (capability differences, partial compliance) and refine upstream error mapping if needed.
 
 **Medium-term (A2A protocol integration)**
 

@@ -91,6 +91,12 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
   - `mode="task"` only when `task_id` is present
   - otherwise `mode="blocking"`
 
+- `GET /a2a/agents/{agent_id}/tasks/{task_id}` hardened contract:
+  - message-only agents → HTTP 409 `A2A_TASK_NOT_APPLICABLE`
+  - task not found → HTTP 404 `A2A_TASK_NOT_FOUND`
+  - `status` is normalized to `queued|running|succeeded|failed|unknown`
+  - errors include `operation` (e.g. `send_message`, `get_task`) in the structured `detail` payload
+
 **Rationale:**
 
 - Avoid implementing bridge-specific behavior that would be thrown away later.
@@ -278,7 +284,7 @@ These are intentionally left undecided for future iterations.
 ### Q4 – SDK coverage and compatibility across third-party A2A agents
 
 - Which `a2a-sdk` version should be pinned, and how do we manage breaking API changes?
-- How should we handle agents that return Message-only responses (no Task) even when `blocking=false`?
+- How should we expose agent task capabilities (e.g. a `supports_tasks` hint) so clients can avoid polling for message-only agents?
 - What is the minimum subset of A2A features we must support first (tasks/get, streaming, extensions, etc.)?
 - How should we gracefully handle partially compliant agents (fallbacks, clearer error reporting, capability checks)?
 

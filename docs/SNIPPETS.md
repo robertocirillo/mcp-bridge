@@ -596,6 +596,28 @@ class A2ATaskStatusResponse(BaseModel):
     raw_response: Optional[Dict[str, Any]]
 ```
 
+### 6.X Structured A2A error payload (REST contract)
+
+All A2A endpoints return structured errors under `detail`:
+
+```json
+{
+  "detail": {
+    "code": "A2A_UPSTREAM_ERROR",
+    "message": "Timed out contacting agent",
+    "operation": "send_message",
+    "agent_id": "<agent_id>",
+    "task_id": "<task_id or null>",
+    "field": "<optional field name>",
+    "upstream": { "optional": "payload" }
+  }
+}
+```
+
+Key codes used by the A2A contract tests include:
+- `A2A_DISABLED`, `A2A_AGENT_NOT_FOUND`, `A2A_SCHEMA_ERROR`, `A2A_TASK_NOT_APPLICABLE`, `A2A_TASK_NOT_FOUND`, `A2A_UPSTREAM_ERROR`, `A2A_INTERNAL_ERROR`.
+
+
 ### 6.2 A2A Routes (`app/api/routes/a2a.py` – simplified)
 
 ```python
@@ -650,10 +672,11 @@ async def list_a2a_agents(
 
 `GET /a2a/agents/{agent_id}/tasks/{task_id}` uses the official **a2a-sdk** `get_task(...)` via `A2AClient`.
 
-Notes:
-
-* Some agents may never return a Task (message-only behavior), so task polling may be inapplicable for those agents.
-* Auth headers are built from `conf.extra_headers` + `conf.auth` (env_var-based).
+Bridge-level contract notes:
+- Returned `status` is normalized to `queued|running|succeeded|failed|unknown`.
+- Message-only agents (task polling not applicable) → HTTP 409 with structured error `code="A2A_TASK_NOT_APPLICABLE"` and `operation="get_task"`.
+- Task id not found → HTTP 404 with structured error `code="A2A_TASK_NOT_FOUND"` and `operation="get_task"`.
+- Transport/connect/timeout issues are mapped using the same structured A2A error schema under `detail`.
 
 ---
 
@@ -871,4 +894,4 @@ curl -s -X POST "http://localhost:8000/a2a/agents/helloworld/messages" \
 Expected with HelloWorld:
 
 * `task_id` may be `null` because the agent can return a final `Message` directly.
-* REST `mode` should reflect the actual response (`"task"` only when `task_id` is present).
+* REST `mode` should reflect the actual response (`"task"` only when `task_id` is present, otherwise `"blocking"`).
