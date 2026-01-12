@@ -36,6 +36,7 @@ def _raise_a2a_http_error(
     upstream: Optional[Dict[str, Any]] = None,
     field: Optional[str] = None,
 ) -> None:
+    """Raise FastAPI HTTPException with stable structured detail payload."""
     detail: Dict[str, Any] = {"code": code, "message": message}
     if agent_id is not None:
         detail["agent_id"] = agent_id
@@ -50,13 +51,14 @@ def _raise_a2a_http_error(
     raise HTTPException(status_code=status_code, detail=detail)
 
 
-def _normalize_goal(goal: str, *, operation: str) -> str:
+def _normalize_goal(goal: str, *, operation: str, agent_id: Optional[str] = None) -> str:
     if goal is None:
         _raise_a2a_http_error(
             status_code=422,
             code="A2A_SCHEMA_ERROR",
             message="Field 'goal' is required",
             field="goal",
+            agent_id=agent_id,
             operation=operation,
         )
     g = goal.strip()
@@ -66,12 +68,13 @@ def _normalize_goal(goal: str, *, operation: str) -> str:
             code="A2A_SCHEMA_ERROR",
             message="Field 'goal' must be a non-empty string",
             field="goal",
+            agent_id=agent_id,
             operation=operation,
         )
     return g
 
 
-def _ensure_jsonable(value: Any, field_name: str, *, operation: str) -> None:
+def _ensure_jsonable(value: Any, field_name: str, *, operation: str, agent_id: Optional[str] = None) -> None:
     try:
         json.dumps(value)
     except Exception:
@@ -81,6 +84,7 @@ def _ensure_jsonable(value: Any, field_name: str, *, operation: str) -> None:
             message=f"Field '{field_name}' must be JSON-serializable",
             field=field_name,
             operation=operation,
+            agent_id=agent_id,
         )
 
 
@@ -138,13 +142,21 @@ def _looks_task_polling_not_applicable(message: str, upstream: Optional[Dict[str
     return False
 
 
-def _ensure_a2a_enabled(settings: Settings, *, operation: str) -> None:
+def _ensure_a2a_enabled(
+    settings: Settings,
+    *,
+    operation: str,
+    agent_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+) -> None:
     if not settings.a2a.enabled:
         _raise_a2a_http_error(
             status_code=400,
             code="A2A_DISABLED",
             message="A2A integration is disabled",
             operation=operation,
+            agent_id=agent_id,
+            task_id=task_id,
         )
 
 
@@ -186,15 +198,14 @@ async def list_a2a_agents(
         for agent_id, conf in (a2a_settings.agents or {}).items():
             if not conf.enabled:
                 continue
-
             summaries.append(
                 A2AAgentSummary(
                     agent_id=agent_id,
-                    name=conf.label or agent_id,
+                    name=conf.name or agent_id,
                     description=conf.description,
+                    enabled=True,
+                    endpoint=conf.endpoint,
                     card_url=conf.card_url,
-                    skills=[],
-                    labels=[],
                 )
             )
 
@@ -222,12 +233,12 @@ async def send_a2a_message(
     - blocking=true  -> wait for task completion as much as SDK allows
     - blocking=false -> return early (best-effort) with a task_id
     """
-    _ensure_a2a_enabled(settings, operation="send_message")
+    _ensure_a2a_enabled(settings, operation="send_message", agent_id=agent_id)
     _ensure_agent_enabled(settings, agent_id, operation="send_message")
 
-    goal = _normalize_goal(request.goal, operation="send_message")
+    goal = _normalize_goal(request.goal, operation="send_message", agent_id=agent_id)
     if request.metadata is not None:
-        _ensure_jsonable(request.metadata, "metadata", operation="send_message")
+        _ensure_jsonable(request.metadata, "metadata", operation="send_message", agent_id=agent_id)
 
     try:
         result = await a2a_client.send_message(
@@ -280,7 +291,7 @@ async def get_a2a_task(
     settings: Settings = Depends(get_settings),
     a2a_client: A2AClient = Depends(get_a2a_client),
 ) -> A2ATaskStatusResponse:
-    _ensure_a2a_enabled(settings, operation="get_task")
+    _ensure_a2a_enabled(settings, operation="get_task", agent_id=agent_id, task_id=task_id)
     _ensure_agent_enabled(settings, agent_id, operation="get_task")
 
     try:
@@ -304,13 +315,11 @@ async def get_a2a_task(
         message = mapped["message"]
         upstream = mapped.get("upstream")
 
-        # Deterministic semantics for polling:
-        # - message-only / non-task agents -> 409 Not Applicable
-        # - missing task -> 404 Not Found
-        if (
-            code in {"A2A_TASK_NOT_APPLICABLE", "A2A_TASK_NOT_SUPPORTED"}
-            or status_code in {405, 501}
-            or _looks_task_polling_not_applicable(message, upstream)
+        # Deterministic behavior:
+        # - message-only agents: polling is not applicable -> 409
+        # - task not found -> 404
+        if code == "A2A_TASK_NOT_APPLICABLE" or status_code == 409 or _looks_task_polling_not_applicable(
+            message, upstream=upstream
         ):
             status_code = 409
             code = "A2A_TASK_NOT_APPLICABLE"

@@ -14,9 +14,10 @@ from app.core.a2a_client import A2AClientError, A2AResult
 @dataclass
 class DummyAgentConf:
     enabled: bool = True
-    label: str = "Dummy Agent"
-    description: str = "Dummy agent for contract tests"
-    card_url: str = "http://example.invalid/.well-known/agent.json"
+    name: str = "Echo"
+    description: str = "Echo agent"
+    endpoint: str = "http://example.invalid"
+    card_url: Optional[str] = None
 
 
 @dataclass
@@ -41,29 +42,56 @@ class StubA2AClient:
         self._get_task_fn = get_task_fn
 
     async def send_message(self, **kwargs: Any) -> A2AResult:
-        if not self._send_message_fn:
-            raise RuntimeError("send_message not configured")
+        assert self._send_message_fn is not None, "send_message_fn not set"
         return await self._send_message_fn(**kwargs)
 
     async def get_task(self, **kwargs: Any) -> A2AResult:
-        if not self._get_task_fn:
-            raise RuntimeError("get_task not configured")
+        assert self._get_task_fn is not None, "get_task_fn not set"
         return await self._get_task_fn(**kwargs)
 
 
-def _settings_with_agent(agent_id: str, *, enabled: bool = True) -> DummySettings:
-    a2a = DummyA2ASettings(enabled=True, agents={agent_id: DummyAgentConf(enabled=enabled)})
-    return DummySettings(a2a=a2a)
+def _settings_with_agent(agent_id: str) -> DummySettings:
+    return DummySettings(a2a=DummyA2ASettings(enabled=True, agents={agent_id: DummyAgentConf(enabled=True)}))
 
 
 def make_client(*, stub_client: StubA2AClient, settings: DummySettings) -> TestClient:
     app = FastAPI()
     app.include_router(a2a_router)
 
-    app.dependency_overrides[get_settings] = lambda: settings
-    app.dependency_overrides[get_a2a_client] = lambda: stub_client
+    def _get_settings_override() -> DummySettings:
+        return settings
 
+    def _get_a2a_client_override() -> StubA2AClient:
+        return stub_client
+
+    app.dependency_overrides[get_settings] = _get_settings_override
+    app.dependency_overrides[get_a2a_client] = _get_a2a_client_override
     return TestClient(app)
+
+
+def test_send_message_schema_error_includes_agent_id_and_operation() -> None:
+    async def send_message_fn(**kwargs: Any) -> A2AResult:
+        # Should never be called due to schema validation.
+        return A2AResult(
+            agent_id=kwargs["agent_id"],
+            task_id=None,
+            status=None,
+            output=None,
+            message=None,
+            raw_response=None,
+        )
+
+    client = make_client(
+        stub_client=StubA2AClient(send_message_fn=send_message_fn),
+        settings=_settings_with_agent("echo"),
+    )
+
+    resp = client.post("/a2a/agents/echo/messages", json={"goal": "   "})
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "A2A_SCHEMA_ERROR"
+    assert detail["agent_id"] == "echo"
+    assert detail["operation"] == "send_message"
 
 
 def test_message_only_blocking_true_mode_blocking_task_id_null() -> None:
@@ -86,7 +114,10 @@ def test_message_only_blocking_true_mode_blocking_task_id_null() -> None:
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["mode"] == "blocking"
+    assert data["agent_id"] == "echo"
     assert data["task_id"] is None
+    assert data["message"] == "ok"
+    assert data["raw_response"] == {"raw": True}
 
 
 def test_message_only_blocking_false_mode_blocking_task_id_null() -> None:
@@ -128,7 +159,7 @@ def test_task_based_send_and_poll_success_status_normalized() -> None:
             agent_id=kwargs["agent_id"],
             task_id=kwargs["task_id"],
             status="completed",
-            output={"result": 123},
+            output={"ok": True},
             message=None,
             raw_response={"raw": True},
         )
@@ -152,12 +183,7 @@ def test_task_based_send_and_poll_success_status_normalized() -> None:
 
 def test_task_not_found_returns_404_with_structured_detail() -> None:
     async def get_task_fn(**kwargs: Any) -> A2AResult:
-        raise A2AClientError(
-            "Task not found",
-            status_code=404,
-            code="A2A_TASK_NOT_FOUND",
-            upstream={"reason": "missing"},
-        )
+        raise A2AClientError("Task not found", status_code=404, code="A2A_TASK_NOT_FOUND", upstream={"why": "missing"})
 
     client = make_client(
         stub_client=StubA2AClient(get_task_fn=get_task_fn),
