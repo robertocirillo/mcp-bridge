@@ -97,10 +97,50 @@ def _normalize_task_id(task_id: Any) -> Any:
     return task_id
 
 
-def _normalize_task_status(status: Optional[str]) -> str:
-    """Normalize upstream status into: queued|running|succeeded|failed|unknown."""
-    if not status:
+def _normalize_task_status(status: Optional[Any]) -> str:
+    """Normalize upstream status into: queued|running|succeeded|failed|unknown.
+
+    Upstream SDKs may return:
+    - a plain string ("running")
+    - an enum (TaskState.RUNNING)
+    - a structured object (e.g. TaskStatus) with a `.state` attribute
+
+    We normalize everything into the stable REST contract values.
+    """
+    if status is None:
         return "unknown"
+
+    # SDK TaskStatus-like object
+    raw = status
+    if hasattr(raw, "state"):
+        raw = getattr(raw, "state")
+
+    s = str(raw).strip().lower()
+    # Handle enum string forms like "TaskState.SUBMITTED" or "taskstate.submitted"
+    if "." in s:
+        s = s.split(".")[-1]
+
+    # Exact mappings first
+    if s in {"queued", "pending", "created", "accepted", "scheduled", "submitted"}:
+        return "queued"
+    if s in {"running", "in_progress", "in-progress", "processing"}:
+        return "running"
+    if s in {"succeeded", "success", "completed", "done", "finished"}:
+        return "succeeded"
+    if s in {"failed", "error", "cancelled", "canceled", "rejected", "timeout"}:
+        return "failed"
+
+    # Fallback substring mapping (for variants like "in progress", "complete", etc.)
+    if any(k in s for k in ("queue", "pend", "submit")):
+        return "queued"
+    if any(k in s for k in ("run", "progress", "process")):
+        return "running"
+    if any(k in s for k in ("succeed", "success", "complete", "done", "finish")):
+        return "succeeded"
+    if any(k in s for k in ("fail", "error", "cancel", "reject", "timeout")):
+        return "failed"
+
+    return "unknown"
     s = str(status).strip().lower()
 
     if s in {"queued", "pending", "created", "accepted", "scheduled"}:
@@ -272,7 +312,7 @@ async def send_a2a_message(
             mode=effective_mode,
             agent_id=agent_id,
             task_id=task_id,
-            status=result.status or "unknown",
+            status=_normalize_task_status(result.status),
             output=result.output,
             message=result.message,
             raw_response=result.raw_response,

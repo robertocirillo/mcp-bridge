@@ -221,7 +221,7 @@ class A2AClient:
                 code="A2A_AGENT_NOT_FOUND",
             )
 
-        base_url = str(cfg.base_url or cfg.card_url)
+        base_url = str(getattr(cfg, "base_url", None) or getattr(cfg, "runtime_url", None) or cfg.card_url)
         parsed = urlparse(base_url)
         if not parsed.scheme:
             raise A2AClientError(
@@ -231,11 +231,12 @@ class A2AClient:
             )
 
         headers: Dict[str, str] = {}
-        if cfg.api_key:
+        api_key = getattr(cfg, "api_key", None)
+        if api_key:
             headers["Authorization"] = f"Bearer {cfg.api_key}"
 
         httpx_client = httpx.AsyncClient(
-            timeout=float(cfg.timeout_s or 30),
+            timeout=float(getattr(cfg, "timeout_s", None) or getattr(cfg, "timeout_seconds", None) or 30),
             headers=headers,
             follow_redirects=True,
         )
