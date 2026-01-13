@@ -54,6 +54,8 @@ mcp-bridge/
         └── helpers.py          # Generic utilities
 
 
+```
+
 ## 🛠️ Installation
 
 ### Local Installation
@@ -353,22 +355,39 @@ A2A support is configured via `A2ASettings` in `app/models/config.py` and wired 
 a2a: A2ASettings = A2ASettings(
     enabled=True,
     agents={
-        "local_echo_agent": A2AAgentConfig(
-            base_url="http://localhost:9001",
-            card_path="/.well-known/agent.json",
-            task_endpoint="/tasks",
+        # ✅ A2A sample: HelloWorld (protocol-compliant)
+        "helloworld": A2AAgentConfig(
+            enabled=True,
+            label="Hello World Agent (A2A sample)",
+            description="A2A protocol-compliant HelloWorld agent from a2a-samples.",
+            card_url="http://localhost:9999/.well-known/agent-card.json",
+            runtime_url=None,  # not used by the SDK client
             timeout_seconds=60,
-        )
+            auth=A2AAuthConfig(type="none"),
+            extra_headers={},
+        ),
+        # Example local A2A agent configuration (disabled by default)
+        "local_echo_agent": A2AAgentConfig(
+            card_url="http://localhost:9001/.well-known/agent.json",
+            runtime_url="http://localhost:9001",
+            timeout_seconds=60,
+            enabled=False,
+            label="Local Echo Agent",
+            description="Simple local A2A agent used for testing.",
+        ),
     },
 )
 ```
 
-Each agent entry defines:
+Each agent entry defines (key fields):
 
-- **base_url**: base URL of the A2A agent HTTP service  
-- **card_path**: path to agent.json (A2A Agent Card)  
-- **task_endpoint**: endpoint for posting tasks (usually `/tasks`)  
+- **card_url**: URL to the agent card (Agent Card / Agent Card JSON)
 - **timeout_seconds**: request timeout
+- **enabled**: toggle the agent on/off
+- **auth** / **extra_headers** (optional): authentication and custom headers when calling the agent
+
+> ℹ️ `blocking` is a REST convenience flag: the agent server may still do work before returning a task id.
+
 
 ---
 
@@ -391,28 +410,29 @@ curl "http://localhost:8000/a2a/agents"
 ```json
 [
   {
-    "agent_id": "local_echo_agent",
-    "name": "Local Echo Agent",
-    "description": "A simple A2A-compatible echo agent used for testing. It echoes back the goal and input in the output payload.",
-    "base_url": "http://localhost:9001/",
-    "capabilities": ["echo", "debug"]
+    "agent_id": "helloworld",
+    "name": "Hello World Agent (A2A sample)",
+    "description": "A2A protocol-compliant HelloWorld agent from a2a-samples.",
+    "card_url": "http://localhost:9999/.well-known/agent-card.json",
+    "skills": [],
+    "labels": []
   }
 ]
 ```
 
 ---
 
-### 2. Send a Task to an A2A Agent
+### 2. Send a Message to an A2A Agent
 
 **Endpoint**
 
 ```
-POST /a2a/agents/{agent_id}/tasks
+POST /a2a/agents/{agent_id}/messages
 ```
 
 **Headers (optional but recommended)**
 
-- `X-Tenant-Id`: which tenant is sending the task  
+- `X-Tenant-Id`: which tenant is sending the message (currently used for logging/correlation)
 - `X-Run-Id`: correlation id for this run/flow
 
 **Request body**
@@ -420,60 +440,81 @@ POST /a2a/agents/{agent_id}/tasks
 ```json
 {
   "goal": "What the agent should do",
-  "input": { "any": "payload" },
-  "task_id": "optional-correlation-id",
+  "blocking": true,
+  "task_id": "optional-existing-task-id",
   "metadata": {
     "optional": "free-form metadata"
   }
 }
 ```
 
+**Notes**
+
+- If `blocking=true`, the response will typically return `mode="blocking"` and `task_id=null` (message-only agents), or it may still return a task id depending on the upstream agent.
+- If `blocking=false`, the response will return `mode="task"` with a `task_id` (for task-based agents). You can then poll the task status.
+
+**Example (curl)**
+
+```bash
+curl -X POST "http://localhost:8000/a2a/agents/helloworld/messages"   -H "Content-Type: application/json"   -H "X-Tenant-Id: tenant-A"   -H "X-Run-Id: run-200"   -d '{
+    "goal": "Say hello",
+    "blocking": true
+  }'
+```
+
+**Example response (message-only agent)**
+
+```json
+{
+  "mode": "blocking",
+  "agent_id": "helloworld",
+  "task_id": null,
+  "status": null,
+  "upstream_state": null,
+  "is_terminal": null,
+  "output": { "message": "Hello!" },
+  "message": "Hello!",
+  "raw_response": { "...": "..." }
+}
+```
+
+---
+
+### 3. Poll Task Status (task-based agents)
+
+**Endpoint**
+
+```
+GET /a2a/agents/{agent_id}/tasks/{task_id}
+```
+
 **Example**
 
 ```bash
-curl -X POST "http://localhost:8000/a2a/agents/local_echo_agent/tasks" \
-  -H "Content-Type: application/json" \
-  -H "X-Tenant-Id: tenant-A" \
-  -H "X-Run-Id: run-200" \
-  -d '{
-    "goal": "Test the echo agent through mcp-bridge",
-    "input": {
-      "foo": "bar",
-      "number": 42
-    }
-  }'
+curl "http://localhost:8000/a2a/agents/langgraph/tasks/<task_id>"
 ```
 
 **Example response**
 
 ```json
 {
-  "task_id": "0ca8f5da-9c5c-4fc1-9d55-0e5cdc42f4e3",
+  "agent_id": "langgraph",
+  "task_id": "d7f5508b-6c77-44c2-881d-d7740ffc3ca5",
   "status": "completed",
-  "output": {
-    "echo_goal": "Test the echo agent through mcp-bridge",
-    "echo_input": {
-      "foo": "bar",
-      "number": 42
-    },
-    "info": "This is a test echo agent. Replace this logic with real work."
-  },
-  "message": "Task handled successfully by Local Echo Agent.",
-  "raw_response": {
-    "taskId": "0ca8f5da-9c5c-4fc1-9d55-0e5cdc42f4e3",
-    "status": "completed",
-    "output": {
-      "echo_goal": "Test the echo agent through mcp-bridge",
-      "echo_input": {
-        "foo": "bar",
-        "number": 42
-      },
-      "info": "This is a test echo agent. Replace this logic with real work."
-    },
-    "message": "Task handled successfully by Local Echo Agent."
-  }
+  "upstream_state": "completed",
+  "is_terminal": true,
+  "output": { "task": { "...": "..." } },
+  "message": null,
+  "raw_response": { "...": "..." }
 }
 ```
+
+`status` is A2A-standard TaskState:
+
+- `submitted`, `working`, `input-required`, `completed`, `canceled`, `failed`, `unknown`
+
+If you receive `input-required`, the agent is explicitly asking for additional (often human) input; continue by sending a follow-up to `POST /messages` (typically preserving `task_id` / context as required by the agent implementation).
+
 
 ## 🔧 Main API Endpoints (Summary)
 
@@ -496,9 +537,11 @@ Execute a query in the given MCP session (tenant must match).
 #### GET /a2a/agents
 List configured A2A agents (for UIs/visual builders).
 
-#### POST /a2a/agents/{agent_id}/tasks
-Forward a task to a specific A2A agent and return its response.
+#### POST /a2a/agents/{agent_id}/messages
+Send a message to a specific A2A agent.
 
+#### GET /a2a/agents/{agent_id}/tasks/{task_id}
+Poll a task status for task-based agents.
 ---
 
 ### Monitoring
