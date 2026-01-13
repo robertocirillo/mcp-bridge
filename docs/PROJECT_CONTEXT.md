@@ -355,11 +355,24 @@ class A2AMessageRequest(BaseModel):
 In `app/models/responses.py`:
 
 ```python
+from enum import Enum
+
+class A2ATaskState(str, Enum):
+    # A2A standard TaskState values
+    submitted = "submitted"
+    working = "working"
+    input_required = "input-required"
+    completed = "completed"
+    canceled = "canceled"
+    failed = "failed"
+    unknown = "unknown"
+
+
 class A2AAgentSummary(BaseModel):
     agent_id: str
     name: str
     description: Optional[str] = None
-    card_url: Optional[str] = None
+    card_url: str
     skills: List[str] = []
     labels: List[str] = []
 
@@ -368,7 +381,9 @@ class A2AMessageResponse(BaseModel):
     mode: Literal["blocking", "task"]
     agent_id: str
     task_id: Optional[str]
-    status: Optional[str]
+    status: Optional[A2ATaskState]  # may be null for message-only agents
+    upstream_state: Optional[str]   # raw upstream state (may include non-standard values)
+    is_terminal: Optional[bool]     # computed from status when available
     output: Optional[Dict[str, Any]]
     message: Optional[str]
     raw_response: Optional[Dict[str, Any]]
@@ -377,7 +392,9 @@ class A2AMessageResponse(BaseModel):
 class A2ATaskStatusResponse(BaseModel):
     agent_id: str
     task_id: str
-    status: str
+    status: A2ATaskState
+    upstream_state: Optional[str]
+    is_terminal: Optional[bool]
     output: Optional[Dict[str, Any]]
     message: Optional[str]
     raw_response: Optional[Dict[str, Any]]
@@ -464,7 +481,11 @@ Common `code` values:
 * `GET /a2a/agents/{agent_id}/tasks/{task_id}`:
 
   * Uses the A2A SDK `get_task(...)` via `A2AClient`.
-  * Returns `A2ATaskStatusResponse` with `status` normalized to `queued|running|succeeded|failed|unknown`.
+  * `input-required` is a first-class A2A state indicating the task is waiting for additional client (often human) input.
+  * Returns `A2ATaskStatusResponse` with A2A-standard task `status` (TaskState): `submitted|working|input-required|completed|canceled|failed|unknown`.
+  * Also includes hybrid fields:
+    * `upstream_state`: raw upstream state (even if non-standard)
+    * `is_terminal`: computed boolean for terminal states (completed|failed|canceled)
   * Message-only agents (task polling not applicable) → HTTP **409** with structured error `code="A2A_TASK_NOT_APPLICABLE"` and `operation="get_task"`.
   * Task id not found → HTTP **404** with structured error `code="A2A_TASK_NOT_FOUND"` and `operation="get_task"`.
 
@@ -644,7 +665,7 @@ Recently completed (Sprint Week 1):
 2. Harden `GET /a2a/agents/{agent_id}/tasks/{task_id}`:
    * message-only agents → HTTP 409 (`A2A_TASK_NOT_APPLICABLE`)
    * task not found → HTTP 404 (`A2A_TASK_NOT_FOUND`)
-   * status normalization: `queued|running|succeeded|failed|unknown`
+   * task state is A2A-standard (TaskState): `submitted|working|input-required|completed|canceled|failed|unknown` (+ `upstream_state`, `is_terminal`)
    * transport/connect/timeout mapped into the same structured error schema
 3. Add/extend pytest contract tests for A2A behaviors (blocking/message-only, task-based + polling, task not found, transport/timeout).
 
@@ -667,7 +688,7 @@ Next validation step:
 6. Implement real task polling:
 
    * `POST /a2a/agents/{agent_id}/messages` with `blocking=false` → create task.
-   * `GET /a2a/agents/{agent_id}/tasks/{task_id}` → map A2A Task/TaskStatus to `A2ATaskStatusResponse`.
+   * `GET /a2a/agents/{agent_id}/tasks/{task_id}` → map A2A Task/TaskStatus to `A2ATaskStatusResponse` using A2A TaskState values.
 
 **Medium-term (Multi-tenancy & config)**
 
