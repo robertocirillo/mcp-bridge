@@ -148,7 +148,7 @@ def test_task_based_send_and_poll_success_status_normalized() -> None:
         return A2AResult(
             agent_id=kwargs["agent_id"],
             task_id="t1",
-            status="queued",
+            status="submitted",
             output={"kind": "task"},
             message=None,
             raw_response={"raw": True},
@@ -178,7 +178,10 @@ def test_task_based_send_and_poll_success_status_normalized() -> None:
     poll = client.get("/a2a/agents/echo/tasks/t1")
     assert poll.status_code == 200, poll.text
     pdata = poll.json()
-    assert pdata["status"] == "succeeded"
+    assert pdata["status"] == "completed"
+    assert pdata["is_terminal"] is True
+    # upstream_state può essere "completed" oppure stringhe originali: qui è "completed"
+    assert pdata["upstream_state"] in ("completed", "TaskState.COMPLETED", "taskstate.completed")
 
 
 def test_task_not_found_returns_404_with_structured_detail() -> None:

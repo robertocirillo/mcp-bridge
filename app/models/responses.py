@@ -2,9 +2,26 @@
 Pydantic models for HTTP responses
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
+from enum import Enum
+
+
+class A2ATaskState(str, Enum):
+    """Standard A2A task state values (A2A TaskState)."""
+
+    submitted = "submitted"
+    working = "working"
+    input_required = "input-required"
+    completed = "completed"
+    canceled = "canceled"
+    failed = "failed"
+    unknown = "unknown"
+
+
+A2A_TERMINAL_TASK_STATES = {A2ATaskState.completed, A2ATaskState.canceled, A2ATaskState.failed}
+
 
 
 class SessionResponse(BaseModel):
@@ -72,14 +89,45 @@ class A2ATaskResponse(BaseModel):
     """Minimal wrapper around a remote A2A task response."""
 
     task_id: str = Field(..., description="Task identifier (from remote or local).")
-    status: Literal["pending", "running", "completed", "failed", "unknown"] = "unknown"
-    output: Optional[Dict[str, Any]] = None
-    message: Optional[str] = None
+    status: A2ATaskState = Field(
+        default=A2ATaskState.unknown,
+        description=(
+            "A2A task state as defined by the A2A standard: "
+            "submitted|working|input-required|completed|canceled|failed|unknown."
+        ),
+    )
+    upstream_state: Optional[str] = Field(
+        default=None,
+        description="Raw upstream task state (may include non-standard values).",
+    )
+    is_terminal: Optional[bool] = Field(
+        default=None,
+        description="True if the task is in a terminal A2A state (completed|failed|canceled).",
+    )
+    output: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional simplified representation of the task output.",
+    )
+    message: Optional[str] = Field(
+        default=None,
+        description="Optional human-readable message describing the current state.",
+    )
     raw_response: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Raw JSON response from the remote A2A agent."
+        description="Raw JSON response from the remote A2A agent.",
     )
 
+    @model_validator(mode="after")
+    def _populate_hybrid_fields(self):
+        if self.upstream_state is None:
+            self.upstream_state = self.status.value if isinstance(self.status, A2ATaskState) else str(self.status)
+        if self.is_terminal is None:
+            try:
+                st = self.status if isinstance(self.status, A2ATaskState) else A2ATaskState(str(self.status))
+                self.is_terminal = st in A2A_TERMINAL_TASK_STATES
+            except Exception:
+                self.is_terminal = False
+        return self
 
 
 class A2AAgentSummary(BaseModel):
@@ -139,12 +187,21 @@ class A2AMessageResponse(BaseModel):
             "Always present in 'task' mode; may also be present in 'blocking' mode."
         ),
     )
-    status: Optional[str] = Field(
+    status: Optional[A2ATaskState] = Field(
         default=None,
         description=(
-            "High-level status of the task (e.g. pending, running, completed, "
-            "failed, cancelled). Exact values depend on the A2A task status."
+            "A2A task state as defined by the A2A standard: "
+            "submitted|working|input-required|completed|canceled|failed|unknown. "
+            "May be null when the upstream response does not include task status."
         ),
+    )
+    upstream_state: Optional[str] = Field(
+        default=None,
+        description="Raw upstream task state (may include non-standard values).",
+    )
+    is_terminal: Optional[bool] = Field(
+        default=None,
+        description="True if the task is in a terminal A2A state (completed|failed|canceled).",
     )
     output: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -165,6 +222,20 @@ class A2AMessageResponse(BaseModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def _populate_hybrid_fields(self):
+        if self.status is None:
+            return self
+        if self.upstream_state is None:
+            self.upstream_state = self.status.value if isinstance(self.status, A2ATaskState) else str(self.status)
+        if self.is_terminal is None:
+            try:
+                st = self.status if isinstance(self.status, A2ATaskState) else A2ATaskState(str(self.status))
+                self.is_terminal = st in A2A_TERMINAL_TASK_STATES
+            except Exception:
+                self.is_terminal = False
+        return self
+
 
 class A2ATaskStatusResponse(BaseModel):
     """
@@ -181,12 +252,20 @@ class A2ATaskStatusResponse(BaseModel):
         ...,
         description="Identifier of the A2A task.",
     )
-    status: str = Field(
+    status: A2ATaskState = Field(
         ...,
         description=(
-            "Current status of the task (e.g. pending, running, completed, "
-            "failed, cancelled). Exact values depend on the A2A backend."
+            "A2A task state as defined by the A2A standard: "
+            "submitted|working|input-required|completed|canceled|failed|unknown."
         ),
+    )
+    upstream_state: Optional[str] = Field(
+        default=None,
+        description="Raw upstream task state (may include non-standard values).",
+    )
+    is_terminal: Optional[bool] = Field(
+        default=None,
+        description="True if the task is in a terminal A2A state (completed|failed|canceled).",
     )
     output: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -206,3 +285,17 @@ class A2ATaskStatusResponse(BaseModel):
             "Useful for debugging or advanced clients."
         ),
     )
+
+    @model_validator(mode="after")
+    def _populate_hybrid_fields(self):
+        if self.upstream_state is None:
+            self.upstream_state = self.status.value if isinstance(self.status, A2ATaskState) else str(self.status)
+        if self.is_terminal is None:
+            try:
+                st = self.status if isinstance(self.status, A2ATaskState) else A2ATaskState(str(self.status))
+                self.is_terminal = st in A2A_TERMINAL_TASK_STATES
+            except Exception:
+                self.is_terminal = False
+        return self
+
+

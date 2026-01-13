@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.api.dependencies import get_a2a_client, get_settings
 from app.core.a2a_client import A2AClient, A2AClientError
 from app.models.requests import A2AMessageRequest
-from app.models.responses import A2AAgentSummary, A2AMessageResponse, A2ATaskStatusResponse
+from app.models.responses import A2AAgentSummary, A2AMessageResponse, A2ATaskStatusResponse, A2ATaskState
 from app.utils.logging import get_logger
 from config import Settings
 
@@ -97,62 +97,120 @@ def _normalize_task_id(task_id: Any) -> Any:
     return task_id
 
 
-def _normalize_task_status(status: Optional[Any]) -> str:
-    """Normalize upstream status into: queued|running|succeeded|failed|unknown.
+def _normalize_task_state(status: Optional[Any]) -> tuple[A2ATaskState, Optional[str]]:
+    """Normalize upstream task status into A2A-standard TaskState values.
 
     Upstream SDKs may return:
-    - a plain string ("running")
-    - an enum (TaskState.RUNNING)
+    - a plain string ("working")
+    - an enum (TaskState.WORKING)
     - a structured object (e.g. TaskStatus) with a `.state` attribute
 
-    We normalize everything into the stable REST contract values.
+    We return:
+    - the normalized A2A TaskState enum
+    - the raw upstream state string (for observability / debugging)
     """
     if status is None:
-        return "unknown"
+        return (A2ATaskState.unknown, None)
 
-    # SDK TaskStatus-like object
     raw = status
     if hasattr(raw, "state"):
         raw = getattr(raw, "state")
 
-    s = str(raw).strip().lower()
+    raw_str = str(raw).strip()
+    token = raw_str.lower()
+
     # Handle enum string forms like "TaskState.SUBMITTED" or "taskstate.submitted"
-    if "." in s:
-        s = s.split(".")[-1]
+    if "." in token:
+        token = token.split(".")[-1]
 
-    # Exact mappings first
-    if s in {"queued", "pending", "created", "accepted", "scheduled", "submitted"}:
-        return "queued"
-    if s in {"running", "in_progress", "in-progress", "processing"}:
-        return "running"
-    if s in {"succeeded", "success", "completed", "done", "finished"}:
-        return "succeeded"
-    if s in {"failed", "error", "cancelled", "canceled", "rejected", "timeout"}:
-        return "failed"
+    # Normalize separators
+    token = token.replace("_", "-").strip()
 
-    # Fallback substring mapping (for variants like "in progress", "complete", etc.)
-    if any(k in s for k in ("queue", "pend", "submit")):
-        return "queued"
-    if any(k in s for k in ("run", "progress", "process")):
-        return "running"
-    if any(k in s for k in ("succeed", "success", "complete", "done", "finish")):
-        return "succeeded"
-    if any(k in s for k in ("fail", "error", "cancel", "reject", "timeout")):
-        return "failed"
+    # Canonical mappings + common synonyms
+    if token in {"submitted", "queued", "pending", "created", "accepted", "scheduled"}:
+        return (A2ATaskState.submitted, raw_str)
 
-    return "unknown"
-    s = str(status).strip().lower()
+    if token in {"working", "running", "in-progress", "processing", "in progress"}:
+        return (A2ATaskState.working, raw_str)
 
-    if s in {"queued", "pending", "created", "accepted", "scheduled"}:
-        return "queued"
-    if s in {"running", "in_progress", "in-progress", "processing"}:
-        return "running"
-    if s in {"succeeded", "success", "completed", "done", "finished"}:
-        return "succeeded"
-    if s in {"failed", "error", "cancelled", "canceled", "rejected", "timeout"}:
-        return "failed"
-    return "unknown"
+    if token in {"input-required", "requires-input", "inputrequired", "requiresinput"}:
+        return (A2ATaskState.input_required, raw_str)
 
+    if token in {"completed", "succeeded", "success", "done", "finished"}:
+        return (A2ATaskState.completed, raw_str)
+
+    if token in {"canceled", "cancelled", "canceled", "cancelled", "cancel"}:
+        return (A2ATaskState.canceled, raw_str)
+
+    if token in {"failed", "error", "rejected", "timeout"}:
+        return (A2ATaskState.failed, raw_str)
+
+    return (A2ATaskState.unknown, raw_str)
+
+
+def _extract_task_message_from_payload(payload: Any) -> Optional[str]:
+    """Best-effort extraction of a human message from a Task-like payload.
+
+    We prefer, in order:
+    1) task.status.message.parts[*].text (HITL / input-required message)
+    2) first artifact part text
+    3) last agent message in history
+    """
+    if not isinstance(payload, dict):
+        return None
+
+    task = payload.get("task") if "task" in payload else payload
+    if not isinstance(task, dict):
+        return None
+
+    # 1) task.status.message.parts[0].text
+    try:
+        status = task.get("status") or {}
+        msg = status.get("message") or {}
+        parts = msg.get("parts") or []
+        for p in parts:
+            if isinstance(p, dict) and p.get("kind") == "text" and isinstance(p.get("text"), str):
+                t = p["text"].strip()
+                if t:
+                    return t
+    except Exception:
+        pass
+
+    # 2) artifacts[*].parts[*].text
+    try:
+        artifacts = task.get("artifacts") or []
+        if isinstance(artifacts, list):
+            for art in artifacts:
+                if not isinstance(art, dict):
+                    continue
+                parts = art.get("parts") or []
+                for p in parts:
+                    if isinstance(p, dict) and p.get("kind") == "text" and isinstance(p.get("text"), str):
+                        t = p["text"].strip()
+                        if t:
+                            return t
+    except Exception:
+        pass
+
+    # 3) last agent message in history
+    try:
+        history = task.get("history") or []
+        if isinstance(history, list):
+            for item in reversed(history):
+                if not isinstance(item, dict):
+                    continue
+                if item.get("role") != "agent":
+                    continue
+                parts = item.get("parts") or []
+                for p in parts:
+                    if isinstance(p, dict) and p.get("kind") == "text" and isinstance(p.get("text"), str):
+                        t = p["text"].strip()
+                        if t:
+                            return t
+    except Exception:
+        pass
+
+    return None
 
 def _looks_task_polling_not_applicable(message: str, upstream: Optional[Dict[str, Any]] = None) -> bool:
     msg = (message or "").lower()
@@ -308,13 +366,26 @@ async def send_a2a_message(
 
         task_id = _normalize_task_id(result.task_id)
         effective_mode: Mode = "task" if task_id else "blocking"
+
+        st, upstream_state = _normalize_task_state(getattr(result, "status", None))
+        # For message-only agents we may not get a task status at all.
+        status_value = None if upstream_state is None else st
+
+        # Prefer explicit SDK message; otherwise extract from payload (task.status.message / artifacts / history).
+        message_value = (
+            result.message
+            or _extract_task_message_from_payload(result.output)
+            or _extract_task_message_from_payload(result.raw_response)
+        )
+
         return A2AMessageResponse(
             mode=effective_mode,
             agent_id=agent_id,
             task_id=task_id,
-            status=_normalize_task_status(result.status),
+            status=status_value,
+            upstream_state=upstream_state,
             output=result.output,
-            message=result.message,
+            message=message_value,
             raw_response=result.raw_response,
         )
 
@@ -354,12 +425,20 @@ async def get_a2a_task(
     try:
         result = await a2a_client.get_task(agent_id=agent_id, task_id=task_id)
 
+        st, upstream_state = _normalize_task_state(getattr(result, "status", None))
+        message_value = (
+            result.message
+            or _extract_task_message_from_payload(result.output)
+            or _extract_task_message_from_payload(result.raw_response)
+        )
+
         return A2ATaskStatusResponse(
             agent_id=agent_id,
             task_id=task_id,
-            status=_normalize_task_status(result.status),
+            status=st,
+            upstream_state=upstream_state,
             output=result.output,
-            message=result.message,
+            message=message_value,
             raw_response=result.raw_response,
         )
 
