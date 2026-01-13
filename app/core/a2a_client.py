@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import json
 import httpx
 from a2a.client import ClientConfig, ClientFactory, create_text_message_object
-from a2a.types import TaskQueryParams
+from a2a.types import TaskQueryParams, Role
 
 from app.models.config import A2AAgentConfig
 from app.utils.logging import get_logger
@@ -74,7 +74,7 @@ class A2AClient:
         # IMPORTANT:
         # a2a-sdk's create_text_message_object expects role/content; passing a positional string
         # breaks typing / runtime in some versions.
-        message = create_text_message_object(role="user", content=text)
+        message = create_text_message_object(role=Role.user, content=text)
 
         last_task: Optional[Any] = None
         last_update: Optional[Any] = None
