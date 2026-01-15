@@ -16,6 +16,7 @@ It is ready to work with a Docker MCP gateway in either **DIND** or **DOD** mode
 - **E2B Sandbox (optional)** – Safe execution in an isolated environment
 - **RESTful API** – Well-documented endpoints with OpenAPI/Swagger (`/docs`)
 - **Structured logging** – Centralized logs for debugging and monitoring
+- **Structured errors (MCP + A2A)** – Errors returned under `detail` with stable `detail.code` / `detail.message`
 - **Docker ready** – Container image and multiple `docker-compose` setups
 - **Health monitoring** – Simple health check endpoints
 
@@ -52,8 +53,6 @@ mcp-bridge/
     └── utils/
         ├── logging.py          # Logging setup
         └── helpers.py          # Generic utilities
-
-
 ```
 
 ## 🛠️ Installation
@@ -116,6 +115,7 @@ docker compose -f docker-compose-dod.yml up -d
 ## ⚙️ Configuration
 Most configuration is handled in config.py and app/models/config.py / app/core/config.py 
 (Pydantic Settings + models), optionally fed by environment variables from .env.
+
 ### Main Environment Variables
 
 ```env
@@ -222,11 +222,7 @@ Opzionali (in modalità multi-tenant):
 **Example (curl)**
 
 ```bash
-curl -X POST "http://localhost:8000/sessions" \
-  -H "Content-Type: application/json" \
-  -H "X-Tenant-Id: tenant-A" \
-  -H "X-Run-Id: run-123" \
-  -d '{
+curl -X POST "http://localhost:8000/sessions"   -H "Content-Type: application/json"   -H "X-Tenant-Id: tenant-A"   -H "X-Run-Id: run-123"   -d '{
     "llm_provider": {
       "provider": "openai",
       "model": "gpt-3.5-turbo",
@@ -274,11 +270,7 @@ POST /sessions/{session_id}/query
 **Example**
 
 ```bash
-curl -X POST "http://localhost:8000/sessions/d0c02f31-06f0-4e8c-9e80-3f7eaf606e5e/query" \
-  -H "Content-Type: application/json" \
-  -H "X-Tenant-Id: tenant-A" \
-  -H "X-Run-Id: run-124" \
-  -d '{
+curl -X POST "http://localhost:8000/sessions/d0c02f31-06f0-4e8c-9e80-3f7eaf606e5e/query"   -H "Content-Type: application/json"   -H "X-Tenant-Id: tenant-A"   -H "X-Run-Id: run-124"   -d '{
     "query": "Use the filesystem tools to list the files in the current directory.",
     "max_steps": 10
   }'
@@ -316,8 +308,7 @@ GET /sessions
 **Example**
 
 ```bash
-curl "http://localhost:8000/sessions" \
-  -H "X-Tenant-Id: tenant-A"
+curl "http://localhost:8000/sessions"   -H "X-Tenant-Id: tenant-A"
 ```
 
 **Example response**
@@ -591,6 +582,30 @@ The MCP query execution supports a **pipeline** of guardrails:
 These hooks are implemented in the bridge as a lightweight extension point (sync or async),
 so you can later plug in an external **bias/guardrails detection service** without changing the MCP execution contract.
 
+### 3) Local MVP guardrail: PII detection + redaction / block
+
+A deterministic MVP guardrail runs in `after_model`:
+
+- Detects **email / phone / IBAN** in the model output.
+- Default mode is **redact**: sensitive values are replaced with placeholders:
+  - `[REDACTED_EMAIL]`, `[REDACTED_PHONE]`, `[REDACTED_IBAN]`
+- In `mode="block"` the request is blocked and the API returns **403** with `detail.code="PII_DETECTED"` and extra fields:
+  - `phase="after_model"`, `rule="pii"`, `details={types, counts, mode}`
+
+### 4) Structured errors (aligned with A2A)
+
+Errors are returned under `detail` with stable fields:
+
+- `detail.code`, `detail.message`, `detail.operation`
+- optional context fields: `tenant_id`, `run_id`, `session_id`, `tool_name`, `phase`, `rule`, `details`
+
+Guardrail-related stable codes:
+
+- `GUARDRAIL_VIOLATION`
+- `PII_DETECTED`
+- `BIAS_DETECTED`
+- `MCP_GUARDRAIL_TIMEOUT`
+
 ## 🧪 Testing
 
 ```bash
@@ -627,8 +642,6 @@ docker run -p 8000:8000 --env-file .env mcp-bridge
 ### Docker Compose
 ```bash
 docker compose up -d
-docker compose logs -f
-docker compose down
 ```
 
 ---
