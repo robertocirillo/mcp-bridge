@@ -164,65 +164,6 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
 
 ### 2.4 Execute MCP Query (`POST /sessions/{session_id}/query`)
 
-#### Guardrails and tool policy enforcement (MCP)
-
-During `POST /sessions/{session_id}/query`, the bridge applies guardrails around the model execution:
-
-1. **before_model guardrails (pipeline)** run on the input `query` (validation / normalization).
-2. MCP tool calls are protected by a **last-gate enforcement** based on the session `disallowed_tools` (supports wildcards).
-   - If blocked, the tool is **not invoked** and the API returns **HTTP 403** with `detail.code="MCP_TOOL_NOT_ALLOWED"`.
-3. **after_model guardrails (pipeline)** run on the model output (post-check / redaction).
-
-All guardrail decisions and tool blocks are logged with `tenant_id`, `run_id`, `session_id`, and `tool_name` for correlation.
-
-#### MCP structured error schema (aligned with A2A)
-
-MCP endpoints return errors in a structured format under `detail`, aligned with A2A:
-
-- `detail.code`: stable machine-readable code
-- `detail.message`: human-readable message
-- `detail.operation`: operation name (e.g. `execute_query`)
-- optional contextual fields (when available):
-  - `tenant_id`, `run_id`, `session_id`
-  - `tool_name` (tool policy)
-  - `phase` / `rule` / `details` (guardrails)
-
-Example:
-
-```json
-{
-  "detail": {
-    "code": "MCP_TOOL_NOT_ALLOWED",
-    "message": "Tool 'filesystem.read_file' not allowed: blocked by session policy",
-    "operation": "execute_query",
-    "tool_name": "filesystem.read_file",
-    "tenant_id": "tenant-A",
-    "run_id": "run-123",
-    "session_id": "..."
-  }
-}
-```
-
-#### Guardrail codes
-
-Stable guardrail-related codes used on the MCP side:
-
-- `GUARDRAIL_VIOLATION`
-- `PII_DETECTED`
-- `BIAS_DETECTED`
-- `MCP_GUARDRAIL_TIMEOUT`
-
-#### Local MVP guardrail: PII redaction (after_model)
-
-A lightweight, deterministic guardrail is enabled on `after_model`:
-
-- Detects **email / phone / IBAN** in the model output.
-- Default behavior is **redaction** (output is returned with placeholders).
-- In `mode="block"` the guardrail blocks the response and returns **HTTP 403** with:
-  - `detail.code="PII_DETECTED"`
-  - `detail.phase="after_model"`, `detail.rule="pii"`
-  - `detail.details` with detected types/counts.
-
 **Body:** `QueryRequest`:
 
 ```json
@@ -277,13 +218,10 @@ result = await wrapper.run_query(
 
 **Failure modes:**
 
-- Session not found or tenant mismatch → HTTP 404 (structured `detail.code="MCP_SESSION_NOT_FOUND"`).
-- Tool policy block (`disallowed_tools`) → HTTP 403 (structured `detail.code="MCP_TOOL_NOT_ALLOWED"`).
-- Guardrail violation (before/after) → HTTP 403 (structured `detail.code="GUARDRAIL_VIOLATION"` or a specific code like `PII_DETECTED`).
-- Guardrail timeout → HTTP 403 (structured `detail.code="MCP_GUARDRAIL_TIMEOUT"`).
-- `ConfigurationError` → HTTP 400 (structured `detail.code="MCP_CONFIGURATION_ERROR"`).
-- `MCPWrapperError` → HTTP 502 (structured `detail.code="MCP_UPSTREAM_ERROR"`).
-- Unexpected errors → HTTP 500 (structured `detail.code="MCP_INTERNAL_ERROR"`).
+- Session not found or tenant mismatch → HTTP 404.
+- `ConfigurationError` → HTTP 400.
+- `MCPWrapperError` → HTTP 502.
+- Unexpected errors → HTTP 500.
 
 ---
 
@@ -470,10 +408,6 @@ Therefore:
 
 ### 7.1 MCP Side
 
-- **Structured errors (aligned with A2A)**:
-  - MCP endpoints return errors under `detail` with stable `detail.code` and `detail.message`.
-  - Context fields are included when available (e.g. `operation`, `tenant_id`, `run_id`, `session_id`, `tool_name`, `phase`, `rule`, `details`).
-
 - **Session limit reached**:
   - `MAX_ACTIVE_SESSIONS` enforced in `SessionManager.create_session`.
   - Client receives HTTP 429.
@@ -489,15 +423,6 @@ Therefore:
 - **No MCP servers**:
   - Not an error; LLM-only mode.
   - `mcp-use` logs warnings but query works.
-
-- **Tool policy violation**:
-  - If a tool is denied by `SessionConfig.disallowed_tools` (supports wildcards), it is never invoked.
-  - Client receives HTTP 403 with `detail.code="MCP_TOOL_NOT_ALLOWED"`.
-
-- **Guardrail violation / timeout**:
-  - Guardrails can block in `before_model` or `after_model`.
-  - Client receives HTTP 403 with `detail.code="GUARDRAIL_VIOLATION"` or a specific code like `PII_DETECTED`.
-  - Guardrail timeouts are surfaced as `detail.code="MCP_GUARDRAIL_TIMEOUT"`.
 
 - **Multi-tenancy mismatches**:
   - If session belongs to a different tenant, `SessionNotFoundError` is raised.
