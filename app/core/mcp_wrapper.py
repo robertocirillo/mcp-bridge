@@ -3,7 +3,10 @@ Refined wrapper for mcp-use with enhanced error handling
 """
 
 import os
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable, Awaitable, Union
+from dataclasses import dataclass
+from fnmatch import fnmatchcase
+import inspect
 
 from app.core.exceptions import MCPWrapperError, DependencyError, ConfigurationError
 from app.utils.logging import get_logger
@@ -11,6 +14,110 @@ from app.utils.helpers import retry_async
 from app.models.config import SandboxOptions as SandboxOptionsModel  # rinomina per non confonderla con quella di mcp-use
 
 logger = get_logger(__name__)
+
+
+class MCPToolNotAllowedError(Exception):
+    """Raised when a tool call is blocked by session policy."""
+
+    def __init__(
+        self,
+        tool_name: str,
+        *,
+        tenant_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        reason: str = "blocked by session policy",
+    ):
+        self.tool_name = tool_name
+        self.tenant_id = tenant_id
+        self.run_id = run_id
+        self.session_id = session_id
+        self.reason = reason
+        super().__init__(f"Tool '{tool_name}' not allowed: {reason}")
+
+
+class GuardrailViolationError(Exception):
+    """Raised when a guardrail blocks the request or output."""
+
+    def __init__(
+        self,
+        *,
+        code: str = "GUARDRAIL_VIOLATION",
+        message: str,
+        phase: str,
+        rule: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        self.code = code
+        self.message = message
+        self.phase = phase  # "before_model" | "after_model"
+        self.rule = rule
+        self.tenant_id = tenant_id
+        self.run_id = run_id
+        self.session_id = session_id
+        self.details = details or {}
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class GuardrailContext:
+    """Context passed to guardrail hooks."""
+
+    tenant_id: Optional[str] = None
+    run_id: Optional[str] = None
+    session_id: Optional[str] = None
+    query: Optional[str] = None
+    server_name: Optional[str] = None
+
+
+def _matches_any(patterns: List[str], value: str) -> bool:
+    for pat in patterns:
+        if fnmatchcase(value, pat):
+            return True
+    return False
+
+
+async def _maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+class _GuardedMCPSession:
+    """Proxy session that enforces tool policy before calling call_tool()."""
+
+    def __init__(self, session: Any, wrapper: "MCPWrapper"):
+        self._session = session
+        self._wrapper = wrapper
+
+    async def call_tool(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        self._wrapper._enforce_tool_allowed(name)
+        return await self._session.call_tool(name, *args, **kwargs)
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._session, item)
+
+
+class _GuardedMCPClient:
+    """Proxy client that wraps sessions and enforces tool policy."""
+
+    def __init__(self, client: Any, wrapper: "MCPWrapper"):
+        self._client = client
+        self._wrapper = wrapper
+
+    async def get_session(self, *args: Any, **kwargs: Any) -> Any:
+        session = await self._client.get_session(*args, **kwargs)
+        return _GuardedMCPSession(session, self._wrapper)
+
+    async def call_tool(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        self._wrapper._enforce_tool_allowed(name)
+        return await self._client.call_tool(name, *args, **kwargs)
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._client, item)
 
 # Mapping provider -> LangChain class path
 PROVIDER_IMPORTS = {
@@ -79,6 +186,18 @@ class MCPWrapper:
         self._steps_used = 0
         self._last_server_used = None
 
+        # Request/session context (for logs + structured errors)
+        self.tenant_id: Optional[str] = None
+        self.run_id: Optional[str] = None
+        self.session_id: Optional[str] = None
+
+        # Guardrail pipelines (LangChain-inspired hooks)
+        # Each callable can be sync or async.
+        # - before_model: fn(ctx) -> ctx
+        # - after_model: fn(ctx, output) -> output
+        self.before_model_guardrails: List[Callable[[GuardrailContext], Union[GuardrailContext, Awaitable[GuardrailContext]]]] = []
+        self.after_model_guardrails: List[Callable[[GuardrailContext, Any], Union[Any, Awaitable[Any]]]] = []
+
         # Validate and import dependencies
         self._validate_config()
         self._import_dependencies()
@@ -122,6 +241,51 @@ class MCPWrapper:
                 f"Unsupported sandbox_options type: {type(sandbox_options)!r}. "
                 "Expected dict or Pydantic BaseModel."
             )
+    def set_context(
+        self,
+        *,
+        tenant_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> None:
+        """Set request/session context for logging and structured errors."""
+        self.tenant_id = tenant_id
+        self.run_id = run_id
+        self.session_id = session_id
+
+    async def _run_before_model_guardrails(self, ctx: GuardrailContext) -> GuardrailContext:
+        for gr in self.before_model_guardrails:
+            ctx = await _maybe_await(gr(ctx))
+        return ctx
+
+    async def _run_after_model_guardrails(self, ctx: GuardrailContext, output: Any) -> Any:
+        for gr in self.after_model_guardrails:
+            output = await _maybe_await(gr(ctx, output))
+        return output
+
+    def _enforce_tool_allowed(self, tool_name: str) -> None:
+        """Last-gate enforcement before any MCP tool call."""
+        if not self.disallowed_tools:
+            return
+        denied = _matches_any(self.disallowed_tools, tool_name)
+        logger.info(
+            "mcp_tool_policy_decision",
+            extra={
+                "tenant_id": self.tenant_id,
+                "run_id": self.run_id,
+                "session_id": self.session_id,
+                "tool_name": tool_name,
+                "allowed": not denied,
+            },
+        )
+        if denied:
+            raise MCPToolNotAllowedError(
+                tool_name,
+                tenant_id=self.tenant_id,
+                run_id=self.run_id,
+                session_id=self.session_id,
+            )
+
 
     def _validate_config(self):
         """Validates the initial configuration"""
@@ -262,6 +426,10 @@ class MCPWrapper:
 
         self._client = self.MCPClient(**client_kwargs)
 
+        # Strong enforcement: wrap client/session to block disallowed tools deterministically
+        if self.disallowed_tools:
+            self._client = _GuardedMCPClient(self._client, self)
+
         # Create the agent
         agent_kwargs = {
             "llm": llm,
@@ -295,6 +463,17 @@ class MCPWrapper:
         """
         if not self._initialized:
             await self.initialize()
+
+        # Guardrails: before_model (validation/normalization)
+        ctx = GuardrailContext(
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            session_id=self.session_id,
+            query=query,
+            server_name=server_name,
+        )
+        ctx = await self._run_before_model_guardrails(ctx)
+        query = ctx.query or ""
 
         if not query.strip():
             raise ValueError("Empty query not allowed")
@@ -330,8 +509,14 @@ class MCPWrapper:
                 self._last_server_used = self._agent.last_server_used
 
             logger.debug(f"Query completed in {self._steps_used} steps")
-            return str(result)
+            output = str(result)
+            output = await self._run_after_model_guardrails(ctx, output)
+            return output
 
+        except MCPToolNotAllowedError:
+            raise
+        except GuardrailViolationError:
+            raise
         except Exception as e:
             logger.error(f"Query execution error: {e}")
             raise MCPWrapperError(f"Query execution failed: {e}")
@@ -383,6 +568,17 @@ class MCPWrapper:
         """Tests the connection to configured MCP servers"""
         if not self._initialized:
             await self.initialize()
+
+        # Guardrails: before_model (validation/normalization)
+        ctx = GuardrailContext(
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            session_id=self.session_id,
+            query=query,
+            server_name=server_name,
+        )
+        ctx = await self._run_before_model_guardrails(ctx)
+        query = ctx.query or ""
 
         results: Dict[str, bool] = {}
         for server_name in self.mcp_servers.keys():

@@ -115,6 +115,9 @@ class SessionManager:
                     use_server_manager=config.use_server_manager
                 )
 
+                # Set context for guardrails/logging
+                wrapper.set_context(tenant_id=tenant_id, run_id=run_id, session_id=session_id)
+
                 # Initialize the wrapper
                 await wrapper.initialize()
 
