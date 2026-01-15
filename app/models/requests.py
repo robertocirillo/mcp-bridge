@@ -4,7 +4,7 @@ Pydantic models for HTTP requests
 
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
-from ..core.config import SessionConfig
+from app.models.config import SessionConfig
 
 
 class SessionCreateRequest(SessionConfig):

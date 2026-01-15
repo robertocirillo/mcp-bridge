@@ -43,6 +43,33 @@ class SandboxOptions(BaseModel):
     timeout: int = Field(300, gt=0, description="Timeout in seconds")
 
 
+# -----------------------------
+# Guardrails (session-scoped)
+# -----------------------------
+
+
+class PiiSettings(BaseModel):
+    """PII guardrail settings."""
+
+    mode: Literal["redact", "block"] = Field(
+        default="redact",
+        description=(
+            "How to handle PII detected in model output. "
+            "'redact' replaces detected entities with placeholders; "
+            "'block' raises a structured GuardrailViolationError(code='PII_DETECTED')."
+        ),
+    )
+
+
+class GuardrailsSettings(BaseModel):
+    """Session-scoped guardrails configuration."""
+
+    pii: PiiSettings = Field(
+        default_factory=PiiSettings,
+        description="PII detection/redaction/blocking settings.",
+    )
+
+
 class SessionConfig(BaseModel):
     """Configuration to create a new session"""
     llm_provider: LLMProvider
@@ -66,6 +93,13 @@ class SessionConfig(BaseModel):
     sandbox_options: Optional[SandboxOptions] = Field(None, description="Options for E2B sandbox")
 
     verbose: bool = Field(False, description="Enable verbose logging")
+
+    # Session-scoped guardrails configuration (LangChain-style before/after hooks).
+    # Backward compatible: if omitted, defaults are applied.
+    guardrails: GuardrailsSettings = Field(
+        default_factory=GuardrailsSettings,
+        description="Guardrails configuration (PII, bias, etc.)",
+    )
 
     def model_post_init(self, __context):
         """post-initialization validation"""

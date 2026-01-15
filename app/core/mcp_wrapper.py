@@ -282,8 +282,11 @@ class MCPWrapper:
         # When set, a timeout raises GuardrailViolationError(code=MCP_GUARDRAIL_TIMEOUT).
         self.guardrail_timeout_seconds: Optional[float] = None
 
-        # Local MVP guardrails (LangChain "after" pattern): redact PII by default.
-        self.after_model_guardrails.append(make_pii_after_model_guardrail(mode="redact"))
+        # Local MVP guardrails (LangChain "after" pattern): configurable PII handling.
+        # Default is backward compatible: redact.
+        self.pii_mode: str = "redact"
+        self._pii_after_model_guardrail = None
+        self.set_pii_mode(self.pii_mode)
 
         # Validate and import dependencies
         self._validate_config()
@@ -340,6 +343,39 @@ class MCPWrapper:
         self.tenant_id = tenant_id
         self.run_id = run_id
         self.session_id = session_id
+
+    def set_pii_mode(self, mode: Optional[str]) -> None:
+        """Configure session-scoped PII handling for the local after_model guardrail.
+
+        Backward compatible: if mode is missing/invalid, defaults to "redact".
+        """
+
+        normalized_mode = (mode or "redact").strip().lower()
+        if normalized_mode not in {"redact", "block"}:
+            normalized_mode = "redact"
+
+        # Persist the selected mode (useful for debugging and tests).
+        self.pii_mode = normalized_mode
+
+        new_gr = make_pii_after_model_guardrail(mode=normalized_mode)
+
+        # Replace the previously installed PII guardrail (if present).
+        old_gr = getattr(self, "_pii_after_model_guardrail", None)
+        if not hasattr(self, "after_model_guardrails") or self.after_model_guardrails is None:
+            self.after_model_guardrails = []
+
+        replaced = False
+        if old_gr is not None:
+            for idx, gr in enumerate(self.after_model_guardrails):
+                if gr is old_gr:
+                    self.after_model_guardrails[idx] = new_gr
+                    replaced = True
+                    break
+
+        if not replaced:
+            self.after_model_guardrails.append(new_gr)
+
+        self._pii_after_model_guardrail = new_gr
 
     async def _run_before_model_guardrails(self, ctx: GuardrailContext) -> GuardrailContext:
         timeout = getattr(self, "guardrail_timeout_seconds", None)
@@ -698,11 +734,3 @@ class MCPWrapper:
             except Exception as e:
                 logger.warning(f"Connection test failed for {server_name}: {e}")
                 results[server_name] = False
-
-        return results
-
-    def __repr__(self) -> str:
-        return (
-            f"MCPWrapper(provider={self.llm_provider}, model={self.model}, "
-            f"servers={list(self.mcp_servers.keys())}, initialized={self._initialized})"
-        )
