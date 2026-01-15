@@ -3,6 +3,8 @@ Refined wrapper for mcp-use with enhanced error handling
 """
 
 import os
+import re
+import asyncio
 from typing import Optional, Dict, Any, List, Callable, Awaitable, Union
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
@@ -14,6 +16,84 @@ from app.utils.helpers import retry_async
 from app.models.config import SandboxOptions as SandboxOptionsModel  # rinomina per non confonderla con quella di mcp-use
 
 logger = get_logger(__name__)
+
+
+# -----------------------------
+# Local MVP guardrails
+# -----------------------------
+
+# NOTE: Deterministic, dependency-free patterns.
+_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+
+# Phone: generic international-ish pattern with a minimum amount of digits.
+_PHONE_RE = re.compile(r"\b(?:\+?\d[\d\s().-]{6,}\d)\b")
+
+# IBAN: 15..34 chars, starts with 2 letters + 2 digits.
+_IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b", re.IGNORECASE)
+
+
+def _detect_pii(text: str) -> Dict[str, int]:
+    """Return detected PII types with counts (email/phone/iban)."""
+    return {
+        "email": len(_EMAIL_RE.findall(text)),
+        "phone": len(_PHONE_RE.findall(text)),
+        "iban": len(_IBAN_RE.findall(text)),
+    }
+
+
+def redact_pii(text: str) -> str:
+    """Redact email/phone/iban occurrences from text."""
+    # Order matters to avoid redacting inside placeholders.
+    text = _EMAIL_RE.sub("[REDACTED_EMAIL]", text)
+    text = _IBAN_RE.sub("[REDACTED_IBAN]", text)
+    text = _PHONE_RE.sub("[REDACTED_PHONE]", text)
+    return text
+
+
+def make_pii_after_model_guardrail(*, mode: str = "redact"):
+    """Factory for an after_model guardrail that detects/redacts PII.
+
+    Modes:
+      - redact (default): return redacted output
+      - block: raise GuardrailViolationError(code=PII_DETECTED)
+    """
+
+    normalized_mode = (mode or "redact").strip().lower()
+    if normalized_mode not in {"redact", "block"}:
+        # Keep deterministic behavior; treat unknown modes as redact.
+        normalized_mode = "redact"
+
+    async def _guardrail(ctx: "GuardrailContext", output: Any) -> Any:
+        # Only operate on text outputs for the MVP.
+        if output is None:
+            return output
+        text = str(output)
+        counts = _detect_pii(text)
+        present = [k for k, v in counts.items() if v > 0]
+
+        if not present:
+            return output
+
+        if normalized_mode == "block":
+            raise GuardrailViolationError(
+                code="PII_DETECTED",
+                message="PII detected in model output",
+                phase="after_model",
+                rule="pii",
+                tenant_id=getattr(ctx, "tenant_id", None),
+                run_id=getattr(ctx, "run_id", None),
+                session_id=getattr(ctx, "session_id", None),
+                details={
+                    "types": present,
+                    "counts": counts,
+                    "mode": "block",
+                },
+            )
+
+        # Default: redact.
+        return redact_pii(text)
+
+    return _guardrail
 
 
 class MCPToolNotAllowedError(Exception):
@@ -198,6 +278,13 @@ class MCPWrapper:
         self.before_model_guardrails: List[Callable[[GuardrailContext], Union[GuardrailContext, Awaitable[GuardrailContext]]]] = []
         self.after_model_guardrails: List[Callable[[GuardrailContext, Any], Union[Any, Awaitable[Any]]]] = []
 
+        # Optional per-guardrail timeout to avoid hanging requests.
+        # When set, a timeout raises GuardrailViolationError(code=MCP_GUARDRAIL_TIMEOUT).
+        self.guardrail_timeout_seconds: Optional[float] = None
+
+        # Local MVP guardrails (LangChain "after" pattern): redact PII by default.
+        self.after_model_guardrails.append(make_pii_after_model_guardrail(mode="redact"))
+
         # Validate and import dependencies
         self._validate_config()
         self._import_dependencies()
@@ -241,6 +328,7 @@ class MCPWrapper:
                 f"Unsupported sandbox_options type: {type(sandbox_options)!r}. "
                 "Expected dict or Pydantic BaseModel."
             )
+
     def set_context(
         self,
         *,
@@ -254,13 +342,48 @@ class MCPWrapper:
         self.session_id = session_id
 
     async def _run_before_model_guardrails(self, ctx: GuardrailContext) -> GuardrailContext:
+        timeout = getattr(self, "guardrail_timeout_seconds", None)
         for gr in self.before_model_guardrails:
-            ctx = await _maybe_await(gr(ctx))
+            try:
+                if timeout:
+                    ctx = await asyncio.wait_for(_maybe_await(gr(ctx)), timeout=timeout)
+                else:
+                    ctx = await _maybe_await(gr(ctx))
+            except asyncio.TimeoutError:
+                raise GuardrailViolationError(
+                    code="MCP_GUARDRAIL_TIMEOUT",
+                    message="Guardrail timed out",
+                    phase="before_model",
+                    rule=getattr(gr, "__name__", "guardrail"),
+                    tenant_id=getattr(ctx, "tenant_id", None),
+                    run_id=getattr(ctx, "run_id", None),
+                    session_id=getattr(ctx, "session_id", None),
+                    details={"timeout_seconds": timeout},
+                )
         return ctx
 
     async def _run_after_model_guardrails(self, ctx: GuardrailContext, output: Any) -> Any:
+        timeout = getattr(self, "guardrail_timeout_seconds", None)
         for gr in self.after_model_guardrails:
-            output = await _maybe_await(gr(ctx, output))
+            try:
+                if timeout:
+                    output = await asyncio.wait_for(
+                        _maybe_await(gr(ctx, output)),
+                        timeout=timeout,
+                    )
+                else:
+                    output = await _maybe_await(gr(ctx, output))
+            except asyncio.TimeoutError:
+                raise GuardrailViolationError(
+                    code="MCP_GUARDRAIL_TIMEOUT",
+                    message="Guardrail timed out",
+                    phase="after_model",
+                    rule=getattr(gr, "__name__", "guardrail"),
+                    tenant_id=getattr(ctx, "tenant_id", None),
+                    run_id=getattr(ctx, "run_id", None),
+                    session_id=getattr(ctx, "session_id", None),
+                    details={"timeout_seconds": timeout},
+                )
         return output
 
     def _enforce_tool_allowed(self, tool_name: str) -> None:
@@ -562,23 +685,10 @@ class MCPWrapper:
             "initialized": self._initialized,
         }
 
-    from typing import Dict
-
     async def test_connection(self) -> Dict[str, bool]:
         """Tests the connection to configured MCP servers"""
         if not self._initialized:
             await self.initialize()
-
-        # Guardrails: before_model (validation/normalization)
-        ctx = GuardrailContext(
-            tenant_id=self.tenant_id,
-            run_id=self.run_id,
-            session_id=self.session_id,
-            query=query,
-            server_name=server_name,
-        )
-        ctx = await self._run_before_model_guardrails(ctx)
-        query = ctx.query or ""
 
         results: Dict[str, bool] = {}
         for server_name in self.mcp_servers.keys():

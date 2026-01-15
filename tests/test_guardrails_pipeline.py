@@ -6,6 +6,7 @@ from app.core.mcp_wrapper import (
     _GuardedMCPSession,
     GuardrailContext,
     MCPWrapper,
+    make_pii_after_model_guardrail,
 )
 
 
@@ -102,3 +103,38 @@ async def test_guardrail_can_block_by_raising():
     ctx = GuardrailContext(query="hello")
     with pytest.raises(GuardrailViolationError):
         await w._run_before_model_guardrails(ctx)
+
+
+@pytest.mark.asyncio
+async def test_pii_after_model_redacts_email_phone_iban_by_default():
+    gr = make_pii_after_model_guardrail(mode="redact")
+    ctx = GuardrailContext(tenant_id="t1", run_id="r1", session_id="s1", query="q")
+
+    raw = (
+        "Contact: john.doe@example.com, phone +39 333 1234567, "
+        "IBAN IT60X0542811101000000123456"
+    )
+    out = await gr(ctx, raw)
+
+    assert "john.doe@example.com" not in out
+    assert "+39 333 1234567" not in out
+    assert "IT60X0542811101000000123456" not in out
+
+    assert "[REDACTED_EMAIL]" in out
+    assert "[REDACTED_PHONE]" in out
+    assert "[REDACTED_IBAN]" in out
+
+
+@pytest.mark.asyncio
+async def test_pii_after_model_block_mode_raises_structured_guardrail_violation():
+    gr = make_pii_after_model_guardrail(mode="block")
+    ctx = GuardrailContext(tenant_id="t1", run_id="r1", session_id="s1", query="q")
+
+    with pytest.raises(GuardrailViolationError) as exc:
+        await gr(ctx, "Email me at test@example.com")
+
+    err = exc.value
+    assert err.code == "PII_DETECTED"
+    assert err.phase == "after_model"
+    assert err.rule == "pii"
+    assert "email" in err.details.get("types", [])

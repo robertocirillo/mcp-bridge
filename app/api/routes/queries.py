@@ -1,8 +1,11 @@
-"""
-Endpoints per l'esecuzione delle query
+"""Query endpoints.
+
+This module is part of the MCP REST surface.
+Errors must follow the same structured schema used by A2A endpoints:
+`detail.code`, `detail.message`, plus optional contextual fields.
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends
 from typing import Annotated
 import asyncio
 import logging
@@ -14,6 +17,7 @@ from app.core.session_manager import SessionManager
 from app.core.exceptions import SessionNotFoundError, ConfigurationError, MCPWrapperError
 from app.core.mcp_wrapper import MCPToolNotAllowedError, GuardrailViolationError
 from app.api.dependencies import get_session_manager, get_tenant_context, TenantContext
+from app.api.errors import http_error
 
 TenantDep = Annotated[TenantContext, Depends(get_tenant_context)]
 logger = logging.getLogger(__name__)
@@ -27,7 +31,7 @@ async def execute_query(
     tenant_ctx: TenantDep,
     session_manager: SessionManager = Depends(get_session_manager),
 ):
-    """Esegue una query su una sessione esistente."""
+    """Execute a query on an existing session."""
     try:
         session_data = await session_manager.get_session(session_id)
         wrapper = session_data.wrapper
@@ -69,7 +73,15 @@ async def execute_query(
 
     except SessionNotFoundError as e:
         logger.warning("Session not found: %s", e)
-        raise HTTPException(status_code=404, detail=str(e))
+        raise http_error(
+            404,
+            "MCP_SESSION_NOT_FOUND",
+            str(e),
+            operation="execute_query",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+        )
 
     except MCPToolNotAllowedError as e:
         logger.warning(
@@ -81,16 +93,15 @@ async def execute_query(
                 "tool_name": getattr(e, "tool_name", None),
             },
         )
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "MCP_TOOL_NOT_ALLOWED",
-                "message": str(e),
-                "tool_name": getattr(e, "tool_name", None),
-                "tenant_id": tenant_ctx.tenant_id,
-                "run_id": tenant_ctx.run_id,
-                "session_id": session_id,
-            },
+        raise http_error(
+            403,
+            "MCP_TOOL_NOT_ALLOWED",
+            str(e),
+            operation="execute_query",
+            tool_name=getattr(e, "tool_name", None),
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
         )
 
     except GuardrailViolationError as e:
@@ -104,26 +115,59 @@ async def execute_query(
                 "rule": getattr(e, "rule", None),
             },
         )
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": getattr(e, "code", "GUARDRAIL_VIOLATION"),
-                "message": getattr(e, "message", str(e)),
-                "phase": getattr(e, "phase", None),
-                "rule": getattr(e, "rule", None),
-                "tenant_id": tenant_ctx.tenant_id,
-                "run_id": tenant_ctx.run_id,
-                "session_id": session_id,
-                "details": getattr(e, "details", {}),
-            },
+        raise http_error(
+            403,
+            getattr(e, "code", "GUARDRAIL_VIOLATION"),
+            getattr(e, "message", str(e)),
+            operation="execute_query",
+            phase=getattr(e, "phase", None),
+            rule=getattr(e, "rule", None),
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            details=getattr(e, "details", {}),
         )
 
     except ConfigurationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise http_error(
+            400,
+            "MCP_CONFIGURATION_ERROR",
+            str(e),
+            operation="execute_query",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+        )
     except MCPWrapperError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise http_error(
+            502,
+            "MCP_UPSTREAM_ERROR",
+            str(e),
+            operation="execute_query",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+        )
+    except ValueError as e:
+        raise http_error(
+            400,
+            "MCP_SCHEMA_ERROR",
+            str(e),
+            operation="execute_query",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+        )
     except Exception:
-        raise HTTPException(status_code=500, detail="Internal Error")
+        raise http_error(
+            500,
+            "MCP_INTERNAL_ERROR",
+            "Internal Error",
+            operation="execute_query",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+        )
 
 
 @router.get("/{session_id}/history")
@@ -132,25 +176,50 @@ async def get_query_history(
     limit: int = 10,
     session_manager: SessionManager = Depends(get_session_manager),
 ):
-    """Ottiene la cronologia delle query per una sessione"""
+    """Return basic query stats for a session.
+
+    NOTE: Detailed history is not implemented yet.
+    """
     try:
         session_data = await session_manager.get_session(session_id)
 
-        # Per ora restituiamo solo le statistiche base
-        # In futuro si potrebbe implementare una vera cronologia
         return {
             "session_id": session_id,
             "total_queries": session_data.query_count,
             "last_used": session_data.last_used,
-            "message": "Cronologia dettagliata non ancora implementata",
+            "message": "Detailed history not implemented yet",
         }
 
     except SessionNotFoundError as e:
-        logger.warning("Attempt failed: %s", e)
-        raise HTTPException(status_code=404, detail=str(e))
+        logger.warning("Session not found: %s", e)
+        raise http_error(
+            404,
+            "MCP_SESSION_NOT_FOUND",
+            str(e),
+            operation="get_query_history",
+            session_id=session_id,
+        )
     except ConfigurationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise http_error(
+            400,
+            "MCP_CONFIGURATION_ERROR",
+            str(e),
+            operation="get_query_history",
+            session_id=session_id,
+        )
     except MCPWrapperError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise http_error(
+            502,
+            "MCP_UPSTREAM_ERROR",
+            str(e),
+            operation="get_query_history",
+            session_id=session_id,
+        )
     except Exception:
-        raise HTTPException(status_code=500, detail="Internal Error")
+        raise http_error(
+            500,
+            "MCP_INTERNAL_ERROR",
+            "Internal Error",
+            operation="get_query_history",
+            session_id=session_id,
+        )
