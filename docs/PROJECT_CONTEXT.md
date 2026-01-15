@@ -195,7 +195,7 @@ Project: **mcp-bridge – MCP + A2A integration**
   * `steps_used`: integer, number of steps used in the last run (if available from mcp-use).
   * `last_server_used`: optional name of the last tool/server used.
 
-### 3.3 Session Manager
+### 3.3 Session Manager### 3.3 Session Manager
 
 `SessionManager` manages all active sessions in memory:
 
@@ -260,6 +260,17 @@ Project: **mcp-bridge – MCP + A2A integration**
     * Handles cleanup (closing wrappers, etc.) as needed
 
 ---
+
+
+### 3.4 Guardrails (MCP)
+
+mcp-bridge provides lightweight guardrail hooks around MCP query execution:
+
+- **before_model**: validate/normalize input query (pipeline of guardrails)
+- **after_model**: post-check/redact output (pipeline of guardrails)
+
+Tool policy is session-scoped via `SessionConfig.disallowed_tools` (supports wildcards). Disallowed tools are enforced as a **last gate**
+before any MCP tool invocation; violations return **HTTP 403** with structured error `code="MCP_TOOL_NOT_ALLOWED"`.
 
 ## 4. A2A Integration Details
 

@@ -162,6 +162,47 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 
 ---
 
+### D8 – MCP guardrails: enforcement lives in the bridge
+
+**Status:** Accepted
+
+**Decision:**
+
+- mcp-bridge enforces MCP safety/guardrail decisions at runtime (deterministic behavior).
+- Enforcement includes:
+  - session-scoped MCP tool policy (denylist)
+  - before_model / after_model guardrail hooks around model execution
+- The bridge returns **structured errors** for enforcement outcomes (e.g. HTTP 403 with stable `detail.code`).
+
+**Rationale:**
+
+
+---
+
+### D9 – MCP tool policy is session-scoped and supports wildcards
+
+**Status:** Accepted
+
+**Decision:**
+
+- Tool allow/deny decisions are driven by session configuration (visual builder decides at `POST /sessions` time).
+- `SessionConfig.disallowed_tools` is a denylist and supports wildcard patterns (e.g. `filesystem.*`).
+- Disallowed tool calls are enforced as a **last gate** before any MCP tool invocation.
+- On violation, the API returns **HTTP 403** with structured error `code="MCP_TOOL_NOT_ALLOWED"` and includes `tool_name` + correlation identifiers.
+
+**Rationale:**
+
+- Keeps tool policy close to the session that owns the MCP interaction.
+- Avoids relying on model compliance (“please don’t call X”).
+- Wildcards make it practical to disable whole tool families safely.
+
+- Guarantees that blocked actions (e.g. disallowed tool calls) are never executed.
+- Keeps the REST contract stable and testable.
+- Enables later integration with external guardrail/bias detection services without weakening enforcement.
+
+---
+
+
 ## 2. Rejected Alternatives
 
 ### R1 – Using A2A as MCP tools (A2A-over-MCP)
@@ -295,6 +336,12 @@ These are intentionally left undecided for future iterations.
 - Or is it better to pass through more provider-specific errors?
 - How much detail should be exposed to visual builders vs hidden in logs?
 
+### Q7 – External guardrail/bias detection service
+
+- When should bias/guardrail *detection* be extracted into a separate service (while keeping *enforcement* in the bridge)?
+- What is the minimal API contract (ALLOW/MODIFY/BLOCK + reason codes + policy version)?
+- What should be the failure strategy if the detection service is unavailable (fail-open vs fail-closed)?
+
 ### Q6 – Long-running tasks and cancellation
 
 - When A2A supports non-blocking mode:
@@ -320,3 +367,9 @@ These are intentionally left undecided for future iterations.
 - If in doubt:
   - Add new items to **Open Questions** instead of making big implicit decisions.
 
+
+
+### Q8 – Split into mcp-bridge and a2a-bridge
+
+- Under which conditions does it make sense to split MCP and A2A into separate services?
+- How should shared concerns (tenant/run correlation, structured error schema, logging/tracing) be factored to avoid duplication?

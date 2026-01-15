@@ -164,6 +164,18 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
 
 ### 2.4 Execute MCP Query (`POST /sessions/{session_id}/query`)
 
+#### Guardrails and tool policy enforcement (MCP)
+
+During `POST /sessions/{session_id}/query`, the bridge applies guardrails around the model execution:
+
+1. **before_model guardrails (pipeline)** run on the input `query` (validation / normalization).
+2. MCP tool calls are protected by a **last-gate enforcement** based on the session `disallowed_tools` (supports wildcards).
+   - If blocked, the tool is **not invoked** and the API returns **HTTP 403** with `detail.code="MCP_TOOL_NOT_ALLOWED"`.
+3. **after_model guardrails (pipeline)** run on the model output (post-check / redaction).
+
+All guardrail decisions and tool blocks are logged with `tenant_id`, `run_id`, `session_id`, and `tool_name` for correlation.
+
+
 **Body:** `QueryRequest`:
 
 ```json

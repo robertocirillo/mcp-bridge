@@ -238,6 +238,8 @@ curl -X POST "http://localhost:8000/sessions" \
         "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
       }
     },
+    "disallowed_tools": ["filesystem.read_file"],
+
     "max_steps": 30,
     "verbose": false
   }'
@@ -552,6 +554,42 @@ Basic health check.
 (OpenAPI schema at /openapi.json, Swagger UI at /docs.)
 
 ---
+
+---
+
+## 🛡️ Guardrails (MCP)
+
+mcp-bridge enforces **MCP tool policy** and provides lightweight **guardrail hooks** around the model call.
+
+### 1) Session-scoped tool policy (denylist)
+
+During session creation you can pass:
+
+- `disallowed_tools`: list of tool names or wildcard patterns (e.g. `filesystem.*`)
+
+This is enforced as a **last gate** in the MCP tool dispatch path: if a tool is blocked it is **never invoked** and the API returns **403** with a structured error code:
+
+- `MCP_TOOL_NOT_ALLOWED`
+
+Example:
+
+```json
+{
+  "llm_provider": { "provider": "openai", "model": "gpt-4.1-mini" },
+  "mcp_servers": { "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] } },
+  "disallowed_tools": ["filesystem.read_file", "filesystem.*"]
+}
+```
+
+### 2) before_model / after_model hooks (pipeline)
+
+The MCP query execution supports a **pipeline** of guardrails:
+
+- `before_model`: validate and optionally normalize the input query (ALLOW / MODIFY / BLOCK)
+- `after_model`: post-check or redact/modify the model output (ALLOW / MODIFY / BLOCK)
+
+These hooks are implemented in the bridge as a lightweight extension point (sync or async),
+so you can later plug in an external **bias/guardrails detection service** without changing the MCP execution contract.
 
 ## 🧪 Testing
 
