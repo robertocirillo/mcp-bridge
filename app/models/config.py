@@ -51,6 +51,30 @@ class SandboxOptions(BaseModel):
 class PiiSettings(BaseModel):
     """PII guardrail settings."""
 
+    # INPUT (before_model)
+    # Security-default: block PII before it reaches any remote model.
+    # NOTE: this is a behavior change vs older versions that only guarded output.
+    input_mode: Literal["off", "redact", "block"] = Field(
+        default="block",
+        description=(
+            "How to handle PII detected in user input before the model is called. "
+            "'off' disables input scanning; "
+            "'redact' replaces detected entities with placeholders; "
+            "'block' raises a structured GuardrailViolationError(code='PII_DETECTED', phase='before_model')."
+        ),
+    )
+
+    # OUTPUT (after_model)
+    # Backward-compatible field name: keep `mode` as the output behavior.
+    # Optional alias: `output_mode` (if provided, it overrides `mode`).
+    output_mode: Optional[Literal["redact", "block"]] = Field(
+        default=None,
+        description=(
+            "Alias for output PII handling. If provided, it overrides `mode`. "
+            "Kept for readability without breaking existing clients."
+        ),
+    )
+
     mode: Literal["redact", "block"] = Field(
         default="redact",
         description=(
@@ -59,6 +83,11 @@ class PiiSettings(BaseModel):
             "'block' raises a structured GuardrailViolationError(code='PII_DETECTED')."
         ),
     )
+
+    def model_post_init(self, __context):
+        """Keep backward compatibility while supporting the `output_mode` alias."""
+        if self.output_mode is not None:
+            self.mode = self.output_mode
 
 
 class GuardrailsSettings(BaseModel):

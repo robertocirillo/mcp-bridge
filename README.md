@@ -202,6 +202,46 @@ MULTI_TENANCY__REQUIRE_HEADER=true
 * X-Run-Id: optional correlation ID for a specific run/flow in the visual builder
 X-Run-Id is not used for authorization, only for logging / correlation / future metadata enrichment.
 
+### Guardrails (PII)
+
+mcp-bridge supports LangChain-style **guardrails** executed:
+
+- **before_model**: validates / rewrites user input before calling the LLM
+- **after_model**: validates / rewrites the LLM output before returning the response
+
+The current MVP guardrail detects PII using deterministic regex patterns (email/phone/IBAN).
+
+#### Session-scoped config
+
+These settings are part of the session creation payload (nested under `guardrails.pii`):
+
+- `guardrails.pii.input_mode`: how to handle PII in **user input** (before_model)
+  - `off`: disable input scanning
+  - `redact`: replace detected entities with placeholders
+  - `block`: **default**. Reject the request with `detail.code="PII_DETECTED"`
+- `guardrails.pii.mode`: how to handle PII in **model output** (after_model)
+  - `redact`: **default**. Replace detected entities with placeholders
+  - `block`: reject the request with `detail.code="PII_DETECTED"`
+
+Optional alias (no breaking changes):
+
+- `guardrails.pii.output_mode`: if provided, it overrides `guardrails.pii.mode`
+
+#### Example: create session with input PII blocking
+
+```json
+{
+  "llm_provider": {"provider": "ollama", "model": "mistral"},
+  "mcp_servers": {},
+  "guardrails": {
+    "pii": {
+      "input_mode": "block",
+      "mode": "redact"
+    }
+  }
+}
+```
+
 ## 📚 Usage: MCP Session & Query
 
 ### 1. Create an MCP Session

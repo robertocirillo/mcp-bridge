@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 import uuid
 
 from app.core.mcp_wrapper import MCPWrapper
-from app.core.exceptions import SessionNotFoundError, MaxSessionsExceededError
+from app.core.exceptions import SessionNotFoundError, MaxSessionsExceededError, ConfigurationError
 from app.models.config import SessionConfig
 from config import settings
 
@@ -117,6 +117,17 @@ class SessionManager:
 
                 # Set context for guardrails/logging
                 wrapper.set_context(tenant_id=tenant_id, run_id=run_id, session_id=session_id)
+
+                # Guardrails: session-scoped PII settings
+                # - output: config.guardrails.pii.mode (backward-compatible)
+                # - input: config.guardrails.pii.input_mode (security-default: block)
+                try:
+                    pii_cfg = getattr(getattr(config, "guardrails", None), "pii", None)
+                    if pii_cfg is not None:
+                        wrapper.set_pii_mode(getattr(pii_cfg, "mode", None))
+                        wrapper.set_pii_input_mode(getattr(pii_cfg, "input_mode", None))
+                except Exception as e:
+                    raise ConfigurationError(f"Invalid guardrails configuration: {e}")
 
                 # Initialize the wrapper
                 await wrapper.initialize()
