@@ -55,7 +55,15 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
   "sandbox": false,
   "sandbox_options": {},
   "disallowed_tools": [],
-  "use_server_manager": false
+  "use_server_manager": false,
+  "guardrails": {
+    "enabled": true,
+    "pii": {
+      "mode": "redact",
+      "input_mode": "block",
+      "output_mode": "redact"
+    }
+  }
 }
 ```
 
@@ -74,13 +82,14 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
    - Calls `session_id = await session_manager.create_session(config=request, tenant_id=tenant_ctx.tenant_id, run_id=tenant_ctx.run_id)`.
 
 3. `SessionManager.create_session(...)`:
+   - Resolves and applies **session-scoped guardrails** (LangChain-style `before_model` / `after_model`) on the `MCPWrapper`.
+     - `guardrails.enabled=false` disables all guardrails for the session.
+     - For PII, `mode` is a shared default and `input_mode` / `output_mode` can override per phase.
+
    - Acquires `self._lock`.
    - Checks `len(self._sessions) < settings.MAX_ACTIVE_SESSIONS`, otherwise raises `MaxSessionsExceededError`.
    - Generates a new `session_id = uuid4()`.
    - Instantiates `MCPWrapper` with LLM and MCP config.
-   - Applies session-scoped guardrails configuration:
-     - `wrapper.set_pii_input_mode(config.guardrails.pii.input_mode)` for **before_model**
-     - `wrapper.set_pii_mode(config.guardrails.pii.mode)` for **after_model**
    - Calls `await wrapper.initialize()`:
      - `mcp-use` initializes client, sessions, and tools.
      - If `mcp_servers` empty, `mcp-use` logs warnings but continues.
@@ -183,6 +192,7 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
 2. Route:
    - Retrieves session via `await session_manager.get_session(session_id)` (which already enforces tenant ownership in newer versions).
    - Extracts `wrapper = session_data.wrapper`.
+   - Applies **before_model guardrails** (e.g. input PII) inside `wrapper.run_query(...)` before calling the model.
    - `start_time = loop.time()`.
    - Calls:
 
@@ -194,15 +204,7 @@ result = await wrapper.run_query(
 )
 ```
 
-   - Inside `MCPWrapper.run_query(...)` the guardrails pipeline is applied:
-     - **before_model**: operates on `ctx.query` (e.g., PII input `off|redact|block`)
-     - **after_model**: operates on the model output string (e.g., PII output `redact|block`)
-   - If a guardrail blocks, the route returns a structured 403 with:
-     - `detail.code` (e.g. `PII_DETECTED`)
-     - `detail.phase` (`before_model` / `after_model`)
-     - `detail.rule` (e.g. `pii`)
-     - `detail.details` (types/counts/mode)
-
+   - Applies **after_model guardrails** (e.g. output PII) inside `wrapper.run_query(...)` before returning the response.
    - `end_time = loop.time()`.
    - `session_data.register_query()` (increments `query_count`).
    - Reads `steps_used = wrapper.steps_used`.
@@ -231,6 +233,7 @@ result = await wrapper.run_query(
 **Failure modes:**
 
 - Session not found or tenant mismatch → HTTP 404.
+- Input guardrail violations (e.g. `PII_DETECTED` in `before_model` with `block`) → HTTP 403 with structured `detail`.
 - `ConfigurationError` → HTTP 400.
 - `MCPWrapperError` → HTTP 502.
 - Unexpected errors → HTTP 500.

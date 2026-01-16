@@ -142,6 +142,87 @@ E2B_API_KEY="your_key_here"
 - **Anthropic**: Claude models  
 - **Ollama**: Local models  
 
+
+### Guardrails (session-scoped)
+
+mcp-bridge supports **LangChain-style guardrails** applied in two phases:
+
+- **before_model**: runs on the user input before calling the model (safer for remote LLMs)
+- **after_model**: runs on the model output before returning it to the client
+
+Guardrails are configured **per session** via the `guardrails` object in `POST /sessions`.
+
+#### Global enable/disable
+
+You can disable *all* guardrails for a session:
+
+```json
+{
+  "guardrails": { "enabled": false }
+}
+```
+
+If `enabled=false`, no `before_model` / `after_model` guardrail runs.
+
+#### PII guardrail (email / phone / IBAN)
+
+PII is controlled by `guardrails.pii` and supports **Strategy 3**:
+
+- `mode` is a **shared default** for both input and output
+- `input_mode` overrides only input (`before_model`)
+- `output_mode` overrides only output (`after_model`)
+
+Allowed values:
+- `off`: disable the PII guardrail for that phase
+- `redact`: replace detected entities with placeholders (e.g. `[MCP_BRIDGE_REDACTED_EMAIL]`)
+- `block`: block the request (HTTP 403) with structured error `detail.code="PII_DETECTED"`
+
+**Examples**
+
+Redact both input and output (shared default):
+
+```json
+{
+  "guardrails": { "pii": { "mode": "redact" } }
+}
+```
+
+Block input but redact output:
+
+```json
+{
+  "guardrails": {
+    "pii": { "input_mode": "block", "output_mode": "redact" }
+  }
+}
+```
+
+Disable only output PII (input still uses its default / shared mode):
+
+```json
+{
+  "guardrails": { "pii": { "output_mode": "off" } }
+}
+```
+
+**PII block error shape**
+
+When input PII is blocked, the API responds with HTTP 403 and a structured payload under `detail`, for example:
+
+```json
+{
+  "detail": {
+    "code": "PII_DETECTED",
+    "message": "PII detected in user input",
+    "operation": "execute_query",
+    "phase": "before_model",
+    "rule": "pii",
+    "details": { "types": ["email", "iban"], "mode": "block" }
+  }
+}
+```
+
+
 ### Multi-tenancy
 mcp-bridge supports optional multi-tenancy, implemented in a simple, header-based way.
 
@@ -201,46 +282,6 @@ MULTI_TENANCY__REQUIRE_HEADER=true
 * X-Tenant-Id is required on relevant endpoints.
 * X-Run-Id: optional correlation ID for a specific run/flow in the visual builder
 X-Run-Id is not used for authorization, only for logging / correlation / future metadata enrichment.
-
-### Guardrails (PII)
-
-mcp-bridge supports LangChain-style **guardrails** executed:
-
-- **before_model**: validates / rewrites user input before calling the LLM
-- **after_model**: validates / rewrites the LLM output before returning the response
-
-The current MVP guardrail detects PII using deterministic regex patterns (email/phone/IBAN).
-
-#### Session-scoped config
-
-These settings are part of the session creation payload (nested under `guardrails.pii`):
-
-- `guardrails.pii.input_mode`: how to handle PII in **user input** (before_model)
-  - `off`: disable input scanning
-  - `redact`: replace detected entities with placeholders
-  - `block`: **default**. Reject the request with `detail.code="PII_DETECTED"`
-- `guardrails.pii.mode`: how to handle PII in **model output** (after_model)
-  - `redact`: **default**. Replace detected entities with placeholders
-  - `block`: reject the request with `detail.code="PII_DETECTED"`
-
-Optional alias (no breaking changes):
-
-- `guardrails.pii.output_mode`: if provided, it overrides `guardrails.pii.mode`
-
-#### Example: create session with input PII blocking
-
-```json
-{
-  "llm_provider": {"provider": "ollama", "model": "mistral"},
-  "mcp_servers": {},
-  "guardrails": {
-    "pii": {
-      "input_mode": "block",
-      "mode": "redact"
-    }
-  }
-}
-```
 
 ## 📚 Usage: MCP Session & Query
 
