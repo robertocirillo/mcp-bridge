@@ -118,16 +118,52 @@ class SessionManager:
                 # Set context for guardrails/logging
                 wrapper.set_context(tenant_id=tenant_id, run_id=run_id, session_id=session_id)
 
-                # Guardrails: session-scoped PII settings
-                # - output: config.guardrails.pii.mode (backward-compatible)
-                # - input: config.guardrails.pii.input_mode (security-default: block)
-                try:
-                    pii_cfg = getattr(getattr(config, "guardrails", None), "pii", None)
-                    if pii_cfg is not None:
-                        wrapper.set_pii_mode(getattr(pii_cfg, "mode", None))
-                        wrapper.set_pii_input_mode(getattr(pii_cfg, "input_mode", None))
-                except Exception as e:
-                    raise ConfigurationError(f"Invalid guardrails configuration: {e}")
+                # -----------------------------
+                # Session-scoped guardrails
+                # -----------------------------
+                # Global switch: enable/disable all guardrails for this session.
+                guardrails_cfg = getattr(config, "guardrails", None)
+                if guardrails_cfg is not None:
+                    try:
+                        enabled = getattr(guardrails_cfg, "enabled", True)
+                        if hasattr(wrapper, "set_guardrails_enabled"):
+                            wrapper.set_guardrails_enabled(bool(enabled))
+
+                        # PII resolution (Strategy 3):
+                        # - `mode` is a shared default for both input/output when explicitly provided.
+                        # - `input_mode` / `output_mode` are per-phase overrides.
+                        pii_cfg = getattr(guardrails_cfg, "pii", None)
+                        if pii_cfg is not None and enabled:
+                            fields_set = getattr(pii_cfg, "model_fields_set", set()) or set()
+
+                            shared_mode = getattr(pii_cfg, "mode", None)
+                            input_mode = getattr(pii_cfg, "input_mode", None)
+                            output_mode = getattr(pii_cfg, "output_mode", None)
+
+                            # Input effective mode
+                            if "input_mode" in fields_set:
+                                effective_input_mode = input_mode
+                            elif "mode" in fields_set and shared_mode is not None:
+                                effective_input_mode = shared_mode
+                            else:
+                                # Use default (security-default: block)
+                                effective_input_mode = input_mode
+
+                            # Output effective mode
+                            if "output_mode" in fields_set and output_mode is not None:
+                                effective_output_mode = output_mode
+                            elif "mode" in fields_set and shared_mode is not None:
+                                effective_output_mode = shared_mode
+                            else:
+                                # Use default (backward-compatible: redact)
+                                effective_output_mode = shared_mode
+
+                            if hasattr(wrapper, "set_pii_input_mode"):
+                                wrapper.set_pii_input_mode(effective_input_mode)
+                            if hasattr(wrapper, "set_pii_mode"):
+                                wrapper.set_pii_mode(effective_output_mode)
+                    except Exception as e:
+                        raise ConfigurationError(f"Invalid guardrails configuration: {e}")
 
                 # Initialize the wrapper
                 await wrapper.initialize()

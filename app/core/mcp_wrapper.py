@@ -59,7 +59,7 @@ def make_pii_after_model_guardrail(*, mode: str = "redact"):
     """
 
     normalized_mode = (mode or "redact").strip().lower()
-    if normalized_mode not in {"redact", "block"}:
+    if normalized_mode not in {"off", "redact", "block"}:
         # Keep deterministic behavior; treat unknown modes as redact.
         normalized_mode = "redact"
 
@@ -72,6 +72,9 @@ def make_pii_after_model_guardrail(*, mode: str = "redact"):
         present = [k for k, v in counts.items() if v > 0]
 
         if not present:
+            return output
+
+        if normalized_mode == "off":
             return output
 
         if normalized_mode == "block":
@@ -101,22 +104,25 @@ def make_pii_before_model_guardrail(*, mode: str = "block"):
 
     Modes:
       - off: no-op
-      - redact: redact PII in ctx.query (using the same placeholders as redact_pii)
-      - block: raise GuardrailViolationError(code='PII_DETECTED', phase='before_model')
+      - redact: replace detected entities in ctx.query with placeholders
+      - block (default): raise GuardrailViolationError(code=PII_DETECTED, phase=before_model)
     """
 
     normalized_mode = (mode or "block").strip().lower()
     if normalized_mode not in {"off", "redact", "block"}:
-        # Security-default: treat unknown as block.
         normalized_mode = "block"
 
-    async def _guardrail(ctx: "GuardrailContext") -> "GuardrailContext":
-        query = (getattr(ctx, "query", None) or "")
-
-        if normalized_mode == "off" or not query:
+    def _guardrail(ctx: "GuardrailContext") -> "GuardrailContext":
+        # No-op when disabled.
+        if normalized_mode == "off":
             return ctx
 
-        counts = _detect_pii(query)
+        query = getattr(ctx, "query", None)
+        if not query:
+            return ctx
+
+        text = str(query)
+        counts = _detect_pii(text)
         present = [k for k, v in counts.items() if v > 0]
         if not present:
             return ctx
@@ -138,7 +144,7 @@ def make_pii_before_model_guardrail(*, mode: str = "block"):
             )
 
         # redact
-        redacted = redact_pii(query)
+        redacted = redact_pii(text)
         return GuardrailContext(
             tenant_id=getattr(ctx, "tenant_id", None),
             run_id=getattr(ctx, "run_id", None),
@@ -332,20 +338,22 @@ class MCPWrapper:
         self.before_model_guardrails: List[Callable[[GuardrailContext], Union[GuardrailContext, Awaitable[GuardrailContext]]]] = []
         self.after_model_guardrails: List[Callable[[GuardrailContext, Any], Union[Any, Awaitable[Any]]]] = []
 
+        # Global guardrails switch (session-scoped). If disabled, no guardrail will run.
+        self.guardrails_enabled: bool = True
+
         # Optional per-guardrail timeout to avoid hanging requests.
         # When set, a timeout raises GuardrailViolationError(code=MCP_GUARDRAIL_TIMEOUT).
         self.guardrail_timeout_seconds: Optional[float] = None
 
-        # Local MVP guardrails (LangChain "after" pattern): configurable PII handling.
-        # Default is backward compatible: redact.
+        # Local MVP guardrails (LangChain before/after pattern): configurable PII handling.
+        # Defaults:
+        # - input (before_model): block (security default)
+        # - output (after_model): redact (backward-compatible)
         self.pii_mode: str = "redact"
-        self._pii_after_model_guardrail = None
-        self.set_pii_mode(self.pii_mode)
-
-        # Local MVP guardrails (LangChain "before" pattern): configurable PII handling on INPUT.
-        # Security-default: block input PII before it reaches any remote model.
         self.pii_input_mode: str = "block"
+        self._pii_after_model_guardrail = None
         self._pii_before_model_guardrail = None
+        self.set_pii_mode(self.pii_mode)
         self.set_pii_input_mode(self.pii_input_mode)
 
         # Validate and import dependencies
@@ -411,11 +419,22 @@ class MCPWrapper:
         """
 
         normalized_mode = (mode or "redact").strip().lower()
-        if normalized_mode not in {"redact", "block"}:
+        if normalized_mode not in {"off", "redact", "block"}:
             normalized_mode = "redact"
 
         # Persist the selected mode (useful for debugging and tests).
         self.pii_mode = normalized_mode
+
+        # Disable (uninstall) the guardrail when mode is off.
+        if normalized_mode == "off":
+            old_gr = getattr(self, "_pii_after_model_guardrail", None)
+            if old_gr is not None and getattr(self, "after_model_guardrails", None) is not None:
+                try:
+                    self.after_model_guardrails = [gr for gr in self.after_model_guardrails if gr is not old_gr]
+                except Exception:
+                    pass
+            self._pii_after_model_guardrail = None
+            return
 
         new_gr = make_pii_after_model_guardrail(mode=normalized_mode)
 
@@ -440,23 +459,30 @@ class MCPWrapper:
     def set_pii_input_mode(self, mode: Optional[str]) -> None:
         """Configure session-scoped PII handling for the local before_model guardrail.
 
-        Security-default: if mode is missing/invalid, defaults to "block".
-
         Modes:
-          - off: disable input scanning
-          - redact: redact PII in ctx.query
-          - block: raise GuardrailViolationError(code='PII_DETECTED', phase='before_model')
+          - off: no-op (uninstall guardrail)
+          - redact: rewrite ctx.query by replacing PII with placeholders
+          - block: raise GuardrailViolationError(code=PII_DETECTED, phase=before_model)
         """
 
         normalized_mode = (mode or "block").strip().lower()
         if normalized_mode not in {"off", "redact", "block"}:
             normalized_mode = "block"
 
-        # Persist the selected mode (useful for debugging and tests).
         self.pii_input_mode = normalized_mode
 
-        new_gr = make_pii_before_model_guardrail(mode=normalized_mode)
+        # Disable (uninstall) when off.
+        if normalized_mode == "off":
+            old_gr = getattr(self, "_pii_before_model_guardrail", None)
+            if old_gr is not None and getattr(self, "before_model_guardrails", None) is not None:
+                try:
+                    self.before_model_guardrails = [gr for gr in self.before_model_guardrails if gr is not old_gr]
+                except Exception:
+                    pass
+            self._pii_before_model_guardrail = None
+            return
 
+        new_gr = make_pii_before_model_guardrail(mode=normalized_mode)
         old_gr = getattr(self, "_pii_before_model_guardrail", None)
         if not hasattr(self, "before_model_guardrails") or self.before_model_guardrails is None:
             self.before_model_guardrails = []
@@ -474,7 +500,17 @@ class MCPWrapper:
 
         self._pii_before_model_guardrail = new_gr
 
+    def set_guardrails_enabled(self, enabled: bool) -> None:
+        """Enable/disable ALL guardrails for this wrapper (session-scoped).
+
+        When disabled, no before_model/after_model guardrail is executed.
+        """
+        self.guardrails_enabled = bool(enabled)
+
     async def _run_before_model_guardrails(self, ctx: GuardrailContext) -> GuardrailContext:
+        if getattr(self, "guardrails_enabled", True) is False:
+            return ctx
+
         timeout = getattr(self, "guardrail_timeout_seconds", None)
         for gr in self.before_model_guardrails:
             try:
@@ -496,6 +532,9 @@ class MCPWrapper:
         return ctx
 
     async def _run_after_model_guardrails(self, ctx: GuardrailContext, output: Any) -> Any:
+        if getattr(self, "guardrails_enabled", True) is False:
+            return output
+
         timeout = getattr(self, "guardrail_timeout_seconds", None)
         for gr in self.after_model_guardrails:
             try:

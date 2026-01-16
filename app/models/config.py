@@ -1,5 +1,4 @@
-"""
-Pydantic models for configurations
+"""Pydantic models for configurations
 """
 
 from __future__ import annotations
@@ -49,49 +48,60 @@ class SandboxOptions(BaseModel):
 
 
 class PiiSettings(BaseModel):
-    """PII guardrail settings."""
+    """PII guardrail settings.
 
-    # INPUT (before_model)
-    # Security-default: block PII before it reaches any remote model.
-    # NOTE: this is a behavior change vs older versions that only guarded output.
+    LangChain-style phases:
+    - before_model: input handling ("input_mode")
+    - after_model: output handling ("output_mode")
+
+    Strategy 3:
+    - "mode" is a SHARED DEFAULT for both phases.
+    - "input_mode" and "output_mode" are explicit per-phase overrides.
+    """
+
     input_mode: Literal["off", "redact", "block"] = Field(
         default="block",
         description=(
             "How to handle PII detected in user input before the model is called. "
+            "This is a phase-specific override. "
             "'off' disables input scanning; "
             "'redact' replaces detected entities with placeholders; "
             "'block' raises a structured GuardrailViolationError(code='PII_DETECTED', phase='before_model')."
         ),
     )
 
-    # OUTPUT (after_model)
-    # Backward-compatible field name: keep `mode` as the output behavior.
-    # Optional alias: `output_mode` (if provided, it overrides `mode`).
-    output_mode: Optional[Literal["redact", "block"]] = Field(
+    output_mode: Optional[Literal["off", "redact", "block"]] = Field(
         default=None,
         description=(
-            "Alias for output PII handling. If provided, it overrides `mode`. "
-            "Kept for readability without breaking existing clients."
+            "Phase-specific override for output PII handling. "
+            "If provided, it takes precedence over `mode` for output."
         ),
     )
 
-    mode: Literal["redact", "block"] = Field(
+    mode: Literal["off", "redact", "block"] = Field(
         default="redact",
         description=(
-            "How to handle PII detected in model output. "
+            "Shared default PII handling strategy. "
+            "If provided, it applies to BOTH input (before_model) and output (after_model) unless overridden by "
+            "`input_mode` or `output_mode`. "
+            "Allowed values: "
+            "'off' disables the PII guardrail for both phases; "
             "'redact' replaces detected entities with placeholders; "
             "'block' raises a structured GuardrailViolationError(code='PII_DETECTED')."
         ),
     )
 
-    def model_post_init(self, __context):
-        """Keep backward compatibility while supporting the `output_mode` alias."""
-        if self.output_mode is not None:
-            self.mode = self.output_mode
-
 
 class GuardrailsSettings(BaseModel):
     """Session-scoped guardrails configuration."""
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Global switch to enable/disable ALL guardrails for the session. "
+            "If false, no before_model/after_model guardrail will run."
+        ),
+    )
 
     pii: PiiSettings = Field(
         default_factory=PiiSettings,
@@ -103,9 +113,6 @@ class SessionConfig(BaseModel):
     """Configuration to create a new session"""
     llm_provider: LLMProvider
 
-    # Allow sessions without MCP servers:
-    # - request can omit "mcp_servers"
-    # - or send "mcp_servers": {}
     mcp_servers: Dict[str, MCPServerConfig] = Field(
         default_factory=dict,
         description="Optional MCP servers configuration. Can be empty for LLM-only sessions.",
@@ -114,8 +121,6 @@ class SessionConfig(BaseModel):
     max_steps: int = Field(30, gt=0, le=100, description="maximum number of steps")
     use_server_manager: bool = Field(False, description="Use the server manager for automatic selection")
 
-    # Tool policy (session-scoped)
-    # Supports wildcards (e.g. "filesystem.*") if you enforce with fnmatch in wrapper.
     disallowed_tools: Optional[List[str]] = Field(None, description="List of disallowed tools (supports wildcards)")
 
     sandbox: bool = Field(False, description="Enable E2B sandbox")
@@ -123,8 +128,6 @@ class SessionConfig(BaseModel):
 
     verbose: bool = Field(False, description="Enable verbose logging")
 
-    # Session-scoped guardrails configuration (LangChain-style before/after hooks).
-    # Backward compatible: if omitted, defaults are applied.
     guardrails: GuardrailsSettings = Field(
         default_factory=GuardrailsSettings,
         description="Guardrails configuration (PII, bias, etc.)",
@@ -132,23 +135,16 @@ class SessionConfig(BaseModel):
 
     def model_post_init(self, __context):
         """post-initialization validation"""
-        # use default sandbox options if sandbox is enabled but no options provided
         if self.sandbox and not self.sandbox_options:
             self.sandbox_options = SandboxOptions()
 
 
-# -----------------------------
-# Multi-tenancy (settings)
-# -----------------------------
 class MultiTenancySettings(BaseModel):
     enabled: bool = False
     require_header: bool = False
     default_tenant_id: Optional[str] = "default"
 
 
-# -----------------------------
-# A2A configuration models
-# -----------------------------
 class A2AAuthConfig(BaseModel):
     type: Literal["none", "api_key_header", "bearer_token"] = "none"
     header_name: Optional[str] = None
@@ -159,15 +155,9 @@ class A2AAgentConfig(BaseModel):
     enabled: bool = True
     label: Optional[str] = None
     description: Optional[str] = None
-
-    # full URL to Agent Card (used by a2a-sdk)
     card_url: str
-
-    # legacy shim field (optional; avoid relying on it in SDK mode)
     runtime_url: Optional[str] = None
-
     timeout_seconds: int = 60
-
     auth: Optional[A2AAuthConfig] = None
     extra_headers: Dict[str, str] = Field(default_factory=dict)
 
