@@ -205,6 +205,18 @@ Disable only output PII (input still uses its default / shared mode):
 }
 ```
 
+
+#### PII redaction on MCP tool results (MVP)
+
+When the agent calls MCP tools (e.g. filesystem), mcp-bridge wraps tool invocations and can apply **PII redaction to tool outputs** *before* they are incorporated into the agent context / model output.
+
+Current MVP behavior:
+- Controlled by the same session switches:
+  - `guardrails.enabled=false` → no tool-result processing
+  - PII output mode `redact` → recursively redact strings in tool outputs
+  - PII output mode `off`/`block` → no tool-result processing (MVP does not block tool results)
+- The structure of the tool result is preserved (dict/list/tuple), only string values are redacted.
+
 **PII block error shape**
 
 When input PII is blocked, the API responds with HTTP 403 and a structured payload under `detail`, for example:
