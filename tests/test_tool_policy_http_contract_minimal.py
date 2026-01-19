@@ -76,12 +76,14 @@ def _build_test_app(monkeypatch):
     return TestClient(app), mgr
 
 
-def _create_session(client, disallowed_tools):
+def _create_session(client, disallowed_tools, guardrails: dict | None = None):
     payload = {
         "llm_provider": {"provider": "ollama", "model": "dummy", "temperature": 0},
         "mcp_servers": {},
         "disallowed_tools": disallowed_tools,
     }
+    if guardrails is not None:
+        payload["guardrails"] = guardrails
     r = client.post("/sessions", json=payload)
     assert r.status_code == 200, r.text
     return r.json()["session_id"]
@@ -95,6 +97,28 @@ def test_http_contract_disallowed_tools_returns_structured_403(monkeypatch):
     client, _mgr = _build_test_app(monkeypatch)
 
     session_id = _create_session(client, ["fake_tool"])
+    r = _execute_query(client, session_id, "please call the tool")
+
+    assert r.status_code == 403
+    detail = r.json()["detail"]
+
+    assert detail["code"] == "MCP_TOOL_NOT_ALLOWED"
+    assert detail["operation"] == "execute_query"
+    assert detail["session_id"] == session_id
+    assert detail.get("tool_name") == "fake_tool"
+
+
+
+def test_http_contract_guardrails_global_off_does_not_bypass_tool_policy(monkeypatch):
+    """Contract: guardrails.enabled=false must NOT bypass disallowed_tools enforcement."""
+
+    client, _mgr = _build_test_app(monkeypatch)
+
+    session_id = _create_session(
+        client,
+        ["fake_tool"],
+        guardrails={"enabled": False},
+    )
     r = _execute_query(client, session_id, "please call the tool")
 
     assert r.status_code == 403

@@ -72,6 +72,50 @@ def _redact_pii_in_obj(value: Any) -> Any:
     return value
 
 
+def _detect_pii_in_obj(value: Any) -> Dict[str, int]:
+    """Recursively detect PII counts in nested objects.
+
+    Used for tool-result blocking when pii_mode == 'block'.
+    Mirrors `_redact_pii_in_obj` traversal but aggregates counts.
+
+    NOTE: For determinism and stability, we only scan *string values*.
+    """
+
+    counts = {"email": 0, "phone": 0, "iban": 0}
+
+    if value is None:
+        return counts
+
+    if isinstance(value, str):
+        found = _detect_pii(value)
+        for k in counts:
+            counts[k] += int(found.get(k, 0) or 0)
+        return counts
+
+    if isinstance(value, list):
+        for v in value:
+            found = _detect_pii_in_obj(v)
+            for k in counts:
+                counts[k] += int(found.get(k, 0) or 0)
+        return counts
+
+    if isinstance(value, tuple):
+        for v in value:
+            found = _detect_pii_in_obj(v)
+            for k in counts:
+                counts[k] += int(found.get(k, 0) or 0)
+        return counts
+
+    if isinstance(value, dict):
+        for v in value.values():
+            found = _detect_pii_in_obj(v)
+            for k in counts:
+                counts[k] += int(found.get(k, 0) or 0)
+        return counts
+
+    return counts
+
+
 def make_pii_after_model_guardrail(*, mode: str = "redact"):
     """Factory for an after_model guardrail that detects/redacts PII.
 
@@ -211,15 +255,17 @@ class GuardrailViolationError(Exception):
         tenant_id: Optional[str] = None,
         run_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        tool_name: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None,
     ):
         self.code = code
         self.message = message
-        self.phase = phase  # "before_model" | "after_model"
+        self.phase = phase  # "before_model" | "after_model" | "tool_result" (etc)
         self.rule = rule
         self.tenant_id = tenant_id
         self.run_id = run_id
         self.session_id = session_id
+        self.tool_name = tool_name
         self.details = details or {}
         super().__init__(message)
 
@@ -532,25 +578,49 @@ class MCPWrapper:
         self.guardrails_enabled = bool(enabled)
 
     def _wrap_tool_result(self, tool_name: str, result: Any) -> Any:
-        """Apply minimal guardrails to tool results.
-
-        MVP: redact PII inside tool outputs before they can be incorporated
-        into the model context / final response.
+        """Apply guardrails to tool results.
 
         Behavior is controlled by the same session-scoped switches:
         - guardrails_enabled = False -> no-op
-        - pii_mode == 'redact' -> redact strings recursively
-        - pii_mode in {'off', 'block'} -> no-op (MVP intentionally avoids blocking tool results)
+        - pii_mode == 'redact' -> redact strings recursively (PII placeholders)
+        - pii_mode == 'block' -> raise GuardrailViolationError(code=PII_DETECTED)
+        - pii_mode == 'off' -> no-op
+
+        NOTE: Tool policy enforcement (`disallowed_tools`) is enforced *before*
+        this method and must NOT depend on `guardrails_enabled`.
         """
 
         if getattr(self, "guardrails_enabled", True) is False:
             return result
 
-        # Reuse the output-mode strategy for tool results.
-        if getattr(self, "pii_mode", "redact") != "redact":
+        mode = getattr(self, "pii_mode", "redact")
+
+        if mode == "redact":
+            return _redact_pii_in_obj(result)
+
+        if mode == "block":
+            counts = _detect_pii_in_obj(result)
+            present = [k for k, v in counts.items() if int(v or 0) > 0]
+            if present:
+                raise GuardrailViolationError(
+                    code="PII_DETECTED",
+                    message="PII detected in tool result",
+                    phase="tool_result",
+                    rule="pii",
+                    tenant_id=getattr(self, "tenant_id", None),
+                    run_id=getattr(self, "run_id", None),
+                    session_id=getattr(self, "session_id", None),
+                    tool_name=tool_name,
+                    details={
+                        "types": present,
+                        "counts": counts,
+                        "mode": "block",
+                    },
+                )
             return result
 
-        return _redact_pii_in_obj(result)
+        # off (or any other mode): no-op
+        return result
 
     async def _run_before_model_guardrails(self, ctx: GuardrailContext) -> GuardrailContext:
         if getattr(self, "guardrails_enabled", True) is False:

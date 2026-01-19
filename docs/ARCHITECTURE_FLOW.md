@@ -85,7 +85,10 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
    - Resolves and applies **session-scoped guardrails** (LangChain-style `before_model` / `after_model`) on the `MCPWrapper`.
      - `guardrails.enabled=false` disables all guardrails for the session.
      - For PII, `mode` is a shared default and `input_mode` / `output_mode` can override per phase.
-     - **MVP:** when PII output handling is set to `redact`, the same redaction is also applied to **MCP tool results** before they are fed back into the agent context.
+     - PII output handling is also applied to **MCP tool results** before they are fed back into the agent context:
+       - `output_mode=redact` => redact string values recursively
+       - `output_mode=block` => block the request (HTTP 403) if PII is detected in tool results
+       - `output_mode=off` or `guardrails.enabled=false` => no tool-result processing (tool policy is still enforced)
 
 
    - Acquires `self._lock`.
@@ -207,10 +210,12 @@ result = await wrapper.run_query(
 ```
 
    - Applies **after_model guardrails** (e.g. output PII) inside `wrapper.run_query(...)` before returning the response.
-   - **MVP:** MCP tool calls are proxied so that:
-     - tool policy (`disallowed_tools`) is enforced **before** each tool execution
-     - tool results can be post-processed (e.g. PII redaction) **before** they are incorporated into the agent run
-     - tool-result post-processing runs only when `guardrails.enabled=true` and PII output mode resolves to `redact`
+   - MCP tool calls are proxied so that:
+     - tool policy (`disallowed_tools`) is enforced **before** each tool execution (independent of `guardrails.enabled`)
+     - tool results can be post-processed **before** they are incorporated into the agent run
+       - `guardrails.enabled=false` or PII `output_mode=off` => no tool-result processing
+       - PII `output_mode=redact` => recursively redact string values
+       - PII `output_mode=block` => block the request with HTTP 403 (`detail.code=PII_DETECTED`, `phase=tool_result`)
    - `end_time = loop.time()`.
    - `session_data.register_query()` (increments `query_count`).
    - Reads `steps_used = wrapper.steps_used`.

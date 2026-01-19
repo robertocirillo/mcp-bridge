@@ -159,3 +159,32 @@ def test_http_contract_tool_result_no_redaction_when_pii_output_mode_off(monkeyp
     assert IBAN in body["result"]
     assert "[MCP_BRIDGE_REDACTED_EMAIL]" not in body["result"]
     assert "[MCP_BRIDGE_REDACTED_IBAN]" not in body["result"]
+
+
+
+def test_http_contract_tool_result_block_when_pii_output_mode_block(monkeypatch):
+    client, _mgr = _build_test_app(monkeypatch)
+
+    # Strategy 3: shared default is redact, but output_mode overrides to block.
+    session_id = _create_session(
+        client,
+        {"pii": {"mode": "redact", "output_mode": "block"}},
+    )
+    r = _execute_query(client, session_id, "please call the tool")
+
+    assert r.status_code == 403
+    detail = r.json()["detail"]
+
+    assert detail["code"] == "PII_DETECTED"
+    assert detail["operation"] == "execute_query"
+    assert detail["session_id"] == session_id
+
+    # New behavior (P1): block on tool results when output_mode resolves to block.
+    assert detail.get("phase") == "tool_result"
+    assert detail.get("rule") == "pii"
+    assert detail.get("tool_name") == "fake_tool"
+
+    # Helpful diagnostics for clients.
+    details = detail.get("details") or {}
+    assert "email" in (details.get("types") or [])
+    assert "iban" in (details.get("types") or [])

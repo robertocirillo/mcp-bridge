@@ -122,6 +122,7 @@ async def execute_query(
             operation="execute_query",
             phase=getattr(e, "phase", None),
             rule=getattr(e, "rule", None),
+            tool_name=getattr(e, "tool_name", None),
             tenant_id=tenant_ctx.tenant_id,
             run_id=tenant_ctx.run_id,
             session_id=session_id,
