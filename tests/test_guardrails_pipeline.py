@@ -21,6 +21,7 @@ def _make_wrapper(disallowed=None):
     w.before_model_guardrails = []
     w.after_model_guardrails = []
     w.guardrails_enabled = True
+    w.pii_mode = "redact"
     w._pii_after_model_guardrail = None
     w._pii_before_model_guardrail = None
     return w
@@ -204,3 +205,42 @@ async def test_pii_after_model_block_mode_raises_structured_guardrail_violation(
     assert err.phase == "after_model"
     assert err.rule == "pii"
     assert "email" in err.details.get("types", [])
+
+
+@pytest.mark.asyncio
+async def test_tool_result_pii_is_redacted_when_output_mode_is_redact():
+    w = _make_wrapper([])
+    w.guardrails_enabled = True
+    w.pii_mode = "redact"
+
+    class DummySession:
+        async def call_tool(self, name, *args, **kwargs):
+            return {
+                "text": "email a@b.com ; iban IT60X0542811101000000123456",
+                "nested": ["a@b.com"],
+            }
+
+    guarded = _GuardedMCPSession(DummySession(), w)
+    out = await guarded.call_tool("filesystem.read_file")
+
+    assert out["text"] == "email [MCP_BRIDGE_REDACTED_EMAIL] ; iban [MCP_BRIDGE_REDACTED_IBAN]"
+    assert out["nested"] == ["[MCP_BRIDGE_REDACTED_EMAIL]"]
+
+
+@pytest.mark.asyncio
+async def test_tool_result_pii_is_not_redacted_when_guardrails_disabled():
+    w = _make_wrapper([])
+    w.guardrails_enabled = False
+    w.pii_mode = "redact"
+
+    class DummySession:
+        async def call_tool(self, name, *args, **kwargs):
+            return "email a@b.com"
+
+    guarded = _GuardedMCPSession(DummySession(), w)
+    out = await guarded.call_tool("filesystem.read_file")
+
+    assert out == "email a@b.com"
+
+
+

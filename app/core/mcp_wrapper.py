@@ -50,6 +50,28 @@ def redact_pii(text: str) -> str:
     return text
 
 
+def _redact_pii_in_obj(value: Any) -> Any:
+    """Recursively redact PII in tool results.
+
+    MVP behavior:
+    - Only redacts inside string values.
+    - Preserves the original structure for lists/tuples/dicts.
+    - Other types are returned as-is.
+    """
+
+    if value is None:
+        return value
+    if isinstance(value, str):
+        return redact_pii(value)
+    if isinstance(value, list):
+        return [_redact_pii_in_obj(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_pii_in_obj(v) for v in value)
+    if isinstance(value, dict):
+        return {k: _redact_pii_in_obj(v) for k, v in value.items()}
+    return value
+
+
 def make_pii_after_model_guardrail(*, mode: str = "redact"):
     """Factory for an after_model guardrail that detects/redacts PII.
 
@@ -235,7 +257,8 @@ class _GuardedMCPSession:
 
     async def call_tool(self, name: str, *args: Any, **kwargs: Any) -> Any:
         self._wrapper._enforce_tool_allowed(name)
-        return await self._session.call_tool(name, *args, **kwargs)
+        result = await self._session.call_tool(name, *args, **kwargs)
+        return self._wrapper._wrap_tool_result(name, result)
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._session, item)
@@ -254,7 +277,8 @@ class _GuardedMCPClient:
 
     async def call_tool(self, name: str, *args: Any, **kwargs: Any) -> Any:
         self._wrapper._enforce_tool_allowed(name)
-        return await self._client.call_tool(name, *args, **kwargs)
+        result = await self._client.call_tool(name, *args, **kwargs)
+        return self._wrapper._wrap_tool_result(name, result)
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._client, item)
@@ -507,6 +531,27 @@ class MCPWrapper:
         """
         self.guardrails_enabled = bool(enabled)
 
+    def _wrap_tool_result(self, tool_name: str, result: Any) -> Any:
+        """Apply minimal guardrails to tool results.
+
+        MVP: redact PII inside tool outputs before they can be incorporated
+        into the model context / final response.
+
+        Behavior is controlled by the same session-scoped switches:
+        - guardrails_enabled = False -> no-op
+        - pii_mode == 'redact' -> redact strings recursively
+        - pii_mode in {'off', 'block'} -> no-op (MVP intentionally avoids blocking tool results)
+        """
+
+        if getattr(self, "guardrails_enabled", True) is False:
+            return result
+
+        # Reuse the output-mode strategy for tool results.
+        if getattr(self, "pii_mode", "redact") != "redact":
+            return result
+
+        return _redact_pii_in_obj(result)
+
     async def _run_before_model_guardrails(self, ctx: GuardrailContext) -> GuardrailContext:
         if getattr(self, "guardrails_enabled", True) is False:
             return ctx
@@ -721,9 +766,9 @@ class MCPWrapper:
 
         self._client = self.MCPClient(**client_kwargs)
 
-        # Strong enforcement: wrap client/session to block disallowed tools deterministically
-        if self.disallowed_tools:
-            self._client = _GuardedMCPClient(self._client, self)
+        # Wrap client/session to enforce tool policy and allow minimal tool-result guardrails.
+        # Tool policy enforcement is a no-op when disallowed_tools is None/empty.
+        self._client = _GuardedMCPClient(self._client, self)
 
         # Create the agent
         agent_kwargs = {
