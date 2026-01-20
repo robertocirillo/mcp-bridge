@@ -100,6 +100,19 @@ def make_bias_after_model_guardrail(*, mode: str = "off"):
         categories = getattr(result, "categories", None)
         findings = getattr(result, "findings", None)
 
+        # Observability: log the trigger (do not log the full output text).
+        logger.info(
+            "Guardrail triggered: bias detected in model output",
+            extra={
+                "guardrail": "bias",
+                "phase": "after_model",
+                "tenant_id": getattr(ctx, "tenant_id", None),
+                "run_id": getattr(ctx, "run_id", None),
+                "session_id": getattr(ctx, "session_id", None),
+                "categories": categories or [],
+            },
+        )
+
         raise GuardrailViolationError(
             code="BIAS_DETECTED",
             message="Bias detected in model output",
