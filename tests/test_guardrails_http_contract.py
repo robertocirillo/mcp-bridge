@@ -23,6 +23,7 @@ def _build_test_app(monkeypatch):
     from app.core.mcp_wrapper import (
         GuardrailContext,
         GuardrailViolationError,
+        make_bias_after_model_guardrail,
         make_pii_after_model_guardrail,
         make_pii_before_model_guardrail,
     )
@@ -63,6 +64,7 @@ def _build_test_app(monkeypatch):
             self.guardrails_enabled = True
             self._pii_before_model_guardrail = None
             self._pii_after_model_guardrail = None
+            self._bias_after_model_guardrail = None
 
             # observability for tests
             self.last_processed_query = None
@@ -127,6 +129,28 @@ def _build_test_app(monkeypatch):
                 self.after_model_guardrails.append(new_gr)
             self._pii_after_model_guardrail = new_gr
 
+        def set_bias_mode(self, mode):
+            normalized = (mode or "off").strip().lower()
+            if normalized not in {"off", "block"}:
+                normalized = "off"
+            # uninstall
+            if normalized == "off":
+                if self._bias_after_model_guardrail is not None:
+                    self.after_model_guardrails = [
+                        gr for gr in self.after_model_guardrails if gr is not self._bias_after_model_guardrail
+                    ]
+                self._bias_after_model_guardrail = None
+                return
+            new_gr = make_bias_after_model_guardrail(mode=normalized)
+            if self._bias_after_model_guardrail is not None:
+                self.after_model_guardrails = [
+                    new_gr if gr is self._bias_after_model_guardrail else gr
+                    for gr in self.after_model_guardrails
+                ]
+            else:
+                self.after_model_guardrails.append(new_gr)
+            self._bias_after_model_guardrail = new_gr
+
         async def _run_before(self, ctx: GuardrailContext) -> GuardrailContext:
             if self.guardrails_enabled is False:
                 return ctx
@@ -162,6 +186,7 @@ def _build_test_app(monkeypatch):
                 raise ValueError("Empty query not allowed")
 
             # Deterministic "model output" that includes some PII so output redaction can be tested.
+            # It also echoes the processed query so the bias detector can be triggered deterministically.
             output = (
                 f"PROCESSED_QUERY: {processed}\n"
                 "MODEL_OUTPUT: email test@example.com ; iban IT60X0542811101000000123456"
@@ -291,3 +316,83 @@ def test_http_contract_pii_output_mode_off_skips_after_model(monkeypatch):
     # After-model PII redaction is OFF => tool/model output retains raw PII.
     assert "test@example.com" in body["result"]
     assert "IT60X0542811101000000123456" in body["result"]
+
+
+def test_http_contract_bias_output_block_returns_structured_403(monkeypatch):
+    client, _mgr = _build_test_app(monkeypatch)
+
+    # Monkeypatch the module-level detector used by make_bias_after_model_guardrail.
+    import app.core.mcp_wrapper as mw
+
+    class AlwaysDetect:
+        def detect(self, text: str):
+            if "BIAS_TEST" in text:
+                return mw.BiasDetectionResult(detected=True, categories=["test"], findings=["synthetic"])
+            return mw.BiasDetectionResult(detected=False)
+
+    monkeypatch.setattr(mw, "_bias_detector", AlwaysDetect())
+
+    session_id = _create_session(
+        client,
+        {
+            "enabled": True,
+            "bias": {"mode": "off", "output_mode": "block"},
+        },
+    )
+
+    r = _execute_query(client, session_id, "BIAS_TEST")
+
+    assert r.status_code == 403
+    detail = r.json()["detail"]
+    assert detail["code"] == "BIAS_DETECTED"
+    assert detail["operation"] == "execute_query"
+    assert detail["session_id"] == session_id
+    assert detail["phase"] == "after_model"
+    assert detail["rule"] == "bias"
+    assert detail.get("guardrail") == "bias"
+
+
+def test_http_contract_bias_global_off_bypasses_detector(monkeypatch):
+    client, _mgr = _build_test_app(monkeypatch)
+
+    import app.core.mcp_wrapper as mw
+
+    class AlwaysDetect:
+        def detect(self, text: str):
+            return mw.BiasDetectionResult(detected=True, categories=["test"], findings=["synthetic"])
+
+    monkeypatch.setattr(mw, "_bias_detector", AlwaysDetect())
+
+    session_id = _create_session(
+        client,
+        {
+            "enabled": False,
+            "bias": {"output_mode": "block"},
+        },
+    )
+
+    r = _execute_query(client, session_id, "BIAS_TEST")
+    assert r.status_code == 200, r.text
+
+
+def test_http_contract_bias_off_does_not_block(monkeypatch):
+    client, _mgr = _build_test_app(monkeypatch)
+
+    import app.core.mcp_wrapper as mw
+
+    class AlwaysDetect:
+        def detect(self, text: str):
+            return mw.BiasDetectionResult(detected=True, categories=["test"], findings=["synthetic"])
+
+    monkeypatch.setattr(mw, "_bias_detector", AlwaysDetect())
+
+    session_id = _create_session(
+        client,
+        {
+            "enabled": True,
+            "bias": {"mode": "off"},
+        },
+    )
+
+    r = _execute_query(client, session_id, "BIAS_TEST")
+    assert r.status_code == 200, r.text

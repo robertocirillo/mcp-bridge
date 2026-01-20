@@ -11,6 +11,7 @@ from typing_extensions import Literal
 
 class LLMProvider(BaseModel):
     """Configuration of the LLM provider"""
+
     provider: str = Field(..., description="Model provider (openai, anthropic, ollama)")
     model: str = Field(..., description="Model name")
     api_key: Optional[str] = Field(None, description="API key (optional if in env)")
@@ -21,6 +22,7 @@ class LLMProvider(BaseModel):
 
 class MCPServerConfig(BaseModel):
     """Configuration of an MCP Server"""
+
     command: Optional[str] = Field(None, description="Command to start the server")
     args: Optional[List[str]] = Field(None, description="Command arguments")
     env: Optional[Dict[str, str]] = Field(None, description="Environment variables")
@@ -36,6 +38,7 @@ class MCPServerConfig(BaseModel):
 
 class SandboxOptions(BaseModel):
     """Options for E2B sandbox"""
+
     api_key: Optional[str] = Field(None, description="E2B API key")
     sandbox_template_id: str = Field("base", description="Sandbox template ID")
     supergateway_command: str = Field("npx -y supergateway", description="Supergateway command")
@@ -92,6 +95,37 @@ class PiiSettings(BaseModel):
     )
 
 
+class BiasSettings(BaseModel):
+    """Bias detector guardrail settings.
+
+    MVP0 scope:
+    - after_model only (output).
+    - actions supported: off | block
+
+    Strategy 3:
+    - `mode` is a shared default.
+    - `output_mode` is a phase-specific override (only phase used in MVP0).
+    """
+
+    output_mode: Optional[Literal["off", "block"]] = Field(
+        default=None,
+        description=(
+            "Phase-specific override for output (after_model) bias handling. "
+            "If provided, it takes precedence over `mode` for output."
+        ),
+    )
+
+    mode: Literal["off", "block"] = Field(
+        default="off",
+        description=(
+            "Shared default bias handling strategy. "
+            "Allowed values: "
+            "'off' disables the bias detector guardrail; "
+            "'block' blocks the response (HTTP 403) with structured error code 'BIAS_DETECTED'."
+        ),
+    )
+
+
 class GuardrailsSettings(BaseModel):
     """Session-scoped guardrails configuration."""
 
@@ -108,9 +142,15 @@ class GuardrailsSettings(BaseModel):
         description="PII detection/redaction/blocking settings.",
     )
 
+    bias: BiasSettings = Field(
+        default_factory=BiasSettings,
+        description="Bias detector settings (MVP0: after_model only).",
+    )
+
 
 class SessionConfig(BaseModel):
     """Configuration to create a new session"""
+
     llm_provider: LLMProvider
 
     mcp_servers: Dict[str, MCPServerConfig] = Field(

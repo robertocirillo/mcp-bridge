@@ -246,3 +246,50 @@ def test_transport_timeout_returns_504_with_structured_detail() -> None:
     assert detail["agent_id"] == "echo"
     assert detail["task_id"] == "t1"
     assert detail["operation"] == "get_task"
+
+
+def test_bias_detector_does_not_affect_a2a_endpoints(monkeypatch) -> None:
+    """Regression: MCP guardrails must NOT be applied to /a2a routes.
+
+    Even if the global bias detector is configured to always detect bias,
+    /a2a endpoints must behave as before (no BIAS_DETECTED 403).
+    """
+
+    from app.core.mcp_wrapper import (
+        BiasDetectionResult,
+        BiasDetector,
+        get_bias_detector,
+        set_bias_detector,
+    )
+
+    class AlwaysDetectBias(BiasDetector):
+        def detect(self, text: str) -> BiasDetectionResult:
+            return BiasDetectionResult(detected=True, categories=["test"], findings=["forced"])  # deterministic
+
+    prev = get_bias_detector()
+    set_bias_detector(AlwaysDetectBias())
+
+    async def send_message_fn(**kwargs: Any) -> A2AResult:
+        return A2AResult(
+            agent_id=kwargs["agent_id"],
+            task_id=None,
+            status=None,
+            output={"kind": "message-only"},
+            message="ok",
+            raw_response={"raw": True},
+        )
+
+    try:
+        client = make_client(
+            stub_client=StubA2AClient(send_message_fn=send_message_fn),
+            settings=_settings_with_agent("echo"),
+        )
+
+        resp = client.post("/a2a/agents/echo/messages", json={"goal": "this text would be biased"})
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["agent_id"] == "echo"
+        assert data["message"] == "ok"
+    finally:
+        # Restore to avoid leaking state across tests.
+        set_bias_detector(prev)
