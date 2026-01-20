@@ -203,6 +203,31 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 ---
 
 
+### D10 – Bias detector guardrail MVP0 (after_model only)
+
+**Status:** Accepted
+
+**Decision:**
+
+- Introduce a new session-scoped guardrail `guardrails.bias` with Strategy 3 semantics:
+  - `mode` is a shared default
+  - `output_mode` overrides only the output phase (`after_model`)
+- MVP0 scope is **output-only** (`after_model`) and supports only actions: `off | block`.
+- Default behavior is **fail-open / no-op**: bias guardrail defaults to `off` to avoid breaking behavior.
+- The bias detector is **pluggable** via a minimal interface (`BiasDetector.detect(text) -> BiasDetectionResult`) with a deterministic **NoOp** default implementation.
+- Contract tests must remain deterministic and simulate detection via monkeypatch (no external services / LLM calls).
+
+**Rationale:**
+
+- Keeps enforcement inside the bridge (deterministic, testable) and aligned with the existing LangChain-style guardrail pipeline.
+- Allows future evolution of the detector (rules-based, model-based, external service) without changing the HTTP contract.
+
+**Future notes (not implemented now):**
+
+- Extend bias guardrail to `before_model` (input scanning) if needed.
+- Consider configurable fail-open vs fail-closed policy and timeouts when integrating an external bias detection service.
+
+
 ## 2. Rejected Alternatives
 
 ### R1 – Using A2A as MCP tools (A2A-over-MCP)

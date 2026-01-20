@@ -206,6 +206,44 @@ Disable only output PII (input still uses its default / shared mode):
 ```
 
 
+#### Bias detector guardrail (MVP0, after_model only)
+
+Bias is controlled by `guardrails.bias` and follows the same **Strategy 3** approach:
+
+- `mode` is a **shared default**
+- `output_mode` overrides only output (`after_model`)
+
+MVP0 allowed values:
+- `off`: disable the bias guardrail (no-op)
+- `block`: block the response (HTTP 403) with structured error `detail.code="BIAS_DETECTED"`
+
+Default is `off` to avoid breaking behavior.
+
+**Example: block only output (after_model)**
+
+```json
+{
+  "guardrails": {
+    "bias": { "mode": "off", "output_mode": "block" }
+  }
+}
+```
+
+When blocked, the API responds with HTTP 403 and a structured payload under `detail`, for example:
+
+```json
+{
+  "detail": {
+    "code": "BIAS_DETECTED",
+    "message": "Bias detected in model output",
+    "operation": "execute_query",
+    "phase": "after_model",
+    "rule": "bias"
+  }
+}
+```
+
+
 #### PII handling on MCP tool results
 
 When the agent calls MCP tools (e.g. filesystem), mcp-bridge wraps tool invocations and can apply **PII handling to tool outputs** *before* they are incorporated into the agent context / model output.

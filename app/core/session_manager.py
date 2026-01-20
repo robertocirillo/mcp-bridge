@@ -162,6 +162,27 @@ class SessionManager:
                                 wrapper.set_pii_input_mode(effective_input_mode)
                             if hasattr(wrapper, "set_pii_mode"):
                                 wrapper.set_pii_mode(effective_output_mode)
+
+                        # Bias resolution (Strategy 3, MVP0: after_model only):
+                        # - `mode` is a shared default.
+                        # - `output_mode` is a phase-specific override for after_model.
+                        bias_cfg = getattr(guardrails_cfg, "bias", None)
+                        if bias_cfg is not None and enabled:
+                            fields_set = getattr(bias_cfg, "model_fields_set", set()) or set()
+
+                            shared_mode = getattr(bias_cfg, "mode", None)
+                            output_mode = getattr(bias_cfg, "output_mode", None)
+
+                            if "output_mode" in fields_set and output_mode is not None:
+                                effective_bias_output_mode = output_mode
+                            elif "mode" in fields_set and shared_mode is not None:
+                                effective_bias_output_mode = shared_mode
+                            else:
+                                # Default (MVP0) is 'off'
+                                effective_bias_output_mode = shared_mode
+
+                            if hasattr(wrapper, "set_bias_mode"):
+                                wrapper.set_bias_mode(effective_bias_output_mode)
                     except Exception as e:
                         raise ConfigurationError(f"Invalid guardrails configuration: {e}")
 

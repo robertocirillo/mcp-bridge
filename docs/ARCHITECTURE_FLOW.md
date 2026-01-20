@@ -62,6 +62,10 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
       "mode": "redact",
       "input_mode": "block",
       "output_mode": "redact"
+    },
+    "bias": {
+      "mode": "off",
+      "output_mode": "block"
     }
   }
 }
@@ -85,6 +89,7 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
    - Resolves and applies **session-scoped guardrails** (LangChain-style `before_model` / `after_model`) on the `MCPWrapper`.
      - `guardrails.enabled=false` disables all guardrails for the session.
      - For PII, `mode` is a shared default and `input_mode` / `output_mode` can override per phase.
+     - For bias (MVP0), only `after_model` is enforced and supports `off|block` (default off).
      - PII output handling is also applied to **MCP tool results** before they are fed back into the agent context:
        - `output_mode=redact` => redact string values recursively
        - `output_mode=block` => block the request (HTTP 403) if PII is detected in tool results
@@ -210,6 +215,7 @@ result = await wrapper.run_query(
 ```
 
    - Applies **after_model guardrails** (e.g. output PII) inside `wrapper.run_query(...)` before returning the response.
+     - Bias detector (MVP0) runs here; on detection in `block` mode it returns HTTP 403 `detail.code="BIAS_DETECTED"`.
    - MCP tool calls are proxied so that:
      - tool policy (`disallowed_tools`) is enforced **before** each tool execution (independent of `guardrails.enabled`)
      - tool results can be post-processed **before** they are incorporated into the agent run

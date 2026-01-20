@@ -31,6 +31,93 @@ _PHONE_RE = re.compile(r"\b(?:\+?\d[\d\s().-]{6,}\d)\b")
 # IBAN: 15..34 chars, starts with 2 letters + 2 digits.
 _IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b", re.IGNORECASE)
 
+@dataclass(frozen=True)
+class BiasDetectionResult:
+    """Result returned by a BiasDetector.
+
+    MVP0 is intentionally small and deterministic.
+    """
+
+    detected: bool
+    categories: List[str] | None = None
+    findings: List[str] | None = None
+
+
+class BiasDetector:
+    """Minimal, pluggable bias detector interface."""
+
+    def detect(self, text: str) -> BiasDetectionResult:  # pragma: no cover
+        raise NotImplementedError
+
+
+class NoOpBiasDetector(BiasDetector):
+    """Default detector: never detects bias (fail-open, deterministic)."""
+
+    def detect(self, text: str) -> BiasDetectionResult:
+        return BiasDetectionResult(detected=False)
+
+
+# Module-level detector instance so tests can monkeypatch it deterministically.
+_bias_detector: BiasDetector = NoOpBiasDetector()
+
+
+def set_bias_detector(detector: BiasDetector) -> None:
+    """Override the active bias detector (useful for tests)."""
+
+    global _bias_detector
+    _bias_detector = detector
+
+
+def get_bias_detector() -> BiasDetector:
+    return _bias_detector
+
+
+def make_bias_after_model_guardrail(*, mode: str = "off"):
+    """Factory for an after_model guardrail that blocks biased output.
+
+    MVP0 modes:
+      - off: no-op
+      - block: raise GuardrailViolationError(code=BIAS_DETECTED)
+    """
+
+    normalized_mode = (mode or "off").strip().lower()
+    if normalized_mode not in {"off", "block"}:
+        normalized_mode = "off"
+
+    async def _guardrail(ctx: "GuardrailContext", output: Any) -> Any:
+        if normalized_mode == "off":
+            return output
+
+        if output is None:
+            return output
+
+        text = str(output)
+        result = get_bias_detector().detect(text)
+        detected = bool(getattr(result, "detected", False))
+        if not detected:
+            return output
+
+        categories = getattr(result, "categories", None)
+        findings = getattr(result, "findings", None)
+
+        raise GuardrailViolationError(
+            code="BIAS_DETECTED",
+            message="Bias detected in model output",
+            phase="after_model",
+            rule="bias",
+            tenant_id=getattr(ctx, "tenant_id", None),
+            run_id=getattr(ctx, "run_id", None),
+            session_id=getattr(ctx, "session_id", None),
+            details={
+                "categories": categories or [],
+                "findings": findings or [],
+                "mode": "block",
+            },
+        )
+
+    return _guardrail
+
+
 
 def _detect_pii(text: str) -> Dict[str, int]:
     """Return detected PII types with counts (email/phone/iban)."""
@@ -426,6 +513,12 @@ class MCPWrapper:
         self.set_pii_mode(self.pii_mode)
         self.set_pii_input_mode(self.pii_input_mode)
 
+        # Bias detector guardrail (MVP0: after_model only).
+        # Default is off (no-op) to avoid breaking behavior.
+        self.bias_mode: str = "off"
+        self._bias_after_model_guardrail = None
+        self.set_bias_mode(self.bias_mode)
+
         # Validate and import dependencies
         self._validate_config()
         self._import_dependencies()
@@ -569,6 +662,50 @@ class MCPWrapper:
             self.before_model_guardrails.append(new_gr)
 
         self._pii_before_model_guardrail = new_gr
+
+    def set_bias_mode(self, mode: Optional[str]) -> None:
+        # Configure session-scoped bias handling for the local after_model guardrail.
+        #
+        # MVP0 modes:
+        #   - off: no-op (uninstall guardrail)
+        #   - block: raise GuardrailViolationError(code=BIAS_DETECTED, phase=after_model)
+
+        normalized_mode = (mode or "off").strip().lower()
+        if normalized_mode not in {"off", "block"}:
+            normalized_mode = "off"
+
+        self.bias_mode = normalized_mode
+
+        # Disable (uninstall) the guardrail when mode is off.
+        if normalized_mode == "off":
+            old_gr = getattr(self, "_bias_after_model_guardrail", None)
+            if old_gr is not None and getattr(self, "after_model_guardrails", None) is not None:
+                try:
+                    self.after_model_guardrails = [gr for gr in self.after_model_guardrails if gr is not old_gr]
+                except Exception:
+                    pass
+            self._bias_after_model_guardrail = None
+            return
+
+        new_gr = make_bias_after_model_guardrail(mode=normalized_mode)
+
+        # Replace the previously installed bias guardrail (if present).
+        old_gr = getattr(self, "_bias_after_model_guardrail", None)
+        if not hasattr(self, "after_model_guardrails") or self.after_model_guardrails is None:
+            self.after_model_guardrails = []
+
+        replaced = False
+        if old_gr is not None:
+            for idx, gr in enumerate(self.after_model_guardrails):
+                if gr is old_gr:
+                    self.after_model_guardrails[idx] = new_gr
+                    replaced = True
+                    break
+
+        if not replaced:
+            self.after_model_guardrails.append(new_gr)
+
+        self._bias_after_model_guardrail = new_gr
 
     def set_guardrails_enabled(self, enabled: bool) -> None:
         """Enable/disable ALL guardrails for this wrapper (session-scoped).
