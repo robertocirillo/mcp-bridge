@@ -215,6 +215,7 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 - MVP0 scope is **output-only** (`after_model`) and supports only actions: `off | block`.
 - Default behavior is **fail-open / no-op**: bias guardrail defaults to `off` to avoid breaking behavior.
 - The bias detector is **pluggable** via a minimal interface (`BiasDetector.detect(text) -> BiasDetectionResult`) with a deterministic **NoOp** default implementation.
+- Add a deterministic **RuleBasedBiasDetector** (MVP1) and allow enabling it at startup via `MCP_BRIDGE_BIAS_DETECTOR=rules` (optional `MCP_BRIDGE_BIAS_RULES_THRESHOLD`).
 - Contract tests must remain deterministic and simulate detection via monkeypatch (no external services / LLM calls).
 
 **Rationale:**

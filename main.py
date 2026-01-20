@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from app.core.session_manager import SessionManager
+from app.core.mcp_wrapper import initialize_bias_detector_from_env
 from app.api.routes import sessions, queries, health, a2a
 from app.utils.logging import setup_logging, get_logger
 from config import settings
@@ -25,6 +26,8 @@ print("DEBUG MULTI TENANCY:", settings.multi_tenancy)
 async def lifespan(app: FastAPI):
     """Manages the application lifecycle"""
     logger.info("Starting MCP-Use REST API service")
+    detector = initialize_bias_detector_from_env()
+    logger.info("Bias detector initialized", extra={"detector": detector})
     await session_manager.initialize()
     yield
     logger.info("Shutting down MCP-Use REST API service")

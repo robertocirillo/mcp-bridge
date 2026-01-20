@@ -219,6 +219,15 @@ MVP0 allowed values:
 
 Default is `off` to avoid breaking behavior.
 
+By default mcp-bridge uses a **NoOp** bias detector (it never detects bias).
+
+To enable the built-in **deterministic rules-based detector (MVP1)**, set an environment variable when starting the server:
+
+- `MCP_BRIDGE_BIAS_DETECTOR=rules`
+- Optional tuning: `MCP_BRIDGE_BIAS_RULES_THRESHOLD=4` (default 4)
+
+This rules detector is conservative and targets **explicit** discriminatory / dehumanizing / exclusionary language using dependency-free heuristics (no external services).
+
 **Example: block only output (after_model)**
 
 ```json

@@ -57,6 +57,221 @@ class NoOpBiasDetector(BiasDetector):
         return BiasDetectionResult(detected=False)
 
 
+
+
+class RuleBasedBiasDetector(BiasDetector):
+    """Deterministic, dependency-free bias detector (MVP1).
+
+    Goal: catch *explicit* discriminatory / dehumanizing / exclusionary language
+    with conservative heuristics. This is intentionally NOT a subtle bias detector.
+
+    Detection strategy:
+    - Strong generalizations about broad human groups with negative descriptors
+    - Dehumanization terms when a group is mentioned
+    - Exclusion/violence verbs in the same sentence as a group
+
+    Notes:
+    - No external services / models; deterministic.
+    - Avoids listing slurs.
+    """
+
+    # Broad groups in Italian/English. Keep this list short and conservative.
+    _GROUP_TERMS = [
+        # Italian
+        "immigrati",
+        "migranti",
+        "stranieri",
+        "donne",
+        "uomini",
+        "ragazze",
+        "ragazzi",
+        "musulmani",
+        "ebrei",
+        "cristiani",
+        "neri",
+        "bianchi",
+        "gay",
+        "lesbiche",
+        "trans",
+        "disabili",
+        # English
+        "immigrants",
+        "migrants",
+        "foreigners",
+        "women",
+        "men",
+        "girls",
+        "boys",
+        "muslims",
+        "jews",
+        "christians",
+        "black people",
+        "white people",
+        "gay people",
+        "lesbians",
+        "trans people",
+        "disabled people",
+    ]
+
+    # Negative descriptors (generic; intentionally avoids slurs).
+    _NEGATIVE_DESCRIPTORS = [
+        # Italian
+        "inferiori",
+        "stupidi",
+        "pericolosi",
+        "sporchi",
+        "malvagi",
+        "cattivi",
+        "incapaci",
+        "pigri",
+        "ignoranti",
+        "violenti",
+        # English
+        "inferior",
+        "stupid",
+        "dangerous",
+        "dirty",
+        "evil",
+        "bad",
+        "incapable",
+        "lazy",
+        "ignorant",
+        "violent",
+    ]
+
+    # Dehumanization terms (generic; intentionally avoids slurs).
+    _DEHUMANIZATION_TERMS = [
+        # Italian / English
+        "parassiti",
+        "vermi",
+        "scarafaggi",
+        "spazzatura",
+        "parasites",
+        "worms",
+        "cockroaches",
+        "trash",
+        "vermin",
+    ]
+
+    # Exclusion / violence verbs (generic; deterministic).
+    _EXCLUSION_VIOLENCE_TERMS = [
+        # Italian
+        "uccidere",
+        "eliminare",
+        "sterminare",
+        "deportare",
+        "espellere",
+        "bandire",
+        "cacciare",
+        "mandare via",
+        "togliere i diritti",
+        "vietare",
+        "non dovrebbero esistere",
+        # English
+        "kill",
+        "eliminate",
+        "exterminate",
+        "deport",
+        "expel",
+        "ban",
+        "kick out",
+        "remove rights",
+        "shouldn't exist",
+        "should not exist",
+    ]
+
+    # Context mitigations: if text is explicitly condemning a discriminatory statement,
+    # we reduce the score (fail-open for educational/critical context).
+    _CONTEXT_MITIGATIONS = [
+        # Italian
+        "è sbagliato dire",
+        "e' sbagliato dire",
+        "non è vero che",
+        "non e' vero che",
+        "è offensivo dire",
+        "e' offensivo dire",
+        # English
+        "it's wrong to say",
+        "it is wrong to say",
+        "it's offensive to say",
+        "it is offensive to say",
+    ]
+
+    def __init__(self, *, threshold: int = 4):
+        self.threshold = int(threshold)
+
+        group_alt = "|".join(sorted((re.escape(g) for g in self._GROUP_TERMS), key=len, reverse=True))
+        self._group_re = re.compile(rf"\b(?:{group_alt})\b", re.IGNORECASE)
+
+        neg_alt = "|".join(sorted((re.escape(w) for w in self._NEGATIVE_DESCRIPTORS), key=len, reverse=True))
+        self._neg_re = re.compile(rf"\b(?:{neg_alt})\b", re.IGNORECASE)
+
+        deh_alt = "|".join(sorted((re.escape(w) for w in self._DEHUMANIZATION_TERMS), key=len, reverse=True))
+        self._deh_re = re.compile(rf"\b(?:{deh_alt})\b", re.IGNORECASE)
+
+        excl_alt = "|".join(sorted((re.escape(w) for w in self._EXCLUSION_VIOLENCE_TERMS), key=len, reverse=True))
+        self._excl_re = re.compile(rf"(?:{excl_alt})", re.IGNORECASE)
+
+        # Strong generalizations. Conservative: requires explicit quantifier + group + copula.
+        self._generalization_re = re.compile(
+            rf"\b(?:tutti|tutte|all|every)\b[^.\n\r]{0,80}?\b(?:{group_alt})\b[^.\n\r]{0,80}?\b(?:sono|are|sempre|always)\b",
+            re.IGNORECASE,
+        )
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        return " ".join((text or "").replace("\n", " ").split())
+
+    @staticmethod
+    def _split_sentences(text: str) -> list[str]:
+        parts = re.split(r"[.!?]+", text)
+        return [p.strip() for p in parts if p.strip()]
+
+    def detect(self, text: str) -> BiasDetectionResult:
+        t = self._normalize(text)
+        if not t:
+            return BiasDetectionResult(detected=False)
+
+        score = 0
+        categories: set[str] = set()
+        findings: list[str] = []
+
+        lower = t.lower()
+        mitigated_context = any(m in lower for m in self._CONTEXT_MITIGATIONS)
+
+        # 1) Exclusion/violence in same sentence as a group mention.
+        for s in self._split_sentences(t):
+            if self._group_re.search(s) and self._excl_re.search(s):
+                score += 6
+                categories.add("exclusion_or_violence")
+                findings.append("rule:exclusion_or_violence")
+                break
+
+        # 2) Dehumanization term + group mention.
+        if self._group_re.search(t) and self._deh_re.search(t):
+            score += 6
+            categories.add("dehumanization")
+            findings.append("rule:dehumanization")
+
+        # 3) Strong generalization + negative descriptor.
+        if self._generalization_re.search(t) and self._neg_re.search(t):
+            score += 4
+            categories.add("strong_generalization")
+            findings.append("rule:strong_generalization_negative")
+
+        # Mitigation for critical/educational context.
+        if mitigated_context:
+            score = max(0, score - 6)
+            if score == 0:
+                categories.clear()
+                findings.clear()
+
+        detected = score >= self.threshold
+        return BiasDetectionResult(
+            detected=detected,
+            categories=sorted(categories) if detected else [],
+            findings=findings if detected else [],
+        )
 # Module-level detector instance so tests can monkeypatch it deterministically.
 _bias_detector: BiasDetector = NoOpBiasDetector()
 
@@ -70,6 +285,32 @@ def set_bias_detector(detector: BiasDetector) -> None:
 
 def get_bias_detector() -> BiasDetector:
     return _bias_detector
+
+
+def initialize_bias_detector_from_env() -> str:
+    """Initialize the global bias detector from environment variables.
+
+    This keeps the default behavior (NoOp) unless explicitly enabled.
+
+    Env vars:
+      - MCP_BRIDGE_BIAS_DETECTOR: 'noop' (default) | 'rules'
+      - MCP_BRIDGE_BIAS_RULES_THRESHOLD: int (default 4)
+
+    Returns the detector name actually configured.
+    """
+
+    detector = (os.getenv('MCP_BRIDGE_BIAS_DETECTOR', 'noop') or 'noop').strip().lower()
+    if detector != 'rules':
+        set_bias_detector(NoOpBiasDetector())
+        return 'noop'
+
+    try:
+        threshold = int(os.getenv('MCP_BRIDGE_BIAS_RULES_THRESHOLD', '4'))
+    except Exception:
+        threshold = 4
+
+    set_bias_detector(RuleBasedBiasDetector(threshold=threshold))
+    return 'rules'
 
 
 def make_bias_after_model_guardrail(*, mode: str = "off"):
