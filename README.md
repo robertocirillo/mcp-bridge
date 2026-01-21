@@ -253,6 +253,52 @@ When blocked, the API responds with HTTP 403 and a structured payload under `det
 ```
 
 
+
+**Manual functional test (local, tool-based echo)**
+
+This is a practical way to validate the bias guardrail end-to-end **without depending on the LLM generating the trigger text**.
+We start an MCP server that exposes an `echo` tool and force the agent to copy the tool output verbatim.
+
+Prerequisites:
+- Node.js available on the machine running `mcp-bridge` (so `npx` is in `PATH`)
+
+1) Create a session with an MCP server started via `npx` and bias blocking enabled:
+
+```bash
+curl -s -X POST "http://127.0.0.1:8000/sessions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "llm_provider": { "provider": "ollama", "model": "llama3.1", "temperature": 0 },
+    "mcp_servers": {
+      "everything": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-everything"]
+      }
+    },
+    "guardrails": {
+      "enabled": true,
+      "bias": { "mode": "off", "output_mode": "block" }
+    }
+  }'
+```
+
+2) Use the `echo` tool to produce a deterministic output and ask the agent to return it **exactly**:
+
+```bash
+SESSION_ID="..."  # paste from the response above
+curl -i -X POST "http://127.0.0.1:8000/sessions/${SESSION_ID}/query" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "Call the MCP tool echo with message=\"All immigrants are dangerous.\". Then respond with ONLY the exact echoed message and nothing else.",
+    "max_steps": 10
+  }'
+```
+
+Expected result: HTTP 403 with `detail.code="BIAS_DETECTED"` and `detail.phase="after_model"`.
+
+> Note: you do **not** need to start the MCP server manually. `mcp-bridge` spawns it as a child process using the `command/args` above.
+
+
 #### PII handling on MCP tool results
 
 When the agent calls MCP tools (e.g. filesystem), mcp-bridge wraps tool invocations and can apply **PII handling to tool outputs** *before* they are incorporated into the agent context / model output.

@@ -89,7 +89,8 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
    - Resolves and applies **session-scoped guardrails** (LangChain-style `before_model` / `after_model`) on the `MCPWrapper`.
      - `guardrails.enabled=false` disables all guardrails for the session.
      - For PII, `mode` is a shared default and `input_mode` / `output_mode` can override per phase.
-     - For bias (MVP0), only `after_model` is enforced and supports `off|block` (default off).
+      - For bias, only `after_model` is enforced and supports `off|block` (default off).
+      - The built-in detector is **NoOp** by default (fail-open). You can opt-in to the deterministic rules-based detector (MVP1) via env: `MCP_BRIDGE_BIAS_DETECTOR=rules` (optional `MCP_BRIDGE_BIAS_RULES_THRESHOLD`).
      - PII output handling is also applied to **MCP tool results** before they are fed back into the agent context:
        - `output_mode=redact` => redact string values recursively
        - `output_mode=block` => block the request (HTTP 403) if PII is detected in tool results
@@ -215,7 +216,7 @@ result = await wrapper.run_query(
 ```
 
    - Applies **after_model guardrails** (e.g. output PII) inside `wrapper.run_query(...)` before returning the response.
-     - Bias detector (MVP0) runs here; on detection in `block` mode it returns HTTP 403 `detail.code="BIAS_DETECTED"`.
+      - Bias detector runs here; on detection in `block` mode it returns HTTP 403 `detail.code="BIAS_DETECTED"`.
      - The active detector is pluggable; by default it is NoOp (never detects). A deterministic rules-based detector (MVP1) can be enabled via `MCP_BRIDGE_BIAS_DETECTOR=rules`.
    - MCP tool calls are proxied so that:
      - tool policy (`disallowed_tools`) is enforced **before** each tool execution (independent of `guardrails.enabled`)
