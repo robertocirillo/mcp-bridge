@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Optional, Dict, List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing_extensions import Literal
 
 
@@ -96,6 +96,8 @@ class PiiSettings(BaseModel):
 
 
 class BiasSettings(BaseModel):
+    # Allow `model_id` field name (used to forward overrides to bias-detector-service).
+    model_config = ConfigDict(protected_namespaces=())
     """Bias detector guardrail settings.
 
     MVP0 scope:
@@ -107,6 +109,8 @@ class BiasSettings(BaseModel):
     - `output_mode` is a phase-specific override (only phase used in MVP0).
     """
 
+    # --- Policy (Strategy 3: shared default + phase override) ---
+
     output_mode: Optional[Literal["off", "block"]] = Field(
         default=None,
         description=(
@@ -116,13 +120,67 @@ class BiasSettings(BaseModel):
     )
 
     mode: Literal["off", "block"] = Field(
-        default="off",
+        default="block",
         description=(
             "Shared default bias handling strategy. "
             "Allowed values: "
             "'off' disables the bias detector guardrail; "
             "'block' blocks the response (HTTP 403) with structured error code 'BIAS_DETECTED'."
         ),
+    )
+
+    # --- External bias-detector-service integration (session-scoped) ---
+
+    base_url: Optional[str] = Field(
+        default="http://bias-detector-service:9090",
+        description=(
+            "Optional base URL for bias-detector-service (e.g. http://bias-detector-service:9090). "
+            "If set, mcp-bridge will call POST /v1/bias/classify in after_model. "
+            "If unset, mcp-bridge falls back to the built-in detector selected via env vars "
+            "(noop/rules)."
+        ),
+    )
+
+    timeout_seconds: float = Field(
+        default=5.0,
+        gt=0.0,
+        description="HTTP timeout for bias-detector-service requests.",
+    )
+
+    threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Classifier threshold forwarded to bias-detector-service.",
+    )
+
+    top_k: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description="Top-K labels requested from bias-detector-service.",
+    )
+
+    active_categories: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Optional list of active bias categories. "
+            "If omitted (null), all categories are active on the detector service. "
+            "If an empty list is provided, no categories are active and flagged will be false."
+        ),
+    )
+
+    model_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional model override (HF model id) forwarded to bias-detector-service. "
+            "If unset, the service default model is used."
+        ),
+    )
+
+    revision: Optional[str] = Field(
+        default=None,
+        description="Optional model revision override forwarded to bias-detector-service.",
     )
 
 

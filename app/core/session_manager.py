@@ -181,7 +181,20 @@ class SessionManager:
                                 # Default (MVP0) is 'off'
                                 effective_bias_output_mode = shared_mode
 
-                            if hasattr(wrapper, "set_bias_mode"):
+                            # Prefer bias-detector-service integration when supported by the wrapper.
+                            # Fallback to legacy set_bias_mode (built-in detectors).
+                            if hasattr(wrapper, "set_bias_settings"):
+                                wrapper.set_bias_settings(
+                                    mode=effective_bias_output_mode,
+                                    base_url=getattr(bias_cfg, "base_url", None),
+                                    timeout_seconds=getattr(bias_cfg, "timeout_seconds", 5.0),
+                                    threshold=getattr(bias_cfg, "threshold", 0.5),
+                                    top_k=getattr(bias_cfg, "top_k", 5),
+                                    active_categories=getattr(bias_cfg, "active_categories", None),
+                                    model_id=getattr(bias_cfg, "model_id", None),
+                                    revision=getattr(bias_cfg, "revision", None),
+                                )
+                            elif hasattr(wrapper, "set_bias_mode"):
                                 wrapper.set_bias_mode(effective_bias_output_mode)
                     except Exception as e:
                         raise ConfigurationError(f"Invalid guardrails configuration: {e}")

@@ -115,8 +115,9 @@ async def execute_query(
                 "rule": getattr(e, "rule", None),
             },
         )
+        status_code = int(getattr(e, "http_status", 403) or 403)
         raise http_error(
-            403,
+            status_code,
             getattr(e, "code", "GUARDRAIL_VIOLATION"),
             getattr(e, "message", str(e)),
             operation="execute_query",
