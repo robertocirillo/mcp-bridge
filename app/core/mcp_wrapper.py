@@ -14,6 +14,7 @@ from app.core.exceptions import MCPWrapperError, DependencyError, ConfigurationE
 from app.utils.logging import get_logger
 from app.utils.helpers import retry_async
 from app.models.config import SandboxOptions as SandboxOptionsModel  # rinomina per non confonderla con quella di mcp-use
+from app.core.bias_detector_client import BiasDetectorClient, BiasDetectorError
 
 logger = get_logger(__name__)
 
@@ -332,7 +333,7 @@ def make_bias_after_model_guardrail(*, mode: str = "off"):
         if output is None:
             return output
 
-        text = str(output)
+        text = _extract_final_answer(str(output))
         result = get_bias_detector().detect(text)
         detected = bool(getattr(result, "detected", False))
         if not detected:
@@ -366,6 +367,175 @@ def make_bias_after_model_guardrail(*, mode: str = "off"):
                 "categories": categories or [],
                 "findings": findings or [],
                 "mode": "block",
+            },
+        )
+
+    return _guardrail
+
+
+def _extract_final_answer(text: str) -> str:
+    """Best-effort extraction of the final answer from agent outputs.
+
+    Many agent frameworks prefix the final answer with markers like:
+    - "Final Answer:" (common)
+    - "Final:" / "Final Answer -" / etc.
+
+    For now we keep this heuristic conservative:
+    - if a known marker is found, we take the substring after the *last* marker
+    - otherwise we return the full text.
+    """
+
+    if not text:
+        return text
+
+    markers = ["Final Answer:", "Final Answer -", "Final:"]
+    last_idx = -1
+    last_marker = None
+    for m in markers:
+        idx = text.rfind(m)
+        if idx > last_idx:
+            last_idx = idx
+            last_marker = m
+
+    if last_idx == -1 or last_marker is None:
+        return text
+
+    return text[last_idx + len(last_marker) :].strip() or ""
+
+
+def make_bias_after_model_guardrail_service(
+    *,
+    client: BiasDetectorClient,
+    mode: str = "off",
+    threshold: float = 0.5,
+    top_k: int = 5,
+    active_categories: Optional[List[str]] = None,
+    model_id: Optional[str] = None,
+    revision: Optional[str] = None,
+    fail_closed: bool = True,
+):
+    """Factory for an after_model guardrail backed by bias-detector-service.
+
+    Behavior:
+      - off: no-op
+      - block: call the service and block with BIAS_DETECTED if flagged
+
+    Fail-closed:
+      - If enabled and the service call errors/timeouts, we block by raising
+        GuardrailViolationError(code=BIAS_DETECTOR_UNAVAILABLE).
+    """
+
+    normalized_mode = (mode or "off").strip().lower()
+    if normalized_mode not in {"off", "block"}:
+        normalized_mode = "off"
+
+    async def _guardrail(ctx: "GuardrailContext", output: Any) -> Any:
+        if normalized_mode == "off":
+            return output
+
+        if output is None:
+            return output
+
+        text = _extract_final_answer(str(output))
+
+        try:
+            resp = await client.classify(
+                text=text,
+                model_id=model_id,
+                revision=revision,
+                active_categories=active_categories,
+                top_k=top_k,
+                threshold=threshold,
+            )
+        except BiasDetectorError as e:
+            # Map known INVALID_REQUEST to 400; everything else is treated as unavailable.
+            body = getattr(e, "body", None)
+            detail = body.get("detail") if isinstance(body, dict) else None
+            code = detail.get("code") if isinstance(detail, dict) else None
+            if e.status_code == 400 and code == "INVALID_REQUEST":
+                raise GuardrailViolationError(
+                    code="BIAS_DETECTOR_INVALID_REQUEST",
+                    message="Bias detector rejected the request",
+                    phase="after_model",
+                    rule="bias",
+                    tenant_id=getattr(ctx, "tenant_id", None),
+                    run_id=getattr(ctx, "run_id", None),
+                    session_id=getattr(ctx, "session_id", None),
+                    http_status=400,
+                    details={
+                        "upstream": body,
+                    },
+                )
+
+            if fail_closed:
+                raise GuardrailViolationError(
+                    code="BIAS_DETECTOR_UNAVAILABLE",
+                    message="Bias detector service unavailable",
+                    phase="after_model",
+                    rule="bias",
+                    tenant_id=getattr(ctx, "tenant_id", None),
+                    run_id=getattr(ctx, "run_id", None),
+                    session_id=getattr(ctx, "session_id", None),
+                    http_status=503,
+                    details={
+                        "upstream_status": getattr(e, "status_code", None),
+                        "upstream": getattr(e, "body", None),
+                    },
+                )
+            return output
+        except Exception as e:
+            if fail_closed:
+                raise GuardrailViolationError(
+                    code="BIAS_DETECTOR_UNAVAILABLE",
+                    message="Bias detector service unavailable",
+                    phase="after_model",
+                    rule="bias",
+                    tenant_id=getattr(ctx, "tenant_id", None),
+                    run_id=getattr(ctx, "run_id", None),
+                    session_id=getattr(ctx, "session_id", None),
+                    http_status=503,
+                    details={
+                        "error": type(e).__name__,
+                    },
+                )
+            return output
+
+        flagged = bool(resp.get("flagged", False))
+        if not flagged:
+            return output
+
+        flagged_labels = resp.get("flagged_labels", []) or []
+
+        logger.info(
+            "Guardrail triggered: bias detected via bias-detector-service",
+            extra={
+                "guardrail": "bias",
+                "phase": "after_model",
+                "tenant_id": getattr(ctx, "tenant_id", None),
+                "run_id": getattr(ctx, "run_id", None),
+                "session_id": getattr(ctx, "session_id", None),
+                "flagged_labels": flagged_labels,
+            },
+        )
+
+        raise GuardrailViolationError(
+            code="BIAS_DETECTED",
+            message="Bias detected in model output",
+            phase="after_model",
+            rule="bias",
+            tenant_id=getattr(ctx, "tenant_id", None),
+            run_id=getattr(ctx, "run_id", None),
+            session_id=getattr(ctx, "session_id", None),
+            http_status=403,
+            details={
+                "categories": active_categories or [],
+                "findings": [f"label:{lbl}" for lbl in flagged_labels],
+                "mode": "block",
+                "model_id": resp.get("model_id"),
+                "revision": resp.get("revision"),
+                "flagged_labels": flagged_labels,
+                "threshold": resp.get("meta", {}).get("threshold") if isinstance(resp.get("meta"), dict) else None,
+                "top_k": top_k,
             },
         )
 
@@ -474,7 +644,7 @@ def make_pii_after_model_guardrail(*, mode: str = "redact"):
         # Only operate on text outputs for the MVP.
         if output is None:
             return output
-        text = str(output)
+        text = _extract_final_answer(str(output))
         counts = _detect_pii(text)
         present = [k for k, v in counts.items() if v > 0]
 
@@ -504,6 +674,35 @@ def make_pii_after_model_guardrail(*, mode: str = "redact"):
         return redact_pii(text)
 
     return _guardrail
+
+
+def _extract_final_answer(text: str) -> str:
+    """Best-effort extraction of a "final answer" from agent-style outputs.
+
+    Many agent frameworks return a trace that includes a trailing "Final Answer:" block.
+    For the bias guardrail we currently evaluate only the final answer portion.
+
+    If no marker is found, returns the original text.
+    """
+
+    if not text:
+        return text
+
+    # Prefer the last occurrence to handle multi-step traces.
+    markers = ["Final Answer:", "Final answer:", "FINAL ANSWER:"]
+    for m in markers:
+        idx = text.rfind(m)
+        if idx != -1:
+            return text[idx + len(m) :].strip()
+
+    # Common alternative markers.
+    markers2 = ["Final:", "FINAL:"]
+    for m in markers2:
+        idx = text.rfind(m)
+        if idx != -1:
+            return text[idx + len(m) :].strip()
+
+    return text
 
 
 def make_pii_before_model_guardrail(*, mode: str = "block"):
@@ -589,6 +788,7 @@ class GuardrailViolationError(Exception):
     def __init__(
         self,
         *,
+        http_status: int = 403,
         code: str = "GUARDRAIL_VIOLATION",
         message: str,
         phase: str,
@@ -601,6 +801,7 @@ class GuardrailViolationError(Exception):
     ):
         self.code = code
         self.message = message
+        self.http_status = int(http_status)
         self.phase = phase  # "before_model" | "after_model" | "tool_result" (etc)
         self.rule = rule
         self.tenant_id = tenant_id
@@ -755,6 +956,9 @@ class MCPWrapper:
         # Optional per-guardrail timeout to avoid hanging requests.
         # When set, a timeout raises GuardrailViolationError(code=MCP_GUARDRAIL_TIMEOUT).
         self.guardrail_timeout_seconds: Optional[float] = None
+
+        # Bias detector service client (session-scoped; optional)
+        self._bias_detector_service: Optional[BiasDetectorClient] = None
 
         # Local MVP guardrails (LangChain before/after pattern): configurable PII handling.
         # Defaults:
@@ -944,6 +1148,85 @@ class MCPWrapper:
         new_gr = make_bias_after_model_guardrail(mode=normalized_mode)
 
         # Replace the previously installed bias guardrail (if present).
+        old_gr = getattr(self, "_bias_after_model_guardrail", None)
+        if not hasattr(self, "after_model_guardrails") or self.after_model_guardrails is None:
+            self.after_model_guardrails = []
+
+        replaced = False
+        if old_gr is not None:
+            for idx, gr in enumerate(self.after_model_guardrails):
+                if gr is old_gr:
+                    self.after_model_guardrails[idx] = new_gr
+                    replaced = True
+                    break
+
+        if not replaced:
+            self.after_model_guardrails.append(new_gr)
+
+        self._bias_after_model_guardrail = new_gr
+
+    def set_bias_settings(
+        self,
+        *,
+        mode: Optional[str],
+        base_url: Optional[str] = None,
+        timeout_seconds: float = 5.0,
+        threshold: float = 0.5,
+        top_k: int = 5,
+        active_categories: Optional[List[str]] = None,
+        model_id: Optional[str] = None,
+        revision: Optional[str] = None,
+        fail_closed: bool = True,
+    ) -> None:
+        """Configure session-scoped bias handling.
+
+        If base_url is provided, mcp-bridge will use bias-detector-service.
+        Otherwise it falls back to the built-in detector selected via env vars.
+        """
+
+        normalized_mode = (mode or "off").strip().lower()
+        if normalized_mode not in {"off", "block"}:
+            normalized_mode = "off"
+
+        # Persist selection for visibility/debug.
+        self.bias_mode = normalized_mode
+
+        # Uninstall guardrail if off
+        if normalized_mode == "off":
+            old_gr = getattr(self, "_bias_after_model_guardrail", None)
+            if old_gr is not None and getattr(self, "after_model_guardrails", None) is not None:
+                try:
+                    self.after_model_guardrails = [gr for gr in self.after_model_guardrails if gr is not old_gr]
+                except Exception:
+                    pass
+            self._bias_after_model_guardrail = None
+            return
+
+        # If no base_url, use the legacy local detector guardrail.
+        if not base_url:
+            self.set_bias_mode(normalized_mode)
+            return
+
+        # Create/replace the service client for this session.
+        try:
+            self._bias_detector_service = BiasDetectorClient(
+                base_url=base_url,
+                timeout_seconds=float(timeout_seconds),
+            )
+        except Exception as e:
+            raise ConfigurationError(f"Invalid bias-detector-service configuration: {e}")
+
+        new_gr = make_bias_after_model_guardrail_service(
+            client=self._bias_detector_service,
+            mode=normalized_mode,
+            threshold=float(threshold),
+            top_k=int(top_k),
+            active_categories=active_categories,
+            model_id=model_id,
+            revision=revision,
+            fail_closed=bool(fail_closed),
+        )
+
         old_gr = getattr(self, "_bias_after_model_guardrail", None)
         if not hasattr(self, "after_model_guardrails") or self.after_model_guardrails is None:
             self.after_model_guardrails = []
@@ -1324,6 +1607,14 @@ class MCPWrapper:
 
     async def close(self):
         """Closes connections and releases resources"""
+        # Close bias-detector-service client (if any)
+        if getattr(self, "_bias_detector_service", None) is not None:
+            try:
+                await self._bias_detector_service.close()
+            except Exception:
+                pass
+            self._bias_detector_service = None
+
         if self._client:
             try:
                 await self._client.close_all_sessions()

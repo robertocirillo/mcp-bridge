@@ -336,7 +336,7 @@ def test_http_contract_bias_output_block_returns_structured_403(monkeypatch):
         client,
         {
             "enabled": True,
-            "bias": {"mode": "off", "output_mode": "block"},
+            "bias": {"mode": "off", "output_mode": "block", "base_url": None},
         },
     )
 
@@ -367,7 +367,7 @@ def test_http_contract_bias_global_off_bypasses_detector(monkeypatch):
         client,
         {
             "enabled": False,
-            "bias": {"output_mode": "block"},
+            "bias": {"output_mode": "block", "base_url": None},
         },
     )
 
@@ -390,7 +390,7 @@ def test_http_contract_bias_off_does_not_block(monkeypatch):
         client,
         {
             "enabled": True,
-            "bias": {"mode": "off"},
+            "bias": {"mode": "off", "base_url": None},
         },
     )
 

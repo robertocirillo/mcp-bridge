@@ -206,34 +206,57 @@ Disable only output PII (input still uses its default / shared mode):
 ```
 
 
-#### Bias detector guardrail (MVP0, after_model only)
+#### Bias detector guardrail (after_model only)
 
 Bias is controlled by `guardrails.bias` and follows the same **Strategy 3** approach:
 
 - `mode` is a **shared default**
 - `output_mode` overrides only output (`after_model`)
 
-MVP0 allowed values:
-- `off`: disable the bias guardrail (no-op)
-- `block`: block the response (HTTP 403) with structured error `detail.code="BIAS_DETECTED"`
+Allowed values:
+- `off`: disable the bias guardrail
+- `block`: block the response with structured error `detail.code="BIAS_DETECTED"`
 
-Default is `off` to avoid breaking behavior.
+By default, `guardrails.bias.base_url` is set to `http://bias-detector-service:9090` (Docker DNS).
 
-By default mcp-bridge uses a **NoOp** bias detector (it never detects bias).
+- If mcp-bridge runs **in Docker** on the same network as the service, you can usually omit `base_url`.
+- If mcp-bridge runs on the **host** (e.g. PyCharm), override it to `http://localhost:9090`.
+- To use the built-in detector instead of the service, set `base_url` to `null` in the session.
 
-To enable the built-in **deterministic rules-based detector (MVP1)**, set an environment variable when starting the server:
+##### bias-detector-service integration (recommended)
+
+When `guardrails.bias.base_url` is not `null`, mcp-bridge will call an external `bias-detector-service` classifier on the **final answer only**.
+
+Session-scoped fields forwarded to the service:
+
+- `base_url`: e.g. `http://bias-detector-service:9090`
+- `timeout_seconds` (default `5.0`)
+- `threshold` (default `0.5`)
+- `top_k` (default `5`)
+- `active_categories` (optional; `null` means "all categories", `[]` means "none")
+- `model_id` / `revision` (optional model override)
+
+**Fail-closed:** when the bias guardrail is enabled in `block` mode and the service call fails, the request is blocked with `detail.code="BIAS_DETECTOR_UNAVAILABLE"` and HTTP 503.
+
+##### Built-in deterministic detector (legacy / offline)
+
+To enable the built-in deterministic rules-based detector (no external services), set:
 
 - `MCP_BRIDGE_BIAS_DETECTOR=rules`
 - Optional tuning: `MCP_BRIDGE_BIAS_RULES_THRESHOLD=4` (default 4)
 
-This rules detector is conservative and targets **explicit** discriminatory / dehumanizing / exclusionary language using dependency-free heuristics (no external services).
-
-**Example: block only output (after_model)**
+**Example: block only output (after_model) using bias-detector-service**
 
 ```json
 {
   "guardrails": {
-    "bias": { "mode": "off", "output_mode": "block" }
+    "bias": {
+      "mode": "off",
+      "output_mode": "block",
+      "base_url": "http://bias-detector-service:9090",
+      "threshold": 0.5,
+      "top_k": 5
+    }
   }
 }
 ```
@@ -277,7 +300,7 @@ curl -s -X POST "http://127.0.0.1:8000/sessions" \
     },
     "guardrails": {
       "enabled": true,
-      "bias": { "mode": "off", "output_mode": "block" }
+      "bias": { "mode": "off", "output_mode": "block", "base_url": "http://bias-detector-service:9090" }
     }
   }'
 ```

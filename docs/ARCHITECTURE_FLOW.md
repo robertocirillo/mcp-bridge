@@ -216,8 +216,11 @@ result = await wrapper.run_query(
 ```
 
    - Applies **after_model guardrails** (e.g. output PII) inside `wrapper.run_query(...)` before returning the response.
-      - Bias detector runs here; on detection in `block` mode it returns HTTP 403 `detail.code="BIAS_DETECTED"`.
-     - The active detector is pluggable; by default it is NoOp (never detects). A deterministic rules-based detector (MVP1) can be enabled via `MCP_BRIDGE_BIAS_DETECTOR=rules`.
+      - Bias detector runs here (after_model).
+        - If `guardrails.bias.base_url` is **not null** (default: `http://bias-detector-service:9090`), mcp-bridge calls bias-detector-service on the **final answer only**.
+        - On detection in `block` mode it returns HTTP 403 `detail.code="BIAS_DETECTED"`.
+        - Fail-closed: if the service call fails while enabled, mcp-bridge blocks with HTTP 503 `detail.code="BIAS_DETECTOR_UNAVAILABLE"`.
+      - If `guardrails.bias.base_url` is `null`, the active built-in detector is pluggable; by default it is NoOp (never detects). A deterministic rules-based detector can be enabled via `MCP_BRIDGE_BIAS_DETECTOR=rules`.
    - MCP tool calls are proxied so that:
      - tool policy (`disallowed_tools`) is enforced **before** each tool execution (independent of `guardrails.enabled`)
      - tool results can be post-processed **before** they are incorporated into the agent run
