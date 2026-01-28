@@ -9,9 +9,9 @@ services:
       OLLAMA_BASE_URL: "http://host.docker.internal:11434"
     env_file:
       - .env
-    volumes:
-      - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
-      - /var/run/docker.sock:/var/run/docker.sock
+#    volumes:
+#      - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
+#      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8000:8000"
     restart: unless-stopped

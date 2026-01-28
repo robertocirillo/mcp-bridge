@@ -218,6 +218,7 @@ result = await wrapper.run_query(
    - Applies **after_model guardrails** (e.g. output PII) inside `wrapper.run_query(...)` before returning the response.
       - Bias detector runs here (after_model).
         - If `guardrails.bias.base_url` is **not null** (default: `http://bias-detector-service:9090`), mcp-bridge calls bias-detector-service on the **final answer only**.
+        - `unsafe_labels` (if present in session config) is forwarded to enable label semantic policy for multi-class models.
         - On detection in `block` mode it returns HTTP 403 `detail.code="BIAS_DETECTED"`.
         - Fail-closed: if the service call fails while enabled, mcp-bridge blocks with HTTP 503 `detail.code="BIAS_DETECTOR_UNAVAILABLE"`.
       - If `guardrails.bias.base_url` is `null`, the active built-in detector is pluggable; by default it is NoOp (never detects). A deterministic rules-based detector can be enabled via `MCP_BRIDGE_BIAS_DETECTOR=rules`.
@@ -513,3 +514,13 @@ Therefore:
 4. **Orchestration & NATS**:
    - Orchestration lives outside mcp-bridge.
    - NATS is not part of mcp-bridge; any NATS usage is within remote A2A agents.
+
+
+### Bias introspection proxy
+
+mcp-bridge exposes read-only proxy endpoints so external clients can inspect per-model bias policies/labels even when bias-detector-service is internal:
+
+- `GET /v1/guardrails/bias/models/{model_id}/policy`
+- `GET /v1/guardrails/bias/models/{model_id}/labels`
+
+Upstream base URL is `BIAS_DETECTOR_SERVICE_BASE_URL`.

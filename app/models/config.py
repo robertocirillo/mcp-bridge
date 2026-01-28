@@ -170,6 +170,17 @@ class BiasSettings(BaseModel):
         ),
     )
 
+    unsafe_labels: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Optional list of labels considered unsafe by the upstream bias-detector-service. "
+            "If provided, the service will mark a label as flagged only when (label in unsafe_labels) "
+            "and (score >= threshold). "
+            "If omitted (null), the service may apply its own per-model registry policy."
+        ),
+    )
+
+
     model_id: Optional[str] = Field(
         default=None,
         description=(

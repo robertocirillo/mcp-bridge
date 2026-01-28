@@ -191,6 +191,7 @@ class SessionManager:
                                     threshold=getattr(bias_cfg, "threshold", 0.5),
                                     top_k=getattr(bias_cfg, "top_k", 5),
                                     active_categories=getattr(bias_cfg, "active_categories", None),
+                                    unsafe_labels=getattr(bias_cfg, "unsafe_labels", None),
                                     model_id=getattr(bias_cfg, "model_id", None),
                                     revision=getattr(bias_cfg, "revision", None),
                                 )

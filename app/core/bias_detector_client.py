@@ -53,6 +53,7 @@ class BiasDetectorClient:
         model_id: Optional[str] = None,
         revision: Optional[str] = None,
         active_categories: Optional[List[str]] = None,
+        unsafe_labels: Optional[List[str]] = None,
         top_k: int = 5,
         threshold: float = 0.5,
     ) -> Dict[str, Any]:
@@ -77,6 +78,9 @@ class BiasDetectorClient:
         # - [..] -> selected categories
         if active_categories is not None:
             payload["active_categories"] = active_categories
+
+        if unsafe_labels is not None:
+            payload["unsafe_labels"] = unsafe_labels
 
         r = await self._client.post("/v1/bias/classify", json=payload)
         if r.status_code != 200:

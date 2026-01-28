@@ -9,7 +9,7 @@ import logging
 
 from app.core.session_manager import SessionManager
 from app.core.mcp_wrapper import initialize_bias_detector_from_env
-from app.api.routes import sessions, queries, health, a2a
+from app.api.routes import sessions, queries, health, a2a, guardrails_bias
 from app.utils.logging import setup_logging, get_logger
 from config import settings
 
@@ -54,6 +54,7 @@ app.add_middleware(
 app.include_router(sessions.router, prefix="/sessions", tags=["sessions"])
 app.include_router(queries.router, prefix="/sessions", tags=["queries"])
 app.include_router(health.router, tags=["health"])
+app.include_router(guardrails_bias.router, prefix="/v1/guardrails/bias", tags=["guardrails"])
 if settings.a2a.enabled:
     app.include_router(a2a.router)
 
