@@ -56,6 +56,8 @@ class BiasDetectorClient:
         unsafe_labels: Optional[List[str]] = None,
         top_k: int = 5,
         threshold: float = 0.5,
+        return_all_scores: bool = False,
+        return_char_spans: bool = False,
     ) -> Dict[str, Any]:
         """Call POST /v1/bias/classify.
 
@@ -68,6 +70,10 @@ class BiasDetectorClient:
             "top_k": int(top_k),
             "threshold": float(threshold),
         }
+        if return_all_scores:
+            payload["return_all_scores"] = True
+        if return_char_spans:
+            payload["return_char_spans"] = True
         if model_id:
             payload["model_id"] = model_id
         if revision:

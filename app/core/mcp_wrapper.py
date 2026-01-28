@@ -413,6 +413,9 @@ def make_bias_after_model_guardrail_service(
     unsafe_labels: Optional[List[str]] = None,
     model_id: Optional[str] = None,
     revision: Optional[str] = None,
+    return_all_scores: bool = False,
+    return_char_spans: bool = False,
+    checks: Optional[List[Any]] = None,
     fail_closed: bool = True,
 ):
     """Factory for an after_model guardrail backed by bias-detector-service.
@@ -420,6 +423,14 @@ def make_bias_after_model_guardrail_service(
     Behavior:
       - off: no-op
       - block: call the service and block with BIAS_DETECTED if flagged
+
+    Cascaded checks:
+      - If `checks` is omitted (None), mcp-bridge performs a single classification call
+        using the session-level defaults.
+      - If `checks` is provided, mcp-bridge performs one call per check, merging
+        the session-level defaults with per-check overrides.
+      - mcp-bridge remains "dumb": it blocks only when upstream responds with flagged=True.
+        No local interpretation of labels is performed.
 
     Fail-closed:
       - If enabled and the service call errors/timeouts, we block by raising
@@ -430,104 +441,44 @@ def make_bias_after_model_guardrail_service(
     if normalized_mode not in {"off", "block"}:
         normalized_mode = "off"
 
-    async def _guardrail(ctx: "GuardrailContext", output: Any) -> Any:
-        if normalized_mode == "off":
-            return output
+    def _fields_set(obj: Any) -> set[str]:
+        if obj is None:
+            return set()
+        fs = getattr(obj, "model_fields_set", None)
+        if isinstance(fs, set):
+            return set(fs)
+        if isinstance(obj, dict):
+            return set(obj.keys())
+        return set()
 
-        if output is None:
-            return output
+    def _get(obj: Any, key: str) -> Any:
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
 
-        text = _extract_final_answer(str(output))
+    def _resolve_check(idx: int, check: Any) -> Dict[str, Any]:
+        """Merge session-level defaults with per-check overrides.
 
-        try:
-            resp = await client.classify(
-                text=text,
-                model_id=model_id,
-                revision=revision,
-                active_categories=active_categories,
-                unsafe_labels=unsafe_labels,
-                top_k=top_k,
-                threshold=threshold,
-            )
-        except BiasDetectorError as e:
-            # Map known INVALID_REQUEST to 400; everything else is treated as unavailable.
-            body = getattr(e, "body", None)
-            detail = body.get("detail") if isinstance(body, dict) else None
-            code = detail.get("code") if isinstance(detail, dict) else None
-            if e.status_code == 400 and code == "INVALID_REQUEST":
-                raise GuardrailViolationError(
-                    code="BIAS_DETECTOR_INVALID_REQUEST",
-                    message="Bias detector rejected the request",
-                    phase="after_model",
-                    rule="bias",
-                    tenant_id=getattr(ctx, "tenant_id", None),
-                    run_id=getattr(ctx, "run_id", None),
-                    session_id=getattr(ctx, "session_id", None),
-                    http_status=400,
-                    details={
-                        "upstream": body,
-                    },
-                )
+        A field is considered an override when it is *present* in the check payload,
+        even if its value is null.
+        """
 
-            if fail_closed:
-                raise GuardrailViolationError(
-                    code="BIAS_DETECTOR_UNAVAILABLE",
-                    message="Bias detector service unavailable",
-                    phase="after_model",
-                    rule="bias",
-                    tenant_id=getattr(ctx, "tenant_id", None),
-                    run_id=getattr(ctx, "run_id", None),
-                    session_id=getattr(ctx, "session_id", None),
-                    http_status=503,
-                    details={
-                        "upstream_status": getattr(e, "status_code", None),
-                        "upstream": getattr(e, "body", None),
-                    },
-                )
-            return output
-        except Exception as e:
-            if fail_closed:
-                raise GuardrailViolationError(
-                    code="BIAS_DETECTOR_UNAVAILABLE",
-                    message="Bias detector service unavailable",
-                    phase="after_model",
-                    rule="bias",
-                    tenant_id=getattr(ctx, "tenant_id", None),
-                    run_id=getattr(ctx, "run_id", None),
-                    session_id=getattr(ctx, "session_id", None),
-                    http_status=503,
-                    details={
-                        "error": type(e).__name__,
-                    },
-                )
-            return output
+        fs = _fields_set(check)
+        resolved = {
+            "name": _get(check, "name") or f"check_{idx + 1}",
+            "threshold": _get(check, "threshold") if "threshold" in fs else threshold,
+            "top_k": _get(check, "top_k") if "top_k" in fs else top_k,
+            "active_categories": _get(check, "active_categories") if "active_categories" in fs else active_categories,
+            "unsafe_labels": _get(check, "unsafe_labels") if "unsafe_labels" in fs else unsafe_labels,
+            "model_id": _get(check, "model_id") if "model_id" in fs else model_id,
+            "revision": _get(check, "revision") if "revision" in fs else revision,
+        }
+        return resolved
 
-        flagged = bool(resp.get("flagged", False))
-        if not flagged:
-            return output
-
+    def _build_flagged_label_scores(resp: Dict[str, Any], effective_threshold: Any) -> List[Dict[str, Any]]:
         flagged_labels = resp.get("flagged_labels", []) or []
-
-        logger.info(
-            "Guardrail triggered: bias detected via bias-detector-service",
-            extra={
-                "guardrail": "bias",
-                "phase": "after_model",
-                "tenant_id": getattr(ctx, "tenant_id", None),
-                "run_id": getattr(ctx, "run_id", None),
-                "session_id": getattr(ctx, "session_id", None),
-                "flagged_labels": flagged_labels,
-            },
-        )
-
-        # Determine effective threshold (prefer upstream meta if present).
-        meta = resp.get("meta")
-        effective_threshold = meta.get("threshold") if isinstance(meta, dict) else None
-        if effective_threshold is None:
-            effective_threshold = threshold
-
-        # Enrich error details with per-label scores from the upstream response.
-        # NOTE: mcp-bridge remains "dumb": we only surface upstream scores for labels already flagged.
         flagged_label_scores: List[Dict[str, Any]] = []
         labels = resp.get("labels") or []
         if isinstance(labels, list):
@@ -537,7 +488,6 @@ def make_bias_after_model_guardrail_service(
                 lbl = item.get("label")
                 score = item.get("score")
                 is_flagged = item.get("is_flagged")
-
                 if lbl in flagged_labels and isinstance(score, (int, float)):
                     score_f = float(score)
                     thr = float(effective_threshold) if effective_threshold is not None else None
@@ -551,6 +501,214 @@ def make_bias_after_model_guardrail_service(
                             "is_flagged": bool(is_flagged) if is_flagged is not None else None,
                         }
                     )
+        return flagged_label_scores
+
+    def _build_request_dict(
+        *,
+        model_id: Any,
+        revision: Any,
+        threshold: Any,
+        top_k: Any,
+        active_categories: Any,
+        unsafe_labels: Any,
+        return_all_scores: bool,
+        return_char_spans: bool,
+    ) -> Dict[str, Any]:
+        """Build a request dict for diagnostics / error payloads.
+
+        Optional flags are only included when enabled to preserve backward
+        compatibility with previous payloads and tests.
+        """
+        req: Dict[str, Any] = {
+            "model_id": model_id,
+            "revision": revision,
+            "threshold": threshold,
+            "top_k": top_k,
+            "active_categories": active_categories,
+            "unsafe_labels": unsafe_labels,
+        }
+        if return_all_scores:
+            req["return_all_scores"] = True
+        if return_char_spans:
+            req["return_char_spans"] = True
+        return req
+
+
+    async def _guardrail(ctx: "GuardrailContext", output: Any) -> Any:
+        if normalized_mode == "off":
+            return output
+
+        if output is None:
+            return output
+
+        text = _extract_final_answer(str(output))
+
+        # Determine cascaded execution plan.
+        if checks is None:
+            checks_to_run = [None]
+        else:
+            # Explicit empty list => no checks.
+            if isinstance(checks, list) and len(checks) == 0:
+                return output
+            checks_to_run = list(checks) if isinstance(checks, list) else [checks]
+
+        results: List[Dict[str, Any]] = []
+        first_flagged_result: Optional[Dict[str, Any]] = None
+
+        for idx, chk in enumerate(checks_to_run):
+            resolved = _resolve_check(idx, chk)
+            if return_all_scores:
+                resolved["return_all_scores"] = True
+            if return_char_spans:
+                resolved["return_char_spans"] = True
+
+            try:
+                classify_kwargs = {
+                    "text": text,
+                    "model_id": resolved.get("model_id"),
+                    "revision": resolved.get("revision"),
+                    "active_categories": resolved.get("active_categories"),
+                    "unsafe_labels": resolved.get("unsafe_labels"),
+                    "top_k": resolved.get("top_k"),
+                    "threshold": resolved.get("threshold"),
+                }
+                # Only pass optional flags when enabled to preserve compatibility
+                # with older / fake clients used in unit tests.
+                if return_all_scores:
+                    classify_kwargs["return_all_scores"] = True
+                if return_char_spans:
+                    classify_kwargs["return_char_spans"] = True
+
+                resp = await client.classify(**classify_kwargs)
+            except BiasDetectorError as e:
+                # Map known INVALID_REQUEST to 400; everything else is treated as unavailable.
+                body = getattr(e, "body", None)
+                detail = body.get("detail") if isinstance(body, dict) else None
+                code = detail.get("code") if isinstance(detail, dict) else None
+                if e.status_code == 400 and code == "INVALID_REQUEST":
+                    raise GuardrailViolationError(
+                        code="BIAS_DETECTOR_INVALID_REQUEST",
+                        message="Bias detector rejected the request",
+                        phase="after_model",
+                        rule="bias",
+                        tenant_id=getattr(ctx, "tenant_id", None),
+                        run_id=getattr(ctx, "run_id", None),
+                        session_id=getattr(ctx, "session_id", None),
+                        http_status=400,
+                        details={
+                            "check": {
+                                "index": idx,
+                                "name": resolved.get("name"),
+                                "request": resolved,
+                            },
+                            "upstream": body,
+                        },
+                    )
+
+                if fail_closed:
+                    raise GuardrailViolationError(
+                        code="BIAS_DETECTOR_UNAVAILABLE",
+                        message="Bias detector service unavailable",
+                        phase="after_model",
+                        rule="bias",
+                        tenant_id=getattr(ctx, "tenant_id", None),
+                        run_id=getattr(ctx, "run_id", None),
+                        session_id=getattr(ctx, "session_id", None),
+                        http_status=503,
+                        details={
+                            "check": {
+                                "index": idx,
+                                "name": resolved.get("name"),
+                                "request": resolved,
+                            },
+                            "upstream_status": getattr(e, "status_code", None),
+                            "upstream": getattr(e, "body", None),
+                        },
+                    )
+                return output
+            except Exception as e:
+                if fail_closed:
+                    raise GuardrailViolationError(
+                        code="BIAS_DETECTOR_UNAVAILABLE",
+                        message="Bias detector service unavailable",
+                        phase="after_model",
+                        rule="bias",
+                        tenant_id=getattr(ctx, "tenant_id", None),
+                        run_id=getattr(ctx, "run_id", None),
+                        session_id=getattr(ctx, "session_id", None),
+                        http_status=503,
+                        details={
+                            "check": {
+                                "index": idx,
+                                "name": resolved.get("name"),
+                                "request": resolved,
+                            },
+                            "error": type(e).__name__,
+                        },
+                    )
+                return output
+
+            flagged = bool(resp.get("flagged", False))
+            flagged_labels = resp.get("flagged_labels", []) or []
+
+            # Determine effective threshold (prefer upstream meta if present).
+            meta = resp.get("meta")
+            effective_threshold = meta.get("threshold") if isinstance(meta, dict) else None
+            if effective_threshold is None:
+                effective_threshold = resolved.get("threshold")
+
+            flagged_label_scores = _build_flagged_label_scores(resp, effective_threshold)
+
+            result = {
+                "name": resolved.get("name"),
+                "request": _build_request_dict(
+                    model_id=resolved.get("model_id"),
+                    revision=resolved.get("revision"),
+                    threshold=resolved.get("threshold"),
+                    top_k=resolved.get("top_k"),
+                    active_categories=resolved.get("active_categories"),
+                    unsafe_labels=resolved.get("unsafe_labels"),
+                    return_all_scores=bool(return_all_scores),
+                    return_char_spans=bool(return_char_spans),
+                ),
+                "response": {
+                    "model_id": resp.get("model_id"),
+                    "revision": resp.get("revision"),
+                    "flagged": flagged,
+                    "flagged_labels": flagged_labels,
+                    "flagged_label_scores": flagged_label_scores,
+                    "threshold": effective_threshold,
+                    "top_k": resolved.get("top_k"),
+                    "labels": resp.get("labels"),
+                    "meta": resp.get("meta"),
+                },
+            }
+            results.append(result)
+
+            if flagged and first_flagged_result is None:
+                first_flagged_result = result
+
+        # No check flagged => pass
+        if first_flagged_result is None:
+            return output
+
+        # Backward-compatible top-level detail fields are taken from the first flagged check.
+        first_resp = (first_flagged_result.get("response") or {}) if isinstance(first_flagged_result, dict) else {}
+        first_req = (first_flagged_result.get("request") or {}) if isinstance(first_flagged_result, dict) else {}
+        flagged_labels = first_resp.get("flagged_labels", []) or []
+
+        logger.info(
+            "Guardrail triggered: bias detected via bias-detector-service",
+            extra={
+                "guardrail": "bias",
+                "phase": "after_model",
+                "tenant_id": getattr(ctx, "tenant_id", None),
+                "run_id": getattr(ctx, "run_id", None),
+                "session_id": getattr(ctx, "session_id", None),
+                "flagged_labels": flagged_labels,
+                "checks_executed": len(results),
+            },
+        )
 
         raise GuardrailViolationError(
             code="BIAS_DETECTED",
@@ -562,20 +720,22 @@ def make_bias_after_model_guardrail_service(
             session_id=getattr(ctx, "session_id", None),
             http_status=403,
             details={
-                "categories": active_categories or [],
+                "categories": (first_req.get("active_categories") or []),
                 "findings": [f"label:{lbl}" for lbl in flagged_labels],
                 "mode": "block",
-                "model_id": resp.get("model_id"),
-                "revision": resp.get("revision"),
+                "model_id": first_resp.get("model_id"),
+                "revision": first_resp.get("revision"),
                 "flagged_labels": flagged_labels,
-                "flagged_label_scores": flagged_label_scores,
-                "threshold": effective_threshold,
-                "top_k": top_k,
+                "flagged_label_scores": first_resp.get("flagged_label_scores") or [],
+                "threshold": first_resp.get("threshold"),
+                "top_k": first_resp.get("top_k"),
+                # Cascaded results
+                "checks_results": results,
             },
         )
 
-
     return _guardrail
+
 
 
 
@@ -739,6 +899,61 @@ def _extract_final_answer(text: str) -> str:
             return text[idx + len(m) :].strip()
 
     return text
+
+
+def _extract_user_visible_answer(text: str) -> str:
+    """Extract a user-visible answer from agent-style traces.
+
+    mcp-use / LangChain agents may sometimes return ReAct-style traces including
+    'Thought:', 'Action:', 'Observation:' and an optional 'Final Answer:' marker.
+
+    This helper is intentionally conservative:
+    - If a 'Final Answer:' marker is found (case-insensitive), return the trailing block.
+    - Otherwise, only if the text *looks like* a ReAct trace, return the last non-trace line.
+    - Else, return the original text (stripped).
+
+    This is used to keep the API response stable and user-friendly, without exposing reasoning.
+    """
+
+    if text is None:
+        return text
+    t = str(text)
+    if not t.strip():
+        return t
+
+    # Prefer explicit final answer markers (take the last occurrence).
+    final_patterns = [
+        r"(?is)\bfinal\s+answer\s*:\s*(.+)\s*$",
+        r"(?is)\bfinal\s+answer\s*-\s*(.+)\s*$",
+        r"(?is)\bfinal\s*:\s*(.+)\s*$",
+    ]
+    for pat in final_patterns:
+        matches = list(re.finditer(pat, t))
+        if matches:
+            return matches[-1].group(1).strip()
+
+    # Only attempt ReAct stripping if it resembles a trace.
+    looks_like_trace = ("Thought:" in t) and ("Action:" in t or "Observation:" in t)
+    if not looks_like_trace:
+        return t.strip()
+
+    trace_prefixes = (
+        "Thought:",
+        "Action:",
+        "Action Input:",
+        "Observation:",
+    )
+
+    candidates = []
+    for raw in t.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith(trace_prefixes):
+            continue
+        candidates.append(line)
+
+    return (candidates[-1] if candidates else t).strip()
 
 
 def make_pii_before_model_guardrail(*, mode: str = "block"):
@@ -1213,6 +1428,9 @@ class MCPWrapper:
         unsafe_labels: Optional[List[str]] = None,
         model_id: Optional[str] = None,
         revision: Optional[str] = None,
+        return_all_scores: bool = False,
+        return_char_spans: bool = False,
+        checks: Optional[List[Any]] = None,
         fail_closed: bool = True,
     ) -> None:
         """Configure session-scoped bias handling.
@@ -1262,6 +1480,9 @@ class MCPWrapper:
             unsafe_labels=unsafe_labels,
             model_id=model_id,
             revision=revision,
+            return_all_scores=bool(return_all_scores),
+            return_char_spans=bool(return_char_spans),
+            checks=checks,
             fail_closed=bool(fail_closed),
         )
 
@@ -1633,6 +1854,7 @@ class MCPWrapper:
             logger.debug(f"Query completed in {self._steps_used} steps")
             output = str(result)
             output = await self._run_after_model_guardrails(ctx, output)
+            output = _extract_user_visible_answer(output)
             return output
 
         except MCPToolNotAllowedError:
