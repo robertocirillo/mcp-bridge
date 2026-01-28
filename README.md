@@ -234,9 +234,20 @@ Session-scoped fields forwarded to the service:
 - `threshold` (default `0.5`)
 - `top_k` (default `5`)
 - `active_categories` (optional; `null` means "all categories", `[]` means "none")
+- `unsafe_labels` (optional; enables label semantic policy for multi-class models; forwarded as-is)
 - `model_id` / `revision` (optional model override)
 
 **Fail-closed:** when the bias guardrail is enabled in `block` mode and the service call fails, the request is blocked with `detail.code="BIAS_DETECTOR_UNAVAILABLE"` and HTTP 503.
+
+##### Introspection proxy endpoints (optional)
+
+If external clients cannot reach `bias-detector-service` directly (internal Docker network), mcp-bridge can proxy read-only introspection:
+
+- `GET /v1/guardrails/bias/models/{model_id}/policy` → forwards to `bias-detector-service GET /v1/models/{model_id}/policy`
+- `GET /v1/guardrails/bias/models/{model_id}/labels` → forwards to `bias-detector-service GET /v1/models/{model_id}/labels` (if supported)
+
+These use `BIAS_DETECTOR_SERVICE_BASE_URL` (env) as upstream base URL.
+
 
 ##### Built-in deterministic detector (legacy / offline)
 
