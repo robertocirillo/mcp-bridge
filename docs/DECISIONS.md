@@ -162,72 +162,50 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 
 ---
 
-### D8 – MCP guardrails: enforcement lives in the bridge
+### D8 – Bias guardrail is service-first, pass-through, and supports cascaded checks
 
 **Status:** Accepted
 
 **Decision:**
 
-- mcp-bridge enforces MCP safety/guardrail decisions at runtime (deterministic behavior).
-- Enforcement includes:
-  - session-scoped MCP tool policy (denylist)
-  - before_model / after_model guardrail hooks around model execution
-- The bridge returns **structured errors** for enforcement outcomes (e.g. HTTP 403 with stable `detail.code`).
+- Bias detection runs **after_model** and is performed by an external **bias-detector-service** when `guardrails.bias.base_url` is set.
+- mcp-bridge stays **dumb**:
+  - no local interpretation of label semantics
+  - only **pass-through** of detector configuration and results
+  - blocks only when the detector returns `flagged=true` (and mode is `block`)
+- The session bias config provides **common defaults** (e.g. `model_id`, `threshold`, `unsafe_labels`) and supports a `checks: []` list
+  to execute multiple detector calls **in the same after_model pass** with per-check overrides.
+- Fail-closed behavior: when bias is enabled in `block` mode and the detector is unavailable,
+  mcp-bridge blocks with HTTP 503 `detail.code="BIAS_DETECTOR_UNAVAILABLE"`.
 
 **Rationale:**
 
+- Keeps the bridge thin and policy-less, while enabling flexible governance in the dedicated detector service.
+- Cascaded checks validate multiple models/policies without requiring multiple user queries or multiple sessions.
+- Fail-closed is safer for governance-critical deployments.
 
 ---
 
-### D9 – MCP tool policy is session-scoped and supports wildcards
+### D9 – Forward optional detector debug features (scores/spans) without changing semantics
 
 **Status:** Accepted
 
 **Decision:**
 
-- Tool allow/deny decisions are driven by session configuration (visual builder decides at `POST /sessions` time).
-- `SessionConfig.disallowed_tools` is a denylist and supports wildcard patterns (e.g. `filesystem.*`).
-- Disallowed tool calls are enforced as a **last gate** before any MCP tool invocation.
-- On violation, the API returns **HTTP 403** with structured error `code="MCP_TOOL_NOT_ALLOWED"` and includes `tool_name` + correlation identifiers.
+- mcp-bridge forwards optional detector request flags when configured:
+  - `return_all_scores`
+  - `return_char_spans`
+- When blocking with `BIAS_DETECTED`, mcp-bridge preserves and returns detector details including:
+  - `flagged_labels`
+  - derived `flagged_label_scores` (score/threshold/margin)
+  - `checks_results` (request/response per cascaded check)
 
 **Rationale:**
 
-- Keeps tool policy close to the session that owns the MCP interaction.
-- Avoids relying on model compliance (“please don’t call X”).
-- Wildcards make it practical to disable whole tool families safely.
-
-- Guarantees that blocked actions (e.g. disallowed tool calls) are never executed.
-- Keeps the REST contract stable and testable.
-- Enables later integration with external guardrail/bias detection services without weakening enforcement.
+- Improves observability/debugging for clients (UIs/workflows) without introducing local label logic.
+- Enables practical debugging of edge cases where the LLM output differs from the user prompt.
 
 ---
-
-
-### D10 – Bias detector guardrail MVP0 (after_model only)
-
-**Status:** Accepted
-
-**Decision:**
-
-- Introduce a new session-scoped guardrail `guardrails.bias` with Strategy 3 semantics:
-  - `mode` is a shared default
-  - `output_mode` overrides only the output phase (`after_model`)
-- MVP0 scope is **output-only** (`after_model`) and supports only actions: `off | block`.
-- Default behavior is **fail-open / no-op**: bias guardrail defaults to `off` to avoid breaking behavior.
-- The bias detector is **pluggable** via a minimal interface (`BiasDetector.detect(text) -> BiasDetectionResult`) with a deterministic **NoOp** default implementation.
-- Add a deterministic **RuleBasedBiasDetector** (MVP1) and allow enabling it at startup via `MCP_BRIDGE_BIAS_DETECTOR=rules` (optional `MCP_BRIDGE_BIAS_RULES_THRESHOLD`).
-- Contract tests must remain deterministic and simulate detection via monkeypatch (no external services / LLM calls).
-
-**Rationale:**
-
-- Keeps enforcement inside the bridge (deterministic, testable) and aligned with the existing LangChain-style guardrail pipeline.
-- Allows future evolution of the detector (rules-based, model-based, external service) without changing the HTTP contract.
-
-**Future notes (not implemented now):**
-
-- Extend bias guardrail to `before_model` (input scanning) if needed.
-- Consider configurable fail-open vs fail-closed policy and timeouts when integrating an external bias detection service.
-
 
 ## 2. Rejected Alternatives
 
@@ -362,12 +340,6 @@ These are intentionally left undecided for future iterations.
 - Or is it better to pass through more provider-specific errors?
 - How much detail should be exposed to visual builders vs hidden in logs?
 
-### Q7 – External guardrail/bias detection service
-
-- When should bias/guardrail *detection* be extracted into a separate service (while keeping *enforcement* in the bridge)?
-- What is the minimal API contract (ALLOW/MODIFY/BLOCK + reason codes + policy version)?
-- What should be the failure strategy if the detection service is unavailable (fail-open vs fail-closed)?
-
 ### Q6 – Long-running tasks and cancellation
 
 - When A2A supports non-blocking mode:
@@ -393,9 +365,3 @@ These are intentionally left undecided for future iterations.
 - If in doubt:
   - Add new items to **Open Questions** instead of making big implicit decisions.
 
-
-
-### Q8 – Split into mcp-bridge and a2a-bridge
-
-- Under which conditions does it make sense to split MCP and A2A into separate services?
-- How should shared concerns (tenant/run correlation, structured error schema, logging/tracing) be factored to avoid duplication?

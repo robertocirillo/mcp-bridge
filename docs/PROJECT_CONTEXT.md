@@ -66,6 +66,28 @@ Project: **mcp-bridge – MCP + A2A integration**
     * Responsible for creating, storing, retrieving, listing, and deleting sessions
     * Enforces `MAX_ACTIVE_SESSIONS`
     * Uses an `asyncio.Lock` for concurrency safety
+
+* Guardrails (LangChain-style):
+
+  * Session-scoped `guardrails` configuration is applied around the model call:
+    - `before_model` runs on the user input
+    - `after_model` runs on the model output
+  * PII guardrail supports Strategy 3 semantics (`mode` default + phase overrides).
+
+* Bias detector integration:
+
+  * When `guardrails.bias.base_url` is set, mcp-bridge calls an external `bias-detector-service`
+    (HTTP) on the **final answer only** (after output sanitization).
+  * Supports **cascaded checks** via `guardrails.bias.checks: []`:
+    - Multiple detector calls in a single `after_model` pass, each with per-check overrides
+      (`model_id`, `threshold`, `unsafe_labels`, etc.).
+    - If any check returns `flagged=true` and bias mode is `block`, the request is blocked
+      with structured error `detail.code="BIAS_DETECTED"` and `details.checks_results`.
+  * For debugging, optional forwarded flags:
+    - `return_all_scores`
+    - `return_char_spans` (enables `labels[].spans` when the detector/model supports it)
+  * When service calls fail and bias is in `block` mode, mcp-bridge fails closed:
+    HTTP 503 `detail.code="BIAS_DETECTOR_UNAVAILABLE"`.
   * `A2AClient`:
 
     * Wrapper around **`a2a-sdk`**
@@ -195,7 +217,7 @@ Project: **mcp-bridge – MCP + A2A integration**
   * `steps_used`: integer, number of steps used in the last run (if available from mcp-use).
   * `last_server_used`: optional name of the last tool/server used.
 
-### 3.3 Session Manager### 3.3 Session Manager
+### 3.3 Session Manager
 
 `SessionManager` manages all active sessions in memory:
 
@@ -260,17 +282,6 @@ Project: **mcp-bridge – MCP + A2A integration**
     * Handles cleanup (closing wrappers, etc.) as needed
 
 ---
-
-
-### 3.4 Guardrails (MCP)
-
-mcp-bridge provides lightweight guardrail hooks around MCP query execution:
-
-- **before_model**: validate/normalize input query (pipeline of guardrails)
-- **after_model**: post-check/redact output (pipeline of guardrails)
-
-Tool policy is session-scoped via `SessionConfig.disallowed_tools` (supports wildcards). Disallowed tools are enforced as a **last gate**
-before any MCP tool invocation; violations return **HTTP 403** with structured error `code="MCP_TOOL_NOT_ALLOWED"`.
 
 ## 4. A2A Integration Details
 

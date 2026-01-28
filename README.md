@@ -140,26 +140,23 @@ E2B_API_KEY="your_key_here"
 
 - **OpenAI**: GPT-3.5, GPT-4, etc.  
 - **Anthropic**: Claude models  
-- **Ollama**: Local models  
-
+- **Ollama**: Local models
 
 ### Guardrails (session-scoped)
 
 mcp-bridge supports **LangChain-style guardrails** applied in two phases:
 
-- **before_model**: runs on the user input before calling the model (safer for remote LLMs)
+- **before_model**: runs on the user input before calling the model
 - **after_model**: runs on the model output before returning it to the client
 
 Guardrails are configured **per session** via the `guardrails` object in `POST /sessions`.
 
 #### Global enable/disable
 
-You can disable *all* guardrails for a session:
+Disable *all* guardrails for a session:
 
 ```json
-{
-  "guardrails": { "enabled": false }
-}
+{ "guardrails": { "enabled": false } }
 ```
 
 If `enabled=false`, no `before_model` / `after_model` guardrail runs.
@@ -182,31 +179,22 @@ Allowed values:
 Redact both input and output (shared default):
 
 ```json
-{
-  "guardrails": { "pii": { "mode": "redact" } }
-}
+{ "guardrails": { "pii": { "mode": "redact" } } }
 ```
 
 Block input but redact output:
 
 ```json
-{
-  "guardrails": {
-    "pii": { "input_mode": "block", "output_mode": "redact" }
-  }
-}
+{ "guardrails": { "pii": { "input_mode": "block", "output_mode": "redact" } } }
 ```
 
 Disable only output PII (input still uses its default / shared mode):
 
 ```json
-{
-  "guardrails": { "pii": { "output_mode": "off" } }
-}
+{ "guardrails": { "pii": { "output_mode": "off" } } }
 ```
 
-
-#### Bias detector guardrail (after_model only)
+#### Bias detector guardrail (after_model)
 
 Bias is controlled by `guardrails.bias` and follows the same **Strategy 3** approach:
 
@@ -217,180 +205,106 @@ Allowed values:
 - `off`: disable the bias guardrail
 - `block`: block the response with structured error `detail.code="BIAS_DETECTED"`
 
-By default, `guardrails.bias.base_url` is set to `http://bias-detector-service:9090` (Docker DNS).
+When `guardrails.bias.base_url` is set, mcp-bridge calls an external `bias-detector-service`
+on the **final answer only**.
 
-- If mcp-bridge runs **in Docker** on the same network as the service, you can usually omit `base_url`.
-- If mcp-bridge runs on the **host** (e.g. PyCharm), override it to `http://localhost:9090`.
-- To use the built-in detector instead of the service, set `base_url` to `null` in the session.
+##### Bias config (common fields)
 
-##### bias-detector-service integration (recommended)
+These fields are applied as **defaults** and are inherited by each cascaded check unless overridden:
 
-When `guardrails.bias.base_url` is not `null`, mcp-bridge will call an external `bias-detector-service` classifier on the **final answer only**.
-
-Session-scoped fields forwarded to the service:
-
-- `base_url`: e.g. `http://bias-detector-service:9090`
-- `timeout_seconds` (default `5.0`)
+- `base_url` (required for service mode): e.g. `http://bias-detector-service:9090`
+- `timeout_seconds` (default `5`)
 - `threshold` (default `0.5`)
 - `top_k` (default `5`)
 - `active_categories` (optional; `null` means "all categories", `[]` means "none")
-- `unsafe_labels` (optional; enables label semantic policy for multi-class models; forwarded as-is)
+- `unsafe_labels` (optional; label semantic policy forwarded as-is)
 - `model_id` / `revision` (optional model override)
+- `return_all_scores` (optional; forwarded to the service)
+- `return_char_spans` (optional; forwarded to the service; enables char spans when supported by the model)
 
-**Fail-closed:** when the bias guardrail is enabled in `block` mode and the service call fails, the request is blocked with `detail.code="BIAS_DETECTOR_UNAVAILABLE"` and HTTP 503.
+##### Cascaded checks (bias “a cascata”)
 
-##### Introspection proxy endpoints (optional)
+To validate multiple models / thresholds / unsafe label policies **in the same after_model pass**,
+configure `guardrails.bias.checks`:
 
-If external clients cannot reach `bias-detector-service` directly (internal Docker network), mcp-bridge can proxy read-only introspection:
+- If `checks` is omitted → a single check is executed using the common fields.
+- If `checks` is an empty list `[]` → no bias checks are executed (explicit no-op).
+- If `checks` is a list → each entry runs sequentially; the request is blocked if **any** check returns `flagged=true`.
 
-- `GET /v1/guardrails/bias/models/{model_id}/policy` → forwards to `bias-detector-service GET /v1/models/{model_id}/policy`
-- `GET /v1/guardrails/bias/models/{model_id}/labels` → forwards to `bias-detector-service GET /v1/models/{model_id}/labels` (if supported)
+Each check supports **per-check overrides**:
 
-These use `BIAS_DETECTOR_SERVICE_BASE_URL` (env) as upstream base URL.
+- `name` (optional, for debugging)
+- `model_id`, `revision`
+- `threshold`, `top_k`
+- `active_categories`, `unsafe_labels`
 
-
-##### Built-in deterministic detector (legacy / offline)
-
-To enable the built-in deterministic rules-based detector (no external services), set:
-
-- `MCP_BRIDGE_BIAS_DETECTOR=rules`
-- Optional tuning: `MCP_BRIDGE_BIAS_RULES_THRESHOLD=4` (default 4)
-
-**Example: block only output (after_model) using bias-detector-service**
+Example (two checks, different models and unsafe_labels):
 
 ```json
 {
   "guardrails": {
+    "enabled": true,
     "bias": {
       "mode": "off",
       "output_mode": "block",
       "base_url": "http://bias-detector-service:9090",
+      "timeout_seconds": 10,
       "threshold": 0.5,
-      "top_k": 5
-    }
-  }
-}
-```
-
-When blocked, the API responds with HTTP 403 and a structured payload under `detail`, for example:
-
-```json
-{
-  "detail": {
-    "code": "BIAS_DETECTED",
-    "message": "Bias detected in model output",
-    "operation": "execute_query",
-    "phase": "after_model",
-    "rule": "bias"
-  }
-}
-```
-**Additional details (flagged label scores)**
-
-When blocked with `code="BIAS_DETECTED"`, the response `detail.details` may include per-label scores
-(as returned by `bias-detector-service`) so clients can show *why* the threshold was exceeded:
-
-- `flagged_labels`: list of labels that triggered blocking
-- `flagged_label_scores`: list of objects with:
-  - `label`
-  - `score` (0..1)
-  - `score_pct` (0..100)
-  - `threshold`
-  - `margin` (= score - threshold)
-
-Example (shape only):
-
-```json
-{
-  "detail": {
-    "code": "BIAS_DETECTED",
-    "details": {
-      "flagged_labels": ["HATE"],
-      "flagged_label_scores": [
-        { "label": "HATE", "score": 0.9967, "score_pct": 99.67, "threshold": 0.8, "margin": 0.1967 }
+      "top_k": 5,
+      "return_char_spans": true,
+      "checks": [
+        {
+          "name": "hate_binary",
+          "model_id": "cardiffnlp/twitter-roberta-base-hate-latest",
+          "revision": "",
+          "unsafe_labels": ["HATE"]
+        },
+        {
+          "name": "toxicity_en",
+          "model_id": "unitary/unbiased-toxic-roberta",
+          "revision": "",
+          "unsafe_labels": ["toxicity", "threat", "identity_attack"]
+        }
       ]
     }
   }
 }
 ```
 
+##### Failure behavior (service mode)
 
+When the bias guardrail is enabled in `block` mode and the service call fails,
+the request is blocked with:
 
+- HTTP **503**
+- `detail.code="BIAS_DETECTOR_UNAVAILABLE"`
 
-**Manual functional test (local, tool-based echo)**
+##### Introspection proxy endpoints (read-only)
 
-This is a practical way to validate the bias guardrail end-to-end **without depending on the LLM generating the trigger text**.
-We start an MCP server that exposes an `echo` tool and force the agent to copy the tool output verbatim.
+If clients cannot reach `bias-detector-service` directly (internal Docker network),
+mcp-bridge can proxy read-only introspection:
 
-Prerequisites:
-- Node.js available on the machine running `mcp-bridge` (so `npx` is in `PATH`)
+- `GET /v1/guardrails/bias/models/{model_id:path}/policy`
+- `GET /v1/guardrails/bias/models/{model_id:path}/labels`
 
-1) Create a session with an MCP server started via `npx` and bias blocking enabled:
+##### Block response details (flagged label scores + checks)
 
-```bash
-curl -s -X POST "http://127.0.0.1:8000/sessions" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "llm_provider": { "provider": "ollama", "model": "llama3.1", "temperature": 0 },
-    "mcp_servers": {
-      "everything": {
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-everything"]
-      }
-    },
-    "guardrails": {
-      "enabled": true,
-      "bias": { "mode": "off", "output_mode": "block", "base_url": "http://bias-detector-service:9090" }
-    }
-  }'
-```
+When blocked with `code="BIAS_DETECTED"`, the response includes `detail.details` with:
 
-2) Use the `echo` tool to produce a deterministic output and ask the agent to return it **exactly**:
+- `flagged_labels`: labels that triggered blocking
+- `flagged_label_scores`: per-label scores (as returned by the service), including:
+  `label`, `score` (0..1), `score_pct` (0..100), `threshold`, `margin` (= score - threshold)
+- `checks_results`: list of `{name, request, response}` for each check executed (useful to debug cascaded runs)
 
-```bash
-SESSION_ID="..."  # paste from the response above
-curl -i -X POST "http://127.0.0.1:8000/sessions/${SESSION_ID}/query" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "Call the MCP tool echo with message=\"All immigrants are dangerous.\". Then respond with ONLY the exact echoed message and nothing else.",
-    "max_steps": 10
-  }'
-```
+#### Output sanitization
 
-Expected result: HTTP 403 with `detail.code="BIAS_DETECTED"` and `detail.phase="after_model"`.
+Some model/tooling combinations may include intermediate agent traces (e.g. `Thought: ...`, `Action: ...`)
+in the final text. mcp-bridge normalizes the returned `QueryResponse.result` by extracting the final answer:
 
-> Note: you do **not** need to start the MCP server manually. `mcp-bridge` spawns it as a child process using the `command/args` above.
+- If the text contains a `Final Answer:` marker, only the content after the last marker is returned.
+- Otherwise the raw model text is returned.
 
-
-#### PII handling on MCP tool results
-
-When the agent calls MCP tools (e.g. filesystem), mcp-bridge wraps tool invocations and can apply **PII handling to tool outputs** *before* they are incorporated into the agent context / model output.
-
-Behavior:
-- Controlled by the same session switches:
-  - `guardrails.enabled=false` → no tool-result processing (but **tool policy is still enforced**)
-  - PII output mode `redact` → recursively redact strings in tool outputs
-  - PII output mode `block` → **block the request** (HTTP 403) if PII is detected in tool outputs
-  - PII output mode `off` → no tool-result processing
-- The structure of the tool result is preserved (dict/list/tuple), only string values are redacted/scanned.
-
-**PII block error shape**
-
-When input PII is blocked, the API responds with HTTP 403 and a structured payload under `detail`, for example:
-
-```json
-{
-  "detail": {
-    "code": "PII_DETECTED",
-    "message": "PII detected in user input",
-    "operation": "execute_query",
-    "phase": "before_model",
-    "rule": "pii",
-    "details": { "types": ["email", "iban"], "mode": "block" }
-  }
-}
-```
-
+This keeps the API response stable and avoids leaking internal reasoning traces.
 
 ### Multi-tenancy
 mcp-bridge supports optional multi-tenancy, implemented in a simple, header-based way.

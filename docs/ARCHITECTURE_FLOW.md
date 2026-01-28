@@ -55,19 +55,7 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
   "sandbox": false,
   "sandbox_options": {},
   "disallowed_tools": [],
-  "use_server_manager": false,
-  "guardrails": {
-    "enabled": true,
-    "pii": {
-      "mode": "redact",
-      "input_mode": "block",
-      "output_mode": "redact"
-    },
-    "bias": {
-      "mode": "off",
-      "output_mode": "block"
-    }
-  }
+  "use_server_manager": false
 }
 ```
 
@@ -86,17 +74,6 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
    - Calls `session_id = await session_manager.create_session(config=request, tenant_id=tenant_ctx.tenant_id, run_id=tenant_ctx.run_id)`.
 
 3. `SessionManager.create_session(...)`:
-   - Resolves and applies **session-scoped guardrails** (LangChain-style `before_model` / `after_model`) on the `MCPWrapper`.
-     - `guardrails.enabled=false` disables all guardrails for the session.
-     - For PII, `mode` is a shared default and `input_mode` / `output_mode` can override per phase.
-      - For bias, only `after_model` is enforced and supports `off|block` (default off).
-      - The built-in detector is **NoOp** by default (fail-open). You can opt-in to the deterministic rules-based detector (MVP1) via env: `MCP_BRIDGE_BIAS_DETECTOR=rules` (optional `MCP_BRIDGE_BIAS_RULES_THRESHOLD`).
-     - PII output handling is also applied to **MCP tool results** before they are fed back into the agent context:
-       - `output_mode=redact` => redact string values recursively
-       - `output_mode=block` => block the request (HTTP 403) if PII is detected in tool results
-       - `output_mode=off` or `guardrails.enabled=false` => no tool-result processing (tool policy is still enforced)
-
-
    - Acquires `self._lock`.
    - Checks `len(self._sessions) < settings.MAX_ACTIVE_SESSIONS`, otherwise raises `MaxSessionsExceededError`.
    - Generates a new `session_id = uuid4()`.
@@ -203,7 +180,6 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
 2. Route:
    - Retrieves session via `await session_manager.get_session(session_id)` (which already enforces tenant ownership in newer versions).
    - Extracts `wrapper = session_data.wrapper`.
-   - Applies **before_model guardrails** (e.g. input PII) inside `wrapper.run_query(...)` before calling the model.
    - `start_time = loop.time()`.
    - Calls:
 
@@ -215,20 +191,6 @@ result = await wrapper.run_query(
 )
 ```
 
-   - Applies **after_model guardrails** (e.g. output PII) inside `wrapper.run_query(...)` before returning the response.
-      - Bias detector runs here (after_model).
-        - If `guardrails.bias.base_url` is **not null** (default: `http://bias-detector-service:9090`), mcp-bridge calls bias-detector-service on the **final answer only**.
-        - `unsafe_labels` (if present in session config) is forwarded to enable label semantic policy for multi-class models.
-        - On detection in `block` mode it returns HTTP 403 `detail.code="BIAS_DETECTED"`.
-  - The structured payload may include `detail.details.flagged_labels` and `detail.details.flagged_label_scores` (per-label score/percent/threshold/margin) as a pass-through of `bias-detector-service` results, so clients can display the threshold exceedance.
-        - Fail-closed: if the service call fails while enabled, mcp-bridge blocks with HTTP 503 `detail.code="BIAS_DETECTOR_UNAVAILABLE"`.
-      - If `guardrails.bias.base_url` is `null`, the active built-in detector is pluggable; by default it is NoOp (never detects). A deterministic rules-based detector can be enabled via `MCP_BRIDGE_BIAS_DETECTOR=rules`.
-   - MCP tool calls are proxied so that:
-     - tool policy (`disallowed_tools`) is enforced **before** each tool execution (independent of `guardrails.enabled`)
-     - tool results can be post-processed **before** they are incorporated into the agent run
-       - `guardrails.enabled=false` or PII `output_mode=off` => no tool-result processing
-       - PII `output_mode=redact` => recursively redact string values
-       - PII `output_mode=block` => block the request with HTTP 403 (`detail.code=PII_DETECTED`, `phase=tool_result`)
    - `end_time = loop.time()`.
    - `session_data.register_query()` (increments `query_count`).
    - Reads `steps_used = wrapper.steps_used`.
@@ -254,10 +216,44 @@ result = await wrapper.run_query(
 - However, the LLM-only execution still works.  
 - `steps_used` is typically `1` (single LLM response) in such cases.
 
+**Guardrails (before_model / after_model):**
+
+When a session includes `guardrails.enabled=true`, `MCPWrapper.run_query()` executes the model call through a LangChain-style guardrail pipeline:
+
+1. **before_model**: guardrails run on the user query (input) before calling the LLM.
+2. **after_model**: guardrails run on the LLM output before returning it to the client.
+
+Currently used guardrails include:
+
+- **PII**: redact/block on input/output (Strategy 3: shared `mode` + per-phase overrides).
+- **Bias (after_model)**: block-only in MVP; integrates with `bias-detector-service` when `guardrails.bias.base_url` is set.
+
+**Bias “a cascata” (cascaded checks):**
+
+`guardrails.bias` supports an optional `checks: []` list. In `after_model`, mcp-bridge executes each check sequentially (same LLM output, different detector settings), with per-check overrides for:
+
+- `model_id` / `revision`
+- `threshold` / `top_k`
+- `active_categories` / `unsafe_labels`
+
+If **any** check returns `flagged=true` (and bias mode is `block`), the request is blocked with HTTP 403 `detail.code="BIAS_DETECTED"`.
+The error payload includes `details.checks_results` (one entry per check, including `request` + `response`), so the client can debug cascaded runs.
+
+Optional forwarding flags (service mode):
+
+- `return_all_scores`
+- `return_char_spans` (enables `labels[].spans` when supported by the detector/model)
+
+**Output sanitization:**
+
+Some LLM/tooling combinations may return intermediate agent traces. mcp-bridge normalizes the final text returned to the client:
+
+- If the output contains a `Final Answer:` marker, only the content after the last marker is returned.
+- Otherwise the raw LLM text is returned.
+
 **Failure modes:**
 
 - Session not found or tenant mismatch → HTTP 404.
-- Input guardrail violations (e.g. `PII_DETECTED` in `before_model` with `block`) → HTTP 403 with structured `detail`.
 - `ConfigurationError` → HTTP 400.
 - `MCPWrapperError` → HTTP 502.
 - Unexpected errors → HTTP 500.
@@ -515,13 +511,3 @@ Therefore:
 4. **Orchestration & NATS**:
    - Orchestration lives outside mcp-bridge.
    - NATS is not part of mcp-bridge; any NATS usage is within remote A2A agents.
-
-
-### Bias introspection proxy
-
-mcp-bridge exposes read-only proxy endpoints so external clients can inspect per-model bias policies/labels even when bias-detector-service is internal:
-
-- `GET /v1/guardrails/bias/models/{model_id}/policy`
-- `GET /v1/guardrails/bias/models/{model_id}/labels`
-
-Upstream base URL is `BIAS_DETECTOR_SERVICE_BASE_URL`.
