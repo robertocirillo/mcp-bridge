@@ -520,6 +520,38 @@ def make_bias_after_model_guardrail_service(
             },
         )
 
+        # Determine effective threshold (prefer upstream meta if present).
+        meta = resp.get("meta")
+        effective_threshold = meta.get("threshold") if isinstance(meta, dict) else None
+        if effective_threshold is None:
+            effective_threshold = threshold
+
+        # Enrich error details with per-label scores from the upstream response.
+        # NOTE: mcp-bridge remains "dumb": we only surface upstream scores for labels already flagged.
+        flagged_label_scores: List[Dict[str, Any]] = []
+        labels = resp.get("labels") or []
+        if isinstance(labels, list):
+            for item in labels:
+                if not isinstance(item, dict):
+                    continue
+                lbl = item.get("label")
+                score = item.get("score")
+                is_flagged = item.get("is_flagged")
+
+                if lbl in flagged_labels and isinstance(score, (int, float)):
+                    score_f = float(score)
+                    thr = float(effective_threshold) if effective_threshold is not None else None
+                    flagged_label_scores.append(
+                        {
+                            "label": lbl,
+                            "score": score_f,
+                            "score_pct": round(score_f * 100.0, 2),
+                            "threshold": thr,
+                            "margin": round(score_f - thr, 6) if thr is not None else None,
+                            "is_flagged": bool(is_flagged) if is_flagged is not None else None,
+                        }
+                    )
+
         raise GuardrailViolationError(
             code="BIAS_DETECTED",
             message="Bias detected in model output",
@@ -536,10 +568,12 @@ def make_bias_after_model_guardrail_service(
                 "model_id": resp.get("model_id"),
                 "revision": resp.get("revision"),
                 "flagged_labels": flagged_labels,
-                "threshold": resp.get("meta", {}).get("threshold") if isinstance(resp.get("meta"), dict) else None,
+                "flagged_label_scores": flagged_label_scores,
+                "threshold": effective_threshold,
                 "top_k": top_k,
             },
         )
+
 
     return _guardrail
 
