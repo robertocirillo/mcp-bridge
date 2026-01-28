@@ -285,6 +285,35 @@ When blocked, the API responds with HTTP 403 and a structured payload under `det
   }
 }
 ```
+**Additional details (flagged label scores)**
+
+When blocked with `code="BIAS_DETECTED"`, the response `detail.details` may include per-label scores
+(as returned by `bias-detector-service`) so clients can show *why* the threshold was exceeded:
+
+- `flagged_labels`: list of labels that triggered blocking
+- `flagged_label_scores`: list of objects with:
+  - `label`
+  - `score` (0..1)
+  - `score_pct` (0..100)
+  - `threshold`
+  - `margin` (= score - threshold)
+
+Example (shape only):
+
+```json
+{
+  "detail": {
+    "code": "BIAS_DETECTED",
+    "details": {
+      "flagged_labels": ["HATE"],
+      "flagged_label_scores": [
+        { "label": "HATE", "score": 0.9967, "score_pct": 99.67, "threshold": 0.8, "margin": 0.1967 }
+      ]
+    }
+  }
+}
+```
+
 
 
 

@@ -220,6 +220,7 @@ result = await wrapper.run_query(
         - If `guardrails.bias.base_url` is **not null** (default: `http://bias-detector-service:9090`), mcp-bridge calls bias-detector-service on the **final answer only**.
         - `unsafe_labels` (if present in session config) is forwarded to enable label semantic policy for multi-class models.
         - On detection in `block` mode it returns HTTP 403 `detail.code="BIAS_DETECTED"`.
+  - The structured payload may include `detail.details.flagged_labels` and `detail.details.flagged_label_scores` (per-label score/percent/threshold/margin) as a pass-through of `bias-detector-service` results, so clients can display the threshold exceedance.
         - Fail-closed: if the service call fails while enabled, mcp-bridge blocks with HTTP 503 `detail.code="BIAS_DETECTOR_UNAVAILABLE"`.
       - If `guardrails.bias.base_url` is `null`, the active built-in detector is pluggable; by default it is NoOp (never detects). A deterministic rules-based detector can be enabled via `MCP_BRIDGE_BIAS_DETECTOR=rules`.
    - MCP tool calls are proxied so that:
