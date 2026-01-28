@@ -95,6 +95,61 @@ class PiiSettings(BaseModel):
     )
 
 
+class BiasCheckSettings(BaseModel):
+    # Allow `model_id` field name (used to forward overrides to bias-detector-service).
+    model_config = ConfigDict(protected_namespaces=())
+
+    """Per-check overrides for the bias-detector-service guardrail.
+
+    A check inherits all "common" bias settings from `BiasSettings` (session-level defaults)
+    and can override only the model/policy fields that are typically varied during a
+    "cascaded" evaluation.
+
+    NOTE: A field is considered an override when it is *present* in the request JSON,
+    even if its value is null. This enables explicit override-to-null (e.g. to omit
+    `unsafe_labels` and rely on the upstream model registry policy).
+    """
+
+    name: Optional[str] = Field(
+        default=None,
+        description="Optional check name (for debugging and cascaded results reporting).",
+    )
+
+    threshold: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Optional threshold override for this check.",
+    )
+
+    top_k: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Optional top_k override for this check.",
+    )
+
+    active_categories: Optional[List[str]] = Field(
+        default=None,
+        description="Optional active_categories override for this check.",
+    )
+
+    unsafe_labels: Optional[List[str]] = Field(
+        default=None,
+        description="Optional unsafe_labels override for this check.",
+    )
+
+    model_id: Optional[str] = Field(
+        default=None,
+        description="Optional model_id override for this check.",
+    )
+
+    revision: Optional[str] = Field(
+        default=None,
+        description="Optional revision override for this check.",
+    )
+
+
 class BiasSettings(BaseModel):
     # Allow `model_id` field name (used to forward overrides to bias-detector-service).
     model_config = ConfigDict(protected_namespaces=())
@@ -161,6 +216,22 @@ class BiasSettings(BaseModel):
         description="Top-K labels requested from bias-detector-service.",
     )
 
+    return_all_scores: bool = Field(
+        default=False,
+        description=(
+            "If true, bias-detector-service returns scores for all labels (not only top_k). "
+            "Forwarded as `return_all_scores`."
+        ),
+    )
+
+    return_char_spans: bool = Field(
+        default=False,
+        description=(
+            "If true, bias-detector-service returns character spans for detected labels "
+            "when supported by the model/pipeline. Forwarded as `return_char_spans`."
+        ),
+    )
+
     active_categories: Optional[List[str]] = Field(
         default=None,
         description=(
@@ -192,6 +263,18 @@ class BiasSettings(BaseModel):
     revision: Optional[str] = Field(
         default=None,
         description="Optional model revision override forwarded to bias-detector-service.",
+    )
+
+
+    checks: Optional[List[BiasCheckSettings]] = Field(
+        default=None,
+        description=(
+            "Optional list of cascaded bias checks to run in after_model. "
+            "If omitted (null), mcp-bridge runs a single bias-detector-service call using the "
+            "session-level defaults. "
+            "If provided, each element inherits all common fields from this BiasSettings and can override "
+            "model_id/revision/threshold/top_k/active_categories/unsafe_labels." 
+        ),
     )
 
 

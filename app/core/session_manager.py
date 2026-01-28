@@ -190,10 +190,13 @@ class SessionManager:
                                     timeout_seconds=getattr(bias_cfg, "timeout_seconds", 5.0),
                                     threshold=getattr(bias_cfg, "threshold", 0.5),
                                     top_k=getattr(bias_cfg, "top_k", 5),
+                                    return_all_scores=getattr(bias_cfg, "return_all_scores", False),
+                                    return_char_spans=getattr(bias_cfg, "return_char_spans", False),
                                     active_categories=getattr(bias_cfg, "active_categories", None),
                                     unsafe_labels=getattr(bias_cfg, "unsafe_labels", None),
                                     model_id=getattr(bias_cfg, "model_id", None),
                                     revision=getattr(bias_cfg, "revision", None),
+                                    checks=getattr(bias_cfg, "checks", None),
                                 )
                             elif hasattr(wrapper, "set_bias_mode"):
                                 wrapper.set_bias_mode(effective_bias_output_mode)
