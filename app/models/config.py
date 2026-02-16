@@ -282,7 +282,7 @@ class GuardrailsSettings(BaseModel):
     """Session-scoped guardrails configuration."""
 
     enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Global switch to enable/disable ALL guardrails for the session. "
             "If false, no before_model/after_model guardrail will run."
