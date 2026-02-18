@@ -140,7 +140,9 @@ E2B_API_KEY="your_key_here"
 
 - **OpenAI**: GPT-3.5, GPT-4, etc.  
 - **Anthropic**: Claude models  
-- **Ollama**: Local models
+- **Ollama**: Local models  
+
+
 
 ### Guardrails (session-scoped)
 
@@ -153,15 +155,25 @@ Guardrails are configured **per session** via the `guardrails` object in `POST /
 
 #### Global enable/disable
 
+Guardrails are **disabled by default** unless enabled for the session.
+
+- If the `guardrails` field is **omitted** in `POST /sessions`, guardrails remain **disabled**.
+- If the `guardrails` object is **provided** and `guardrails.enabled` is **omitted**, mcp-bridge will **auto-enable** guardrails (`enabled=true`).
+- If `guardrails.enabled` is provided explicitly, it **always wins** (you can force-disable guardrails even if specific guardrail settings are present).
+
 Disable *all* guardrails for a session:
 
 ```json
 { "guardrails": { "enabled": false } }
 ```
 
-If `enabled=false`, no `before_model` / `after_model` guardrail runs.
+Auto-enable (enabled omitted) by providing any guardrail settings:
 
-#### PII guardrail (email / phone / IBAN)
+```json
+{ "guardrails": { "pii": { "mode": "redact" } } }
+```
+
+#### PII guardrail
 
 PII is controlled by `guardrails.pii` and supports **Strategy 3**:
 
@@ -169,142 +181,35 @@ PII is controlled by `guardrails.pii` and supports **Strategy 3**:
 - `input_mode` overrides only input (`before_model`)
 - `output_mode` overrides only output (`after_model`)
 
-Allowed values:
-- `off`: disable the PII guardrail for that phase
-- `redact`: replace detected entities with placeholders (e.g. `[MCP_BRIDGE_REDACTED_EMAIL]`)
-- `block`: block the request (HTTP 403) with structured error `detail.code="PII_DETECTED"`
-
-**Examples**
-
-Redact both input and output (shared default):
-
-```json
-{ "guardrails": { "pii": { "mode": "redact" } } }
-```
-
-Block input but redact output:
-
-```json
-{ "guardrails": { "pii": { "input_mode": "block", "output_mode": "redact" } } }
-```
-
-Disable only output PII (input still uses its default / shared mode):
-
-```json
-{ "guardrails": { "pii": { "output_mode": "off" } } }
-```
-
-#### Bias detector guardrail (after_model)
-
-Bias is controlled by `guardrails.bias` and follows the same **Strategy 3** approach:
-
-- `mode` is a **shared default**
-- `output_mode` overrides only output (`after_model`)
-
-Allowed values:
-- `off`: disable the bias guardrail
-- `block`: block the response with structured error `detail.code="BIAS_DETECTED"`
-
-When `guardrails.bias.base_url` is set, mcp-bridge calls an external `bias-detector-service`
-on the **final answer only**.
-
-##### Bias config (common fields)
-
-These fields are applied as **defaults** and are inherited by each cascaded check unless overridden:
-
-- `base_url` (required for service mode): e.g. `http://bias-detector-service:9090`
-- `timeout_seconds` (default `5`)
-- `threshold` (default `0.5`)
-- `top_k` (default `5`)
-- `active_categories` (optional; `null` means "all categories", `[]` means "none")
-- `unsafe_labels` (optional; label semantic policy forwarded as-is)
-- `model_id` / `revision` (optional model override)
-- `return_all_scores` (optional; forwarded to the service)
-- `return_char_spans` (optional; forwarded to the service; enables char spans when supported by the model)
-
-##### Cascaded checks (bias “a cascata”)
-
-To validate multiple models / thresholds / unsafe label policies **in the same after_model pass**,
-configure `guardrails.bias.checks`:
-
-- If `checks` is omitted → a single check is executed using the common fields.
-- If `checks` is an empty list `[]` → no bias checks are executed (explicit no-op).
-- If `checks` is a list → each entry runs sequentially; the request is blocked if **any** check returns `flagged=true`.
-
-Each check supports **per-check overrides**:
-
-- `name` (optional, for debugging)
-- `model_id`, `revision`
-- `threshold`, `top_k`
-- `active_categories`, `unsafe_labels`
-
-Example (two checks, different models and unsafe_labels):
+Example:
 
 ```json
 {
   "guardrails": {
-    "enabled": true,
-    "bias": {
-      "mode": "off",
-      "output_mode": "block",
-      "base_url": "http://bias-detector-service:9090",
-      "timeout_seconds": 10,
-      "threshold": 0.5,
-      "top_k": 5,
-      "return_char_spans": true,
-      "checks": [
-        {
-          "name": "hate_binary",
-          "model_id": "cardiffnlp/twitter-roberta-base-hate-latest",
-          "revision": "",
-          "unsafe_labels": ["HATE"]
-        },
-        {
-          "name": "toxicity_en",
-          "model_id": "unitary/unbiased-toxic-roberta",
-          "revision": "",
-          "unsafe_labels": ["toxicity", "threat", "identity_attack"]
-        }
-      ]
+    "pii": {
+      "mode": "redact",
+      "input_mode": "block"
     }
   }
 }
 ```
 
-##### Failure behavior (service mode)
+#### Bias guardrail (after_model)
 
-When the bias guardrail is enabled in `block` mode and the service call fails,
-the request is blocked with:
+Bias detection is controlled by `guardrails.bias` and is applied in **after_model** (model output). Example:
 
-- HTTP **503**
-- `detail.code="BIAS_DETECTOR_UNAVAILABLE"`
-
-##### Introspection proxy endpoints (read-only)
-
-If clients cannot reach `bias-detector-service` directly (internal Docker network),
-mcp-bridge can proxy read-only introspection:
-
-- `GET /v1/guardrails/bias/models/{model_id:path}/policy`
-- `GET /v1/guardrails/bias/models/{model_id:path}/labels`
-
-##### Block response details (flagged label scores + checks)
-
-When blocked with `code="BIAS_DETECTED"`, the response includes `detail.details` with:
-
-- `flagged_labels`: labels that triggered blocking
-- `flagged_label_scores`: per-label scores (as returned by the service), including:
-  `label`, `score` (0..1), `score_pct` (0..100), `threshold`, `margin` (= score - threshold)
-- `checks_results`: list of `{name, request, response}` for each check executed (useful to debug cascaded runs)
-
-#### Output sanitization
-
-Some model/tooling combinations may include intermediate agent traces (e.g. `Thought: ...`, `Action: ...`)
-in the final text. mcp-bridge normalizes the returned `QueryResponse.result` by extracting the final answer:
-
-- If the text contains a `Final Answer:` marker, only the content after the last marker is returned.
-- Otherwise the raw model text is returned.
-
-This keeps the API response stable and avoids leaking internal reasoning traces.
+```json
+{
+  "guardrails": {
+    "bias": {
+      "mode": "block",
+      "base_url": "http://bias-detector-service:9090",
+      "threshold": 0.8,
+      "top_k": 5
+    }
+  }
+}
+```
 
 ### Multi-tenancy
 mcp-bridge supports optional multi-tenancy, implemented in a simple, header-based way.

@@ -216,40 +216,24 @@ result = await wrapper.run_query(
 - However, the LLM-only execution still works.  
 - `steps_used` is typically `1` (single LLM response) in such cases.
 
+
 **Guardrails (before_model / after_model):**
 
-When a session includes `guardrails.enabled=true`, `MCPWrapper.run_query()` executes the model call through a LangChain-style guardrail pipeline:
+mcp-bridge runs guardrails through a LangChain-style pipeline inside `MCPWrapper.run_query()`:
 
-1. **before_model**: guardrails run on the user query (input) before calling the LLM.
-2. **after_model**: guardrails run on the LLM output before returning it to the client.
+- **before_model**: runs on the user query (input) before calling the LLM.
+- **after_model**: runs on the LLM output before returning it to the client.
+
+**Enablement rule (auto-enable):**
+
+- If the session creation request omits the `guardrails` field entirely, guardrails are **disabled** by default.
+- If the request provides a `guardrails` object and omits `guardrails.enabled`, mcp-bridge **auto-enables** guardrails (`enabled=true`).
+- If `guardrails.enabled` is provided explicitly, it always wins (you can force-disable guardrails even if specific guardrail settings are present).
 
 Currently used guardrails include:
 
 - **PII**: redact/block on input/output (Strategy 3: shared `mode` + per-phase overrides).
-- **Bias (after_model)**: block-only in MVP; integrates with `bias-detector-service` when `guardrails.bias.base_url` is set.
-
-**Bias “a cascata” (cascaded checks):**
-
-`guardrails.bias` supports an optional `checks: []` list. In `after_model`, mcp-bridge executes each check sequentially (same LLM output, different detector settings), with per-check overrides for:
-
-- `model_id` / `revision`
-- `threshold` / `top_k`
-- `active_categories` / `unsafe_labels`
-
-If **any** check returns `flagged=true` (and bias mode is `block`), the request is blocked with HTTP 403 `detail.code="BIAS_DETECTED"`.
-The error payload includes `details.checks_results` (one entry per check, including `request` + `response`), so the client can debug cascaded runs.
-
-Optional forwarding flags (service mode):
-
-- `return_all_scores`
-- `return_char_spans` (enables `labels[].spans` when supported by the detector/model)
-
-**Output sanitization:**
-
-Some LLM/tooling combinations may return intermediate agent traces. mcp-bridge normalizes the final text returned to the client:
-
-- If the output contains a `Final Answer:` marker, only the content after the last marker is returned.
-- Otherwise the raw LLM text is returned.
+- **Bias**: after_model-only detector (block/off), typically calling `bias-detector-service`.
 
 **Failure modes:**
 
