@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Optional, Dict, List
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing_extensions import Literal
 
 
@@ -251,7 +251,6 @@ class BiasSettings(BaseModel):
         ),
     )
 
-
     model_id: Optional[str] = Field(
         default=None,
         description=(
@@ -265,7 +264,6 @@ class BiasSettings(BaseModel):
         description="Optional model revision override forwarded to bias-detector-service.",
     )
 
-
     checks: Optional[List[BiasCheckSettings]] = Field(
         default=None,
         description=(
@@ -273,7 +271,7 @@ class BiasSettings(BaseModel):
             "If omitted (null), mcp-bridge runs a single bias-detector-service call using the "
             "session-level defaults. "
             "If provided, each element inherits all common fields from this BiasSettings and can override "
-            "model_id/revision/threshold/top_k/active_categories/unsafe_labels." 
+            "model_id/revision/threshold/top_k/active_categories/unsafe_labels."
         ),
     )
 
@@ -299,9 +297,70 @@ class GuardrailsSettings(BaseModel):
         description="Bias detector settings (MVP0: after_model only).",
     )
 
+    @model_validator(mode="after")
+    def _auto_enable_if_user_provided_guardrails(self):
+        """Auto-resolve enabled when user does not specify it.
+
+        This must work in BOTH cases:
+        1) JSON/dict input: SessionConfig(..., guardrails={...})
+        2) Direct Pydantic construction in tests/code: GuardrailsSettings(pii=..., bias=...)
+
+        Rule:
+        - If the user did not explicitly set `enabled`, then enabled=True when at least one guardrail
+          section was explicitly provided (e.g. `pii` and/or `bias`).
+        - Default-constructed GuardrailsSettings() remains enabled=False.
+        """
+        fields_set = getattr(self, "__pydantic_fields_set__", set())
+        if "enabled" in fields_set:
+            return self
+
+        # If the user provided at least one guardrail section explicitly, enable.
+        provided_sections = [f for f in fields_set if f != "enabled"]
+        if provided_sections:
+            self.enabled = True
+        return self
+
 
 class SessionConfig(BaseModel):
     """Configuration to create a new session"""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _auto_enable_guardrails(cls, data):
+        """Auto-resolve guardrails.enabled when the user does not specify it.
+
+        Contract:
+        - If the request includes a `guardrails` object and does NOT include `guardrails.enabled`,
+          then `guardrails.enabled` is derived as:
+            - True  when at least one guardrail section is present (e.g. `pii` and/or `bias`).
+            - False when `guardrails` is an empty object.
+        - If the request omits `guardrails` entirely, guardrails remain disabled by default.
+        - If the user explicitly sets `guardrails.enabled`, it always wins.
+        """
+
+        if not isinstance(data, dict):
+            return data
+
+        if "guardrails" not in data:
+            # Guardrails omitted: default_factory will apply (enabled=false).
+            return data
+
+        guardrails = data.get("guardrails")
+        if guardrails is None:
+            # Explicit null: treat as not configured -> disabled by default.
+            return data
+
+        if isinstance(guardrails, dict):
+            if "enabled" in guardrails:
+                return data
+
+            # Any provided guardrail section (even as an empty dict) counts as "defined".
+            # Empty object {} means "not defined".
+            has_any_section = any(k != "enabled" for k in guardrails.keys())
+            guardrails["enabled"] = bool(has_any_section)
+            data["guardrails"] = guardrails
+
+        return data
 
     llm_provider: LLMProvider
 
