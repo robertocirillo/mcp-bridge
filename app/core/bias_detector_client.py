@@ -74,9 +74,11 @@ class BiasDetectorClient:
             payload["return_all_scores"] = True
         if return_char_spans:
             payload["return_char_spans"] = True
-        if model_id:
+        # NOTE: use explicit None checks (not truthiness) so callers can pass
+        # revision="" and still have it forwarded upstream.
+        if model_id is not None:
             payload["model_id"] = model_id
-        if revision:
+        if revision is not None:
             payload["revision"] = revision
         # NOTE: this is tri-state on the server:
         # - None -> all categories active
