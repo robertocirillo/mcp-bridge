@@ -67,6 +67,20 @@ class RecordingBiasClient:
         }
 
 
+class NullEchoBiasClient(RecordingBiasClient):
+    """Fake client that omits model_id/revision in the upstream response.
+
+    This simulates bias-detector-service responses that don't echo model_id/revision
+    even when the request includes them.
+    """
+
+    async def classify(self, **kwargs):
+        resp = await super().classify(**kwargs)
+        resp["model_id"] = None
+        resp["revision"] = None
+        return resp
+
+
 @pytest.mark.asyncio
 async def test_bias_guardrail_cascaded_checks_runs_all_checks_and_reports_results():
     client = RecordingBiasClient()
@@ -124,6 +138,8 @@ async def test_bias_guardrail_cascaded_checks_runs_all_checks_and_reports_result
     assert r0["name"] == "A_hate"
     assert r0["response"]["flagged"] is True
     assert r0["response"]["flagged_labels"] == ["HATE"]
+    assert r0["response"]["model_id"] == "model_a"
+    assert r0["response"]["revision"] == ""
 
     assert r1["name"] == "A_not_hate_should_not_block"
     assert r1["response"]["flagged"] is False
@@ -132,3 +148,46 @@ async def test_bias_guardrail_cascaded_checks_runs_all_checks_and_reports_result
     assert r2["response"]["flagged"] is True
     assert r2["response"]["flagged_labels"] == ["TOXIC"]
     assert r2["response"]["threshold"] == pytest.approx(0.7)
+    assert r2["response"]["model_id"] == "model_b"
+    assert r2["response"]["revision"] == ""
+
+
+@pytest.mark.asyncio
+async def test_bias_guardrail_falls_back_to_request_model_id_and_revision_when_upstream_omits_them():
+    client = NullEchoBiasClient()
+
+    guardrail = make_bias_after_model_guardrail_service(
+        client=client,
+        mode="block",
+        threshold=0.5,
+        top_k=2,
+        active_categories=None,
+        unsafe_labels=None,
+        model_id="model_a",
+        revision="",
+        checks=[
+            {"name": "A_hate", "unsafe_labels": ["HATE"]},
+            {"name": "B_toxic", "model_id": "model_b", "unsafe_labels": ["TOXIC"], "threshold": 0.7},
+        ],
+        fail_closed=True,
+    )
+
+    ctx = GuardrailContext()
+    with pytest.raises(GuardrailViolationError) as exc:
+        await guardrail(ctx, "Final Answer: I hate you.")
+
+    err = exc.value
+    assert err.code == "BIAS_DETECTED"
+
+    details = err.details
+    # Top-level details must be non-null via request fallback.
+    assert details["model_id"] == "model_a"
+    assert details["revision"] == ""
+
+    # Per-check responses must also be non-null via request fallback.
+    r0 = details["checks_results"][0]
+    r1 = details["checks_results"][1]
+    assert r0["response"]["model_id"] == "model_a"
+    assert r0["response"]["revision"] == ""
+    assert r1["response"]["model_id"] == "model_b"
+    assert r1["response"]["revision"] == ""

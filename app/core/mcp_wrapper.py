@@ -659,6 +659,15 @@ def make_bias_after_model_guardrail_service(
 
             flagged_label_scores = _build_flagged_label_scores(resp, effective_threshold)
 
+            # Prefer upstream echo fields, but fall back to the request values.
+            # This makes the payload stable even if upstream omits model_id/revision.
+            resp_model_id = resp.get("model_id")
+            if resp_model_id is None:
+                resp_model_id = resolved.get("model_id")
+            resp_revision = resp.get("revision")
+            if resp_revision is None:
+                resp_revision = resolved.get("revision")
+
             result = {
                 "name": resolved.get("name"),
                 "request": _build_request_dict(
@@ -672,8 +681,8 @@ def make_bias_after_model_guardrail_service(
                     return_char_spans=bool(return_char_spans),
                 ),
                 "response": {
-                    "model_id": resp.get("model_id"),
-                    "revision": resp.get("revision"),
+                    "model_id": resp_model_id,
+                    "revision": resp_revision,
                     "flagged": flagged,
                     "flagged_labels": flagged_labels,
                     "flagged_label_scores": flagged_label_scores,
@@ -696,6 +705,14 @@ def make_bias_after_model_guardrail_service(
         first_resp = (first_flagged_result.get("response") or {}) if isinstance(first_flagged_result, dict) else {}
         first_req = (first_flagged_result.get("request") or {}) if isinstance(first_flagged_result, dict) else {}
         flagged_labels = first_resp.get("flagged_labels", []) or []
+
+        # Prefer response (upstream echo), fall back to request.
+        first_model_id = first_resp.get("model_id")
+        if first_model_id is None:
+            first_model_id = first_req.get("model_id")
+        first_revision = first_resp.get("revision")
+        if first_revision is None:
+            first_revision = first_req.get("revision")
 
         logger.info(
             "Guardrail triggered: bias detected via bias-detector-service",
@@ -723,8 +740,8 @@ def make_bias_after_model_guardrail_service(
                 "categories": (first_req.get("active_categories") or []),
                 "findings": [f"label:{lbl}" for lbl in flagged_labels],
                 "mode": "block",
-                "model_id": first_resp.get("model_id"),
-                "revision": first_resp.get("revision"),
+                "model_id": first_model_id,
+                "revision": first_revision,
                 "flagged_labels": flagged_labels,
                 "flagged_label_scores": first_resp.get("flagged_label_scores") or [],
                 "threshold": first_resp.get("threshold"),
