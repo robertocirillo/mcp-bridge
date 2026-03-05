@@ -85,7 +85,7 @@ class Settings(BaseSettings):
                 label="Hello World Agent (A2A sample)",
                 description="A2A protocol-compliant HelloWorld agent from a2a-samples.",
                 card_url="http://localhost:9999/.well-known/agent-card.json",
-                runtime_url="http://localhost:9999",  # ✅ aggiungi questo
+                runtime_url="http://localhost:9999",
                 timeout_seconds=60,
                 auth=A2AAuthConfig(type="none"),
                 extra_headers={},
@@ -95,7 +95,7 @@ class Settings(BaseSettings):
                 label="Hello World Agent (extended card)",
                 description="HelloWorld agent using authenticated extended card.",
                 card_url="http://localhost:9999/agent/authenticatedExtendedCard",
-                runtime_url="http://localhost:9999",  # ✅ aggiungi questo
+                runtime_url="http://localhost:9999",
                 timeout_seconds=60,
                 auth=A2AAuthConfig(type="bearer_token", env_var="A2A_HELLOWORLD_BEARER_TOKEN"),
                 extra_headers={},
@@ -105,7 +105,7 @@ class Settings(BaseSettings):
                 label="LangGraph Agent (A2A sample)",
                 description="Task-based A2A agent from a2a-samples (LangGraph sample).",
                 card_url="http://localhost:9998/.well-known/agent-card.json",
-                runtime_url="http://localhost:9998",  # ✅ aggiungi questo
+                runtime_url="http://localhost:9998",
                 timeout_seconds=60,
                 auth=A2AAuthConfig(type="none"),
                 extra_headers={},
