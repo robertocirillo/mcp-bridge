@@ -4,17 +4,16 @@ Refined wrapper for mcp-use with enhanced error handling
 
 import os
 import re
-import asyncio
 from typing import Optional, Dict, Any, List, Callable, Awaitable, Union
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
-import inspect
 
 from app.core.exceptions import MCPWrapperError, DependencyError, ConfigurationError
 from app.utils.logging import get_logger
 from app.utils.helpers import retry_async
 from app.models.config import SandboxOptions as SandboxOptionsModel  # rinomina per non confonderla con quella di mcp-use
 from app.core.bias_detector_client import BiasDetectorClient, BiasDetectorError
+from app.core.guardrail_runner import GuardrailRunner
 from app.core.mcp_policy_engine import ToolPolicy, ToolInvocationContext, ToolInvocationDecision, ToolPolicyEngine
 from app.core.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
 
@@ -1100,12 +1099,6 @@ def _matches_any(patterns: List[str], value: str) -> bool:
     return False
 
 
-async def _maybe_await(value):
-    if inspect.isawaitable(value):
-        return await value
-    return value
-
-
 class _GuardedMCPSession:
     """Proxy session that enforces tool policy before calling call_tool()."""
 
@@ -1204,6 +1197,10 @@ class MCPWrapper:
         # Tool governance boundary (incremental refactor)
         self.tool_policy_engine = ToolPolicyEngine(deny_patterns=self.disallowed_tools or [])
         self.audit_recorder = InMemoryAuditRecorder()
+        self.guardrail_runner = GuardrailRunner(
+            audit_recorder=self.audit_recorder,
+            violation_error_cls=GuardrailViolationError,
+        )
 
         # Internal state
         self._agent = None
@@ -1585,6 +1582,20 @@ class MCPWrapper:
         """
         self.guardrails_enabled = bool(enabled)
 
+    def _get_guardrail_runner(self) -> GuardrailRunner:
+        runner = getattr(self, "guardrail_runner", None)
+        recorder = getattr(self, "audit_recorder", None)
+        if recorder is None:
+            recorder = InMemoryAuditRecorder()
+            self.audit_recorder = recorder
+        if runner is None or getattr(runner, "audit_recorder", None) is not recorder:
+            runner = GuardrailRunner(
+                audit_recorder=recorder,
+                violation_error_cls=GuardrailViolationError,
+            )
+            self.guardrail_runner = runner
+        return runner
+
     def _wrap_tool_result(self, tool_name: str, result: Any) -> Any:
         """Apply guardrails to tool results.
 
@@ -1662,55 +1673,23 @@ class MCPWrapper:
         return result
 
     async def _run_before_model_guardrails(self, ctx: GuardrailContext) -> GuardrailContext:
-        if getattr(self, "guardrails_enabled", True) is False:
-            return ctx
-
-        timeout = getattr(self, "guardrail_timeout_seconds", None)
-        for gr in self.before_model_guardrails:
-            try:
-                if timeout:
-                    ctx = await asyncio.wait_for(_maybe_await(gr(ctx)), timeout=timeout)
-                else:
-                    ctx = await _maybe_await(gr(ctx))
-            except asyncio.TimeoutError:
-                raise GuardrailViolationError(
-                    code="MCP_GUARDRAIL_TIMEOUT",
-                    message="Guardrail timed out",
-                    phase="before_model",
-                    rule=getattr(gr, "__name__", "guardrail"),
-                    tenant_id=getattr(ctx, "tenant_id", None),
-                    run_id=getattr(ctx, "run_id", None),
-                    session_id=getattr(ctx, "session_id", None),
-                    details={"timeout_seconds": timeout},
-                )
-        return ctx
+        outcome = await self._get_guardrail_runner().before_model(
+            ctx,
+            getattr(self, "before_model_guardrails", []),
+            enabled=getattr(self, "guardrails_enabled", True),
+            timeout_seconds=getattr(self, "guardrail_timeout_seconds", None),
+        )
+        return outcome.value
 
     async def _run_after_model_guardrails(self, ctx: GuardrailContext, output: Any) -> Any:
-        if getattr(self, "guardrails_enabled", True) is False:
-            return output
-
-        timeout = getattr(self, "guardrail_timeout_seconds", None)
-        for gr in self.after_model_guardrails:
-            try:
-                if timeout:
-                    output = await asyncio.wait_for(
-                        _maybe_await(gr(ctx, output)),
-                        timeout=timeout,
-                    )
-                else:
-                    output = await _maybe_await(gr(ctx, output))
-            except asyncio.TimeoutError:
-                raise GuardrailViolationError(
-                    code="MCP_GUARDRAIL_TIMEOUT",
-                    message="Guardrail timed out",
-                    phase="after_model",
-                    rule=getattr(gr, "__name__", "guardrail"),
-                    tenant_id=getattr(ctx, "tenant_id", None),
-                    run_id=getattr(ctx, "run_id", None),
-                    session_id=getattr(ctx, "session_id", None),
-                    details={"timeout_seconds": timeout},
-                )
-        return output
+        outcome = await self._get_guardrail_runner().after_model(
+            ctx,
+            output,
+            getattr(self, "after_model_guardrails", []),
+            enabled=getattr(self, "guardrails_enabled", True),
+            timeout_seconds=getattr(self, "guardrail_timeout_seconds", None),
+        )
+        return outcome.value
 
     def _extract_tool_arguments(self, args: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         if kwargs:
