@@ -257,7 +257,7 @@ async def test_tool_result_pii_is_not_redacted_when_guardrails_disabled():
 
 
 @pytest.mark.asyncio
-async def test_blocked_guardrail_audit_event_uses_rule_and_violation_details():
+async def test_blocked_guardrail_audit_event_uses_canonical_detail_fields():
     w = _make_wrapper([])
     w.guardrails_enabled = True
     w.pii_mode = "block"
@@ -277,10 +277,9 @@ async def test_blocked_guardrail_audit_event_uses_rule_and_violation_details():
     assert event.outcome == "blocked"
     assert event.details["phase"] == "tool_result"
     assert event.details["rule"] == "pii"
-    assert event.details["guardrail"] == "pii"
     assert event.details["arguments_present"] is True
     assert event.details["server_name"] == "filesystem"
     assert event.details["violation_details"]["mode"] == "block"
-    assert event.details["details"]["mode"] == "block"
-
+    assert "guardrail" not in event.details
+    assert "details" not in event.details
 

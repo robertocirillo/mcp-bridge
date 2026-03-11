@@ -296,11 +296,9 @@ class GuardrailRunner:
             "code": getattr(exc, "code", None),
             "phase": getattr(exc, "phase", None),
             "violation_details": violation_details,
-            "details": dict(violation_details),
         }
         if details_override:
             details.update(details_override)
-        details.setdefault("guardrail", details.get("rule"))
         self._record(
             event_type=event_type,
             ctx=ctx,
@@ -327,7 +325,6 @@ class GuardrailRunner:
         }
         if details_override:
             details.update(details_override)
-        details.setdefault("guardrail", details.get("rule"))
         self._record(
             event_type=event_type,
             ctx=ctx,
