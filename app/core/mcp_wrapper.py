@@ -1097,10 +1097,10 @@ class _GuardedMCPSession:
         self._wrapper = wrapper
 
     async def call_tool(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        tool_arguments = self._wrapper._extract_tool_arguments(args, kwargs)
+        arguments = self._wrapper._extract_tool_arguments(args, kwargs)
         self._wrapper._enforce_tool_allowed(name, *args, **kwargs)
         result = await self._session.call_tool(name, *args, **kwargs)
-        return self._wrapper._wrap_tool_result(name, result, tool_arguments=tool_arguments)
+        return self._wrapper._wrap_tool_result(name, result, arguments=arguments)
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._session, item)
@@ -1118,10 +1118,10 @@ class _GuardedMCPClient:
         return _GuardedMCPSession(session, self._wrapper)
 
     async def call_tool(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        tool_arguments = self._wrapper._extract_tool_arguments(args, kwargs)
+        arguments = self._wrapper._extract_tool_arguments(args, kwargs)
         self._wrapper._enforce_tool_allowed(name, *args, **kwargs)
         result = await self._client.call_tool(name, *args, **kwargs)
-        return self._wrapper._wrap_tool_result(name, result, tool_arguments=tool_arguments)
+        return self._wrapper._wrap_tool_result(name, result, arguments=arguments)
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._client, item)
@@ -1593,7 +1593,7 @@ class MCPWrapper:
         tool_name: str,
         result: Any,
         *,
-        tool_arguments: Optional[Dict[str, Any]] = None,
+        arguments: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """Apply guardrails to tool results.
 
@@ -1611,7 +1611,7 @@ class MCPWrapper:
             run_id=self.run_id,
             session_id=self.session_id,
             tool_name=tool_name,
-            tool_arguments=tool_arguments,
+            arguments=arguments or {},
         )
         outcome = self._get_guardrail_runner().tool_result(
             ctx,

@@ -35,6 +35,7 @@ class ToolInvocationContext:
     tenant_id: Optional[str] = None
     run_id: Optional[str] = None
     session_id: Optional[str] = None
+    server_name: Optional[str] = None
 
 
 @dataclass(frozen=True)

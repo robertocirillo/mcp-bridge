@@ -23,7 +23,7 @@ class GuardrailExecutionContext:
     query: Optional[str] = None
     server_name: Optional[str] = None
     tool_name: Optional[str] = None
-    tool_arguments: Optional[Dict[str, Any]] = None
+    arguments: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -46,7 +46,7 @@ class GuardrailRunner:
 
     async def before_model(
         self,
-        ctx: Any,
+        ctx: GuardrailExecutionContext,
         guardrails: Iterable[BeforeModelGuardrail],
         *,
         enabled: bool = True,
@@ -73,9 +73,9 @@ class GuardrailRunner:
                     message="Guardrail timed out",
                     phase="before_model",
                     rule=guardrail_name,
-                    tenant_id=getattr(ctx, "tenant_id", None),
-                    run_id=getattr(ctx, "run_id", None),
-                    session_id=getattr(ctx, "session_id", None),
+                    tenant_id=ctx.tenant_id,
+                    run_id=ctx.run_id,
+                    session_id=ctx.session_id,
                     details={"timeout_seconds": timeout_seconds},
                 )
                 self._record_blocked("before_model_guardrail", ctx, exc, guardrail_name)
@@ -104,7 +104,7 @@ class GuardrailRunner:
 
     async def after_model(
         self,
-        ctx: Any,
+        ctx: GuardrailExecutionContext,
         output: Any,
         guardrails: Iterable[AfterModelGuardrail],
         *,
@@ -132,9 +132,9 @@ class GuardrailRunner:
                     message="Guardrail timed out",
                     phase="after_model",
                     rule=guardrail_name,
-                    tenant_id=getattr(ctx, "tenant_id", None),
-                    run_id=getattr(ctx, "run_id", None),
-                    session_id=getattr(ctx, "session_id", None),
+                    tenant_id=ctx.tenant_id,
+                    run_id=ctx.run_id,
+                    session_id=ctx.session_id,
                     details={"timeout_seconds": timeout_seconds},
                 )
                 self._record_blocked("after_model_guardrail", ctx, exc, guardrail_name)
@@ -163,7 +163,7 @@ class GuardrailRunner:
 
     def tool_result(
         self,
-        ctx: Any,
+        ctx: GuardrailExecutionContext,
         result: Any,
         *,
         enabled: bool = True,
@@ -210,10 +210,10 @@ class GuardrailRunner:
                     message="PII detected in tool result",
                     phase="tool_result",
                     rule="pii",
-                    tenant_id=getattr(ctx, "tenant_id", None),
-                    run_id=getattr(ctx, "run_id", None),
-                    session_id=getattr(ctx, "session_id", None),
-                    tool_name=getattr(ctx, "tool_name", None),
+                    tenant_id=ctx.tenant_id,
+                    run_id=ctx.run_id,
+                    session_id=ctx.session_id,
+                    tool_name=ctx.tool_name,
                     details={
                         "types": present,
                         "counts": counts,
@@ -259,16 +259,16 @@ class GuardrailRunner:
             return await value
         return value
 
-    def _record(self, *, event_type: str, ctx: Any, outcome: GuardrailOutcome) -> None:
+    def _record(self, *, event_type: str, ctx: GuardrailExecutionContext, outcome: GuardrailOutcome) -> None:
         try:
             self.audit_recorder.record(
                 AuditEvent(
                     event_type=event_type,
                     timestamp=utc_now_iso(),
-                    tenant_id=getattr(ctx, "tenant_id", None),
-                    run_id=getattr(ctx, "run_id", None),
-                    session_id=getattr(ctx, "session_id", None),
-                    tool_name=getattr(ctx, "tool_name", None),
+                    tenant_id=ctx.tenant_id,
+                    run_id=ctx.run_id,
+                    session_id=ctx.session_id,
+                    tool_name=ctx.tool_name,
                     outcome=outcome.state,
                     details=outcome.details,
                 )
@@ -279,7 +279,7 @@ class GuardrailRunner:
     def _record_blocked(
         self,
         event_type: str,
-        ctx: Any,
+        ctx: GuardrailExecutionContext,
         exc: Exception,
         guardrail_name: str,
         *,
@@ -307,7 +307,7 @@ class GuardrailRunner:
     def _record_exception(
         self,
         event_type: str,
-        ctx: Any,
+        ctx: GuardrailExecutionContext,
         guardrail_name: str,
         exc: Exception,
         *,
