@@ -260,6 +260,11 @@ class GuardrailRunner:
         return value
 
     def _record(self, *, event_type: str, ctx: GuardrailExecutionContext, outcome: GuardrailOutcome) -> None:
+        details = self._build_audit_details(
+            event_type=event_type,
+            ctx=ctx,
+            details=outcome.details,
+        )
         try:
             self.audit_recorder.record(
                 AuditEvent(
@@ -270,7 +275,7 @@ class GuardrailRunner:
                     session_id=ctx.session_id,
                     tool_name=ctx.tool_name,
                     outcome=outcome.state,
-                    details=outcome.details,
+                    details=details,
                 )
             )
         except Exception:
@@ -285,14 +290,17 @@ class GuardrailRunner:
         *,
         details_override: Optional[Dict[str, Any]] = None,
     ) -> None:
+        violation_details = dict(getattr(exc, "details", {}) or {})
         details = {
-            "guardrail": getattr(exc, "rule", None) or guardrail_name,
+            "rule": getattr(exc, "rule", None) or guardrail_name,
             "code": getattr(exc, "code", None),
             "phase": getattr(exc, "phase", None),
-            "details": getattr(exc, "details", {}) or {},
+            "violation_details": violation_details,
+            "details": dict(violation_details),
         }
         if details_override:
             details.update(details_override)
+        details.setdefault("guardrail", details.get("rule"))
         self._record(
             event_type=event_type,
             ctx=ctx,
@@ -314,11 +322,12 @@ class GuardrailRunner:
         details_override: Optional[Dict[str, Any]] = None,
     ) -> None:
         details = {
-            "guardrail": guardrail_name,
+            "rule": guardrail_name,
             "error": type(exc).__name__,
         }
         if details_override:
             details.update(details_override)
+        details.setdefault("guardrail", details.get("rule"))
         self._record(
             event_type=event_type,
             ctx=ctx,
@@ -329,3 +338,26 @@ class GuardrailRunner:
                 details=details,
             ),
         )
+
+    @staticmethod
+    def _phase_for_event_type(event_type: str) -> Optional[str]:
+        return {
+            "before_model_guardrail": "before_model",
+            "after_model_guardrail": "after_model",
+            "tool_result_guardrail": "tool_result",
+        }.get(event_type)
+
+    def _build_audit_details(
+        self,
+        *,
+        event_type: str,
+        ctx: GuardrailExecutionContext,
+        details: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        merged = dict(details or {})
+        merged.setdefault("phase", self._phase_for_event_type(event_type))
+        if ctx.server_name is not None:
+            merged.setdefault("server_name", ctx.server_name)
+        if event_type == "tool_result_guardrail":
+            merged.setdefault("arguments_present", bool(ctx.arguments))
+        return merged

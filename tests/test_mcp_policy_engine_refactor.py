@@ -63,6 +63,7 @@ def test_wrapper_argument_validation_can_block_tool_call():
 def test_wrapper_records_audit_events_for_tool_policy_decisions():
     w = _make_wrapper()
     w.configure_tool_policies(deny_patterns=["secret.*"])
+    w._active_server_name = "filesystem"
 
     with pytest.raises(MCPToolNotAllowedError):
         w._enforce_tool_allowed("secret.delete")
@@ -74,3 +75,4 @@ def test_wrapper_records_audit_events_for_tool_policy_decisions():
     assert last.outcome == "blocked"
     assert last.tool_name == "secret.delete"
     assert last.details["reason"] == "blocked by denylist"
+    assert last.details["server_name"] == "filesystem"

@@ -121,6 +121,11 @@ async def test_guardrails_global_disable_skips_pipelines():
     assert out == "world"
     assert called == {"before": 0, "after": 0}
 
+    events = w.get_audit_events()
+    assert [event.event_type for event in events] == ["before_model_guardrail", "after_model_guardrail"]
+    assert events[0].details["phase"] == "before_model"
+    assert events[1].details["phase"] == "after_model"
+
 
 @pytest.mark.asyncio
 async def test_guardrail_can_block_by_raising():
@@ -212,6 +217,7 @@ async def test_tool_result_pii_is_redacted_when_output_mode_is_redact():
     w = _make_wrapper([])
     w.guardrails_enabled = True
     w.pii_mode = "redact"
+    w._active_server_name = "filesystem"
 
     class DummySession:
         async def call_tool(self, name, *args, **kwargs):
@@ -225,6 +231,13 @@ async def test_tool_result_pii_is_redacted_when_output_mode_is_redact():
 
     assert out["text"] == "email [MCP_BRIDGE_REDACTED_EMAIL] ; iban [MCP_BRIDGE_REDACTED_IBAN]"
     assert out["nested"] == ["[MCP_BRIDGE_REDACTED_EMAIL]"]
+
+    event = w.get_audit_events()[-1]
+    assert event.event_type == "tool_result_guardrail"
+    assert event.details["phase"] == "tool_result"
+    assert event.details["rule"] == "pii"
+    assert event.details["arguments_present"] is False
+    assert event.details["server_name"] == "filesystem"
 
 
 @pytest.mark.asyncio
@@ -242,5 +255,32 @@ async def test_tool_result_pii_is_not_redacted_when_guardrails_disabled():
 
     assert out == "email a@b.com"
 
+
+@pytest.mark.asyncio
+async def test_blocked_guardrail_audit_event_uses_rule_and_violation_details():
+    w = _make_wrapper([])
+    w.guardrails_enabled = True
+    w.pii_mode = "block"
+    w._active_server_name = "filesystem"
+
+    class DummySession:
+        async def call_tool(self, name, *args, **kwargs):
+            return "email a@b.com"
+
+    guarded = _GuardedMCPSession(DummySession(), w)
+
+    with pytest.raises(GuardrailViolationError):
+        await guarded.call_tool("filesystem.read_file", {"path": "/tmp/demo.txt"})
+
+    event = w.get_audit_events()[-1]
+    assert event.event_type == "tool_result_guardrail"
+    assert event.outcome == "blocked"
+    assert event.details["phase"] == "tool_result"
+    assert event.details["rule"] == "pii"
+    assert event.details["guardrail"] == "pii"
+    assert event.details["arguments_present"] is True
+    assert event.details["server_name"] == "filesystem"
+    assert event.details["violation_details"]["mode"] == "block"
+    assert event.details["details"]["mode"] == "block"
 
 
