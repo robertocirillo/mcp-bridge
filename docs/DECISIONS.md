@@ -207,6 +207,29 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 
 ---
 
+### D10 – MCPWrapper remains the façade while policy, guardrail execution, and audit are separated
+
+**Status:** Accepted
+
+**Decision:**
+
+- `MCPWrapper` remains the public/session-facing façade for the MCP boundary.
+- Tool policy evaluation is handled by `ToolPolicyEngine`.
+- Guardrail execution is handled by `GuardrailRunner`.
+- Audit/event recording uses the shared audit layer (`AuditEvent`, recorder).
+- The MCP runtime boundary stays the same:
+  - tool policy is enforced before every MCP tool call
+  - query-level guardrails run around query execution (`before_model`, `after_model`)
+  - tool-result guardrails run separately on each MCP tool result inside the agent/tool loop
+
+**Rationale:**
+
+- Keeps the runtime behavior and REST API stable while making the boundary easier to reason about.
+- Preserves a clear separation between orchestration (`MCPWrapper`) and execution primitives (policy, guardrails, audit).
+- Avoids rewriting or forking `mcp-use`.
+
+---
+
 ## 2. Rejected Alternatives
 
 ### R1 – Using A2A as MCP tools (A2A-over-MCP)
@@ -364,4 +387,3 @@ These are intentionally left undecided for future iterations.
 
 - If in doubt:
   - Add new items to **Open Questions** instead of making big implicit decisions.
-

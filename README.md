@@ -41,7 +41,10 @@ mcp-bridge/
     │   ├── routes/             # REST endpoints (sessions, queries, a2a, health, etc.)
     │   └── dependencies.py     # Dependency injection helpers (SessionManager, A2A, TenantContext)
     ├── core/
-    │   ├── mcp_wrapper.py      # MCP-Use wrapper (MCP client logic)
+    │   ├── mcp_wrapper.py      # MCP façade/orchestrator around mcp-use
+    │   ├── guardrail_runner.py # Guardrail execution pipeline
+    │   ├── mcp_policy_engine.py# Tool policy evaluation
+    │   ├── mcp_audit.py        # Audit event primitives/recorder
     │   ├── session_manager.py  # Session management (now tenant-aware)
     │   ├── a2a_client.py       # A2A HTTP client for remote agents
     │   └── exceptions.py       # Custom exceptions
@@ -146,12 +149,22 @@ E2B_API_KEY="your_key_here"
 
 ### Guardrails (session-scoped)
 
-mcp-bridge supports **LangChain-style guardrails** applied in two phases:
+mcp-bridge supports **session-scoped guardrails** in two distinct execution scopes:
 
-- **before_model**: runs on the user input before calling the model
-- **after_model**: runs on the model output before returning it to the client
+- **query-level guardrails**
+  - **before_model**: runs on the user input before calling the model
+  - **after_model**: runs on the model output before returning it to the client
+- **tool-result guardrails**
+  - runs inside the MCP agent/tool loop on each MCP tool result before that result is fed back into the agent
 
 Guardrails are configured **per session** via the `guardrails` object in `POST /sessions`.
+
+`MCPWrapper` remains the façade/orchestrator for the MCP runtime. It coordinates:
+
+- `ToolPolicyEngine` for pre-tool-call policy enforcement
+- `GuardrailRunner` for guardrail execution
+- the audit/event layer for structured observability
+- the underlying `mcp-use` client/agent runtime
 
 #### Global enable/disable
 
@@ -179,7 +192,7 @@ PII is controlled by `guardrails.pii` and supports **Strategy 3**:
 
 - `mode` is a **shared default** for both input and output
 - `input_mode` overrides only input (`before_model`)
-- `output_mode` overrides only output (`after_model`)
+- `output_mode` overrides output handling, covering both final model output (`after_model`) and per-tool-result checks
 
 Example:
 

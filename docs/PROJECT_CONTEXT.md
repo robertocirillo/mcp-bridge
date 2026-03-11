@@ -57,9 +57,26 @@ Project: **mcp-bridge – MCP + A2A integration**
 
   * `MCPWrapper`:
 
-    * Internal wrapper around **`mcp-use`** library
-    * Holds LLM+MCP configuration and manages the `mcp-use` agent lifecycle
+    * Façade/orchestrator around **`mcp-use`**
+    * Holds session-scoped LLM+MCP configuration and request context
+    * Coordinates the MCP runtime with:
+      - `ToolPolicyEngine` for tool invocation decisions
+      - `GuardrailRunner` for guardrail execution
+      - the audit/event layer for structured observability
     * Provides `initialize()` and `run_query(...)`
+  * `ToolPolicyEngine`:
+
+    * Evaluates tool-level allow/deny policy before MCP tool calls
+    * Supports explicit policies, deny patterns, allow patterns, and lightweight argument validators
+  * `GuardrailRunner`:
+
+    * Executes query-level guardrails (`before_model`, `after_model`)
+    * Executes per-tool-result guardrails inside the agent/tool loop
+    * Emits structured guardrail audit events
+  * `mcp_audit`:
+
+    * Defines `AuditEvent`
+    * Provides the in-memory audit recorder used by wrapper and guardrail runner
   * `SessionManager`:
 
     * Manages in-memory `SessionData` objects
@@ -67,12 +84,14 @@ Project: **mcp-bridge – MCP + A2A integration**
     * Enforces `MAX_ACTIVE_SESSIONS`
     * Uses an `asyncio.Lock` for concurrency safety
 
-* Guardrails (LangChain-style):
+* Guardrails (session-scoped):
 
-  * Session-scoped `guardrails` configuration is applied around the model call:
+  * Query-level guardrails are applied around the model call:
     - `before_model` runs on the user input
     - `after_model` runs on the model output
+  * Tool-result guardrails run on each MCP tool result inside the agent/tool loop.
   * PII guardrail supports Strategy 3 semantics (`mode` default + phase overrides).
+    `output_mode` controls both final output handling and tool-result handling.
 
 * Bias detector integration:
 
@@ -202,6 +221,13 @@ Project: **mcp-bridge – MCP + A2A integration**
   * Sandbox options
   * Disallowed tools
 
+* Runtime role:
+
+  * Keeps the public/session-facing API stable
+  * Wraps the `mcp-use` client/session boundary so tool policy is enforced before every MCP tool call
+  * Delegates guardrail execution to `GuardrailRunner`
+  * Records structured events through the audit layer
+
 * Main methods and attributes:
 
   * `async initialize()`:
@@ -213,6 +239,7 @@ Project: **mcp-bridge – MCP + A2A integration**
   * `async run_query(query: str, max_steps: Optional[int] = None, server_name: Optional[str] = None) -> Any`:
 
     * Executes the agent loop via mcp-use with the given query.
+    * Runs query-level guardrails before and after the model execution path.
     * If `max_steps` is provided and > 0, overrides default `max_steps`.
   * `steps_used`: integer, number of steps used in the last run (if available from mcp-use).
   * `last_server_used`: optional name of the last tool/server used.
