@@ -15,6 +15,8 @@ from app.utils.logging import get_logger
 from app.utils.helpers import retry_async
 from app.models.config import SandboxOptions as SandboxOptionsModel  # rinomina per non confonderla con quella di mcp-use
 from app.core.bias_detector_client import BiasDetectorClient, BiasDetectorError
+from app.core.mcp_policy_engine import ToolPolicy, ToolInvocationContext, ToolInvocationDecision, ToolPolicyEngine
+from app.core.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
 
 logger = get_logger(__name__)
 
@@ -1112,7 +1114,7 @@ class _GuardedMCPSession:
         self._wrapper = wrapper
 
     async def call_tool(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        self._wrapper._enforce_tool_allowed(name)
+        self._wrapper._enforce_tool_allowed(name, *args, **kwargs)
         result = await self._session.call_tool(name, *args, **kwargs)
         return self._wrapper._wrap_tool_result(name, result)
 
@@ -1132,7 +1134,7 @@ class _GuardedMCPClient:
         return _GuardedMCPSession(session, self._wrapper)
 
     async def call_tool(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        self._wrapper._enforce_tool_allowed(name)
+        self._wrapper._enforce_tool_allowed(name, *args, **kwargs)
         result = await self._client.call_tool(name, *args, **kwargs)
         return self._wrapper._wrap_tool_result(name, result)
 
@@ -1198,6 +1200,10 @@ class MCPWrapper:
         self.sandbox_options = self._normalize_sandbox_options(sandbox_options)
         self.disallowed_tools = disallowed_tools
         self.use_server_manager = use_server_manager
+
+        # Tool governance boundary (incremental refactor)
+        self.tool_policy_engine = ToolPolicyEngine(deny_patterns=self.disallowed_tools or [])
+        self.audit_recorder = InMemoryAuditRecorder()
 
         # Internal state
         self._agent = None
@@ -1520,6 +1526,58 @@ class MCPWrapper:
 
         self._bias_after_model_guardrail = new_gr
 
+    def set_tool_policy_engine(self, engine: ToolPolicyEngine) -> None:
+        """Replace the active tool policy engine.
+
+        Keeps MCPWrapper as the public façade while moving policy decisions
+        out of the transport/runtime boundary.
+        """
+        self.tool_policy_engine = engine
+
+    def configure_tool_policies(
+        self,
+        *,
+        allow_patterns: Optional[List[str]] = None,
+        deny_patterns: Optional[List[str]] = None,
+        policies: Optional[List[ToolPolicy]] = None,
+    ) -> None:
+        self.tool_policy_engine = ToolPolicyEngine(
+            allow_patterns=allow_patterns,
+            deny_patterns=deny_patterns if deny_patterns is not None else (self.disallowed_tools or []),
+            policies=policies,
+        )
+
+    def get_audit_events(self) -> List[AuditEvent]:
+        return self.audit_recorder.list_events()
+
+    def _record_audit_event(
+        self,
+        *,
+        event_type: str,
+        outcome: str,
+        tool_name: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        recorder = getattr(self, "audit_recorder", None)
+        if recorder is None:
+            recorder = InMemoryAuditRecorder()
+            self.audit_recorder = recorder
+        try:
+            recorder.record(
+                AuditEvent(
+                    event_type=event_type,
+                    timestamp=utc_now_iso(),
+                    tenant_id=self.tenant_id,
+                    run_id=self.run_id,
+                    session_id=self.session_id,
+                    tool_name=tool_name,
+                    outcome=outcome,
+                    details=details or {},
+                )
+            )
+        except Exception:
+            logger.debug("Failed to record audit event", exc_info=True)
+
     def set_guardrails_enabled(self, enabled: bool) -> None:
         """Enable/disable ALL guardrails for this wrapper (session-scoped).
 
@@ -1541,17 +1599,37 @@ class MCPWrapper:
         """
 
         if getattr(self, "guardrails_enabled", True) is False:
+            self._record_audit_event(
+                event_type="tool_result_guardrail",
+                outcome="skipped",
+                tool_name=tool_name,
+                details={"reason": "guardrails_disabled"},
+            )
             return result
 
         mode = getattr(self, "pii_mode", "redact")
 
         if mode == "redact":
-            return _redact_pii_in_obj(result)
+            wrapped = _redact_pii_in_obj(result)
+            transformed = wrapped != result
+            self._record_audit_event(
+                event_type="tool_result_guardrail",
+                outcome="redacted" if transformed else "passed",
+                tool_name=tool_name,
+                details={"rule": "pii", "mode": mode, "transformed": transformed},
+            )
+            return wrapped
 
         if mode == "block":
             counts = _detect_pii_in_obj(result)
             present = [k for k, v in counts.items() if int(v or 0) > 0]
             if present:
+                self._record_audit_event(
+                    event_type="tool_result_guardrail",
+                    outcome="blocked",
+                    tool_name=tool_name,
+                    details={"rule": "pii", "mode": mode, "types": present, "counts": counts},
+                )
                 raise GuardrailViolationError(
                     code="PII_DETECTED",
                     message="PII detected in tool result",
@@ -1567,9 +1645,20 @@ class MCPWrapper:
                         "mode": "block",
                     },
                 )
+            self._record_audit_event(
+                event_type="tool_result_guardrail",
+                outcome="passed",
+                tool_name=tool_name,
+                details={"rule": "pii", "mode": mode},
+            )
             return result
 
-        # off (or any other mode): no-op
+        self._record_audit_event(
+            event_type="tool_result_guardrail",
+            outcome="skipped",
+            tool_name=tool_name,
+            details={"rule": "pii", "mode": mode},
+        )
         return result
 
     async def _run_before_model_guardrails(self, ctx: GuardrailContext) -> GuardrailContext:
@@ -1623,11 +1712,33 @@ class MCPWrapper:
                 )
         return output
 
-    def _enforce_tool_allowed(self, tool_name: str) -> None:
+    def _extract_tool_arguments(self, args: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        if kwargs:
+            return dict(kwargs)
+        if not args:
+            return {}
+        if len(args) == 1 and isinstance(args[0], dict):
+            return dict(args[0])
+        return {"args": list(args)}
+
+    def _evaluate_tool_invocation_policy(self, tool_name: str, *, arguments: Optional[Dict[str, Any]] = None) -> ToolInvocationDecision:
+        engine = getattr(self, "tool_policy_engine", None)
+        if engine is None:
+            engine = ToolPolicyEngine(deny_patterns=getattr(self, "disallowed_tools", None) or [])
+            self.tool_policy_engine = engine
+        ctx = ToolInvocationContext(
+            tool_name=tool_name,
+            arguments=arguments or {},
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            session_id=self.session_id,
+        )
+        return engine.evaluate(ctx)
+
+    def _enforce_tool_allowed(self, tool_name: str, *args: Any, **kwargs: Any) -> None:
         """Last-gate enforcement before any MCP tool call."""
-        if not self.disallowed_tools:
-            return
-        denied = _matches_any(self.disallowed_tools, tool_name)
+        arguments = self._extract_tool_arguments(args, kwargs)
+        decision = self._evaluate_tool_invocation_policy(tool_name, arguments=arguments)
         logger.info(
             "mcp_tool_policy_decision",
             extra={
@@ -1635,15 +1746,30 @@ class MCPWrapper:
                 "run_id": self.run_id,
                 "session_id": self.session_id,
                 "tool_name": tool_name,
-                "allowed": not denied,
+                "allowed": decision.allowed,
+                "reason": decision.reason,
+                "risk_class": decision.risk_class,
             },
         )
-        if denied:
+        self._record_audit_event(
+            event_type="tool_policy_decision",
+            outcome="allowed" if decision.allowed else "blocked",
+            tool_name=tool_name,
+            details={
+                "reason": decision.reason,
+                "risk_class": decision.risk_class,
+                "validation_errors": list(decision.validation_errors),
+                "arguments_present": bool(arguments),
+                "matched_policy": getattr(decision.matched_policy, "pattern", None),
+            },
+        )
+        if not decision.allowed:
             raise MCPToolNotAllowedError(
                 tool_name,
                 tenant_id=self.tenant_id,
                 run_id=self.run_id,
                 session_id=self.session_id,
+                reason=decision.reason,
             )
 
 
@@ -1872,11 +1998,30 @@ class MCPWrapper:
             output = str(result)
             output = await self._run_after_model_guardrails(ctx, output)
             output = _extract_user_visible_answer(output)
+            self._record_audit_event(
+                event_type="query_execution",
+                outcome="completed",
+                details={
+                    "max_steps": max_steps if max_steps is not None else self.max_steps,
+                    "server_name": server_name,
+                    "steps_used": self._steps_used,
+                },
+            )
             return output
 
         except MCPToolNotAllowedError:
+            self._record_audit_event(
+                event_type="query_execution",
+                outcome="blocked",
+                details={"reason": "tool_policy"},
+            )
             raise
         except GuardrailViolationError:
+            self._record_audit_event(
+                event_type="query_execution",
+                outcome="blocked",
+                details={"reason": "guardrail"},
+            )
             raise
         except Exception as e:
             logger.error(f"Query execution error: {e}")
