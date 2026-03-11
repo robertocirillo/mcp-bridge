@@ -13,11 +13,13 @@ from app.utils.logging import get_logger
 from app.utils.helpers import retry_async
 from app.models.config import SandboxOptions as SandboxOptionsModel  # rinomina per non confonderla con quella di mcp-use
 from app.core.bias_detector_client import BiasDetectorClient, BiasDetectorError
-from app.core.guardrail_runner import GuardrailRunner
+from app.core.guardrail_runner import GuardrailExecutionContext, GuardrailRunner
 from app.core.mcp_policy_engine import ToolPolicy, ToolInvocationContext, ToolInvocationDecision, ToolPolicyEngine
 from app.core.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
 
 logger = get_logger(__name__)
+
+GuardrailContext = GuardrailExecutionContext
 
 
 # -----------------------------
@@ -1080,18 +1082,6 @@ class GuardrailViolationError(Exception):
         self.details = details or {}
         super().__init__(message)
 
-
-@dataclass(frozen=True)
-class GuardrailContext:
-    """Context passed to guardrail hooks."""
-
-    tenant_id: Optional[str] = None
-    run_id: Optional[str] = None
-    session_id: Optional[str] = None
-    query: Optional[str] = None
-    server_name: Optional[str] = None
-
-
 def _matches_any(patterns: List[str], value: str) -> bool:
     for pat in patterns:
         if fnmatchcase(value, pat):
@@ -1107,9 +1097,10 @@ class _GuardedMCPSession:
         self._wrapper = wrapper
 
     async def call_tool(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        tool_arguments = self._wrapper._extract_tool_arguments(args, kwargs)
         self._wrapper._enforce_tool_allowed(name, *args, **kwargs)
         result = await self._session.call_tool(name, *args, **kwargs)
-        return self._wrapper._wrap_tool_result(name, result)
+        return self._wrapper._wrap_tool_result(name, result, tool_arguments=tool_arguments)
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._session, item)
@@ -1127,9 +1118,10 @@ class _GuardedMCPClient:
         return _GuardedMCPSession(session, self._wrapper)
 
     async def call_tool(self, name: str, *args: Any, **kwargs: Any) -> Any:
+        tool_arguments = self._wrapper._extract_tool_arguments(args, kwargs)
         self._wrapper._enforce_tool_allowed(name, *args, **kwargs)
         result = await self._client.call_tool(name, *args, **kwargs)
-        return self._wrapper._wrap_tool_result(name, result)
+        return self._wrapper._wrap_tool_result(name, result, tool_arguments=tool_arguments)
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._client, item)
@@ -1596,7 +1588,13 @@ class MCPWrapper:
             self.guardrail_runner = runner
         return runner
 
-    def _wrap_tool_result(self, tool_name: str, result: Any) -> Any:
+    def _wrap_tool_result(
+        self,
+        tool_name: str,
+        result: Any,
+        *,
+        tool_arguments: Optional[Dict[str, Any]] = None,
+    ) -> Any:
         """Apply guardrails to tool results.
 
         Behavior is controlled by the same session-scoped switches:
@@ -1608,69 +1606,22 @@ class MCPWrapper:
         NOTE: Tool policy enforcement (`disallowed_tools`) is enforced *before*
         this method and must NOT depend on `guardrails_enabled`.
         """
-
-        if getattr(self, "guardrails_enabled", True) is False:
-            self._record_audit_event(
-                event_type="tool_result_guardrail",
-                outcome="skipped",
-                tool_name=tool_name,
-                details={"reason": "guardrails_disabled"},
-            )
-            return result
-
-        mode = getattr(self, "pii_mode", "redact")
-
-        if mode == "redact":
-            wrapped = _redact_pii_in_obj(result)
-            transformed = wrapped != result
-            self._record_audit_event(
-                event_type="tool_result_guardrail",
-                outcome="redacted" if transformed else "passed",
-                tool_name=tool_name,
-                details={"rule": "pii", "mode": mode, "transformed": transformed},
-            )
-            return wrapped
-
-        if mode == "block":
-            counts = _detect_pii_in_obj(result)
-            present = [k for k, v in counts.items() if int(v or 0) > 0]
-            if present:
-                self._record_audit_event(
-                    event_type="tool_result_guardrail",
-                    outcome="blocked",
-                    tool_name=tool_name,
-                    details={"rule": "pii", "mode": mode, "types": present, "counts": counts},
-                )
-                raise GuardrailViolationError(
-                    code="PII_DETECTED",
-                    message="PII detected in tool result",
-                    phase="tool_result",
-                    rule="pii",
-                    tenant_id=getattr(self, "tenant_id", None),
-                    run_id=getattr(self, "run_id", None),
-                    session_id=getattr(self, "session_id", None),
-                    tool_name=tool_name,
-                    details={
-                        "types": present,
-                        "counts": counts,
-                        "mode": "block",
-                    },
-                )
-            self._record_audit_event(
-                event_type="tool_result_guardrail",
-                outcome="passed",
-                tool_name=tool_name,
-                details={"rule": "pii", "mode": mode},
-            )
-            return result
-
-        self._record_audit_event(
-            event_type="tool_result_guardrail",
-            outcome="skipped",
+        ctx = GuardrailContext(
+            tenant_id=self.tenant_id,
+            run_id=self.run_id,
+            session_id=self.session_id,
             tool_name=tool_name,
-            details={"rule": "pii", "mode": mode},
+            tool_arguments=tool_arguments,
         )
-        return result
+        outcome = self._get_guardrail_runner().tool_result(
+            ctx,
+            result,
+            enabled=getattr(self, "guardrails_enabled", True),
+            pii_mode=getattr(self, "pii_mode", "redact"),
+            redact_result=_redact_pii_in_obj,
+            detect_result_pii=_detect_pii_in_obj,
+        )
+        return outcome.value
 
     async def _run_before_model_guardrails(self, ctx: GuardrailContext) -> GuardrailContext:
         outcome = await self._get_guardrail_runner().before_model(
