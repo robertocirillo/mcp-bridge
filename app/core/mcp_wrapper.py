@@ -1097,10 +1097,10 @@ class _GuardedMCPSession:
         self._wrapper = wrapper
 
     async def call_tool(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        tool_arguments = self._wrapper._extract_tool_arguments(args, kwargs)
+        arguments = self._wrapper._extract_tool_arguments(args, kwargs)
         self._wrapper._enforce_tool_allowed(name, *args, **kwargs)
         result = await self._session.call_tool(name, *args, **kwargs)
-        return self._wrapper._wrap_tool_result(name, result, tool_arguments=tool_arguments)
+        return self._wrapper._wrap_tool_result(name, result, arguments=arguments)
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._session, item)
@@ -1118,10 +1118,10 @@ class _GuardedMCPClient:
         return _GuardedMCPSession(session, self._wrapper)
 
     async def call_tool(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        tool_arguments = self._wrapper._extract_tool_arguments(args, kwargs)
+        arguments = self._wrapper._extract_tool_arguments(args, kwargs)
         self._wrapper._enforce_tool_allowed(name, *args, **kwargs)
         result = await self._client.call_tool(name, *args, **kwargs)
-        return self._wrapper._wrap_tool_result(name, result, tool_arguments=tool_arguments)
+        return self._wrapper._wrap_tool_result(name, result, arguments=arguments)
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._client, item)
@@ -1200,6 +1200,7 @@ class MCPWrapper:
         self._initialized = False
         self._steps_used = 0
         self._last_server_used = None
+        self._active_server_name = None
 
         # Request/session context (for logs + structured errors)
         self.tenant_id: Optional[str] = None
@@ -1593,7 +1594,7 @@ class MCPWrapper:
         tool_name: str,
         result: Any,
         *,
-        tool_arguments: Optional[Dict[str, Any]] = None,
+        arguments: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """Apply guardrails to tool results.
 
@@ -1610,8 +1611,9 @@ class MCPWrapper:
             tenant_id=self.tenant_id,
             run_id=self.run_id,
             session_id=self.session_id,
+            server_name=getattr(self, "_active_server_name", None),
             tool_name=tool_name,
-            tool_arguments=tool_arguments,
+            arguments=arguments or {},
         )
         outcome = self._get_guardrail_runner().tool_result(
             ctx,
@@ -1662,6 +1664,7 @@ class MCPWrapper:
             tenant_id=self.tenant_id,
             run_id=self.run_id,
             session_id=self.session_id,
+            server_name=getattr(self, "_active_server_name", None),
         )
         return engine.evaluate(ctx)
 
@@ -1669,6 +1672,7 @@ class MCPWrapper:
         """Last-gate enforcement before any MCP tool call."""
         arguments = self._extract_tool_arguments(args, kwargs)
         decision = self._evaluate_tool_invocation_policy(tool_name, arguments=arguments)
+        server_name = getattr(self, "_active_server_name", None)
         logger.info(
             "mcp_tool_policy_decision",
             extra={
@@ -1691,6 +1695,7 @@ class MCPWrapper:
                 "validation_errors": list(decision.validation_errors),
                 "arguments_present": bool(arguments),
                 "matched_policy": getattr(decision.matched_policy, "pattern", None),
+                "server_name": server_name,
             },
         )
         if not decision.allowed:
@@ -1895,6 +1900,8 @@ class MCPWrapper:
             raise ValueError("Empty query not allowed")
 
         try:
+            previous_active_server_name = getattr(self, "_active_server_name", None)
+            self._active_server_name = server_name
             logger.debug(f"Executing query: {query[:100]}...")
 
             # Prepare parameters
@@ -1928,12 +1935,13 @@ class MCPWrapper:
             output = str(result)
             output = await self._run_after_model_guardrails(ctx, output)
             output = _extract_user_visible_answer(output)
+            effective_server_name = server_name or self._last_server_used
             self._record_audit_event(
                 event_type="query_execution",
                 outcome="completed",
                 details={
                     "max_steps": max_steps if max_steps is not None else self.max_steps,
-                    "server_name": server_name,
+                    "server_name": effective_server_name,
                     "steps_used": self._steps_used,
                 },
             )
@@ -1943,19 +1951,21 @@ class MCPWrapper:
             self._record_audit_event(
                 event_type="query_execution",
                 outcome="blocked",
-                details={"reason": "tool_policy"},
+                details={"reason": "tool_policy", "server_name": server_name},
             )
             raise
         except GuardrailViolationError:
             self._record_audit_event(
                 event_type="query_execution",
                 outcome="blocked",
-                details={"reason": "guardrail"},
+                details={"reason": "guardrail", "server_name": server_name},
             )
             raise
         except Exception as e:
             logger.error(f"Query execution error: {e}")
             raise MCPWrapperError(f"Query execution failed: {e}")
+        finally:
+            self._active_server_name = previous_active_server_name
 
     async def close(self):
         """Closes connections and releases resources"""
