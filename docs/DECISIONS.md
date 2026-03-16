@@ -214,9 +214,17 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 **Decision:**
 
 - `MCPWrapper` remains the public/session-facing façade for the MCP boundary.
+- `mcp_wrapper.py` remains the single public entry point for the MCP backend boundary.
+- Internal MCP boundary responsibilities may be split across private `mcp_wrapper_*` modules as long as the rest of the application still depends on `MCPWrapper`.
 - Tool policy evaluation is handled by `ToolPolicyEngine`.
 - Guardrail execution is handled by `GuardrailRunner`.
 - Audit/event recording uses the shared audit layer (`AuditEvent`, recorder).
+- Additional boundary concerns are delegated to focused internal modules:
+  - `mcp_wrapper_llm.py`
+  - `mcp_wrapper_transport.py`
+  - `mcp_wrapper_guardrails_pii.py`
+  - `mcp_wrapper_guardrails_bias.py`
+  - `mcp_wrapper_errors.py`
 - The MCP runtime boundary stays the same:
   - tool policy is enforced before every MCP tool call
   - query-level guardrails run around query execution (`before_model`, `after_model`)
@@ -225,8 +233,9 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 **Rationale:**
 
 - Keeps the runtime behavior and REST API stable while making the boundary easier to reason about.
-- Preserves a clear separation between orchestration (`MCPWrapper`) and execution primitives (policy, guardrails, audit).
+- Preserves a clear separation between orchestration (`MCPWrapper`) and execution primitives (policy, guardrails, audit, transport, LLM bootstrap).
 - Avoids rewriting or forking `mcp-use`.
+- Avoids turning `mcp_wrapper.py` into a god module while preserving backend swap flexibility.
 
 ---
 

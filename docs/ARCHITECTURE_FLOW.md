@@ -26,7 +26,7 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
 - Client (visual builder, workflow engine, etc.)
 - FastAPI route `create_session`
 - `SessionManager`
-- `MCPWrapper` (mcp-use wrapper)
+- `MCPWrapper` (public mcp-use boundary / façade)
 
 **Headers:**
 
@@ -79,6 +79,7 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
    - Generates a new `session_id = uuid4()`.
    - Instantiates `MCPWrapper` with LLM and MCP config.
    - Calls `await wrapper.initialize()`:
+     - `MCPWrapper` wires its internal boundary helpers (`mcp_wrapper_llm`, `mcp_wrapper_transport`, guardrail modules).
      - `mcp-use` initializes client, sessions, and tools.
      - If `mcp_servers` empty, `mcp-use` logs warnings but continues.
    - Creates `SessionData`:
@@ -234,6 +235,14 @@ Currently used guardrails include:
 
 - **PII**: redact/block on input/output (Strategy 3: shared `mode` + per-phase overrides).
 - **Bias**: after_model-only detector (block/off), typically calling `bias-detector-service`.
+
+Implementation note:
+
+- `MCPWrapper` remains the public boundary used by the rest of the application.
+- Guardrail logic is split into internal modules:
+  - `mcp_wrapper_guardrails_pii.py`
+  - `mcp_wrapper_guardrails_bias.py`
+- The transport boundary to `mcp-use` is isolated in `mcp_wrapper_transport.py`.
 
 **Failure modes:**
 

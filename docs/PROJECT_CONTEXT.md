@@ -59,11 +59,19 @@ Project: **mcp-bridge – MCP + A2A integration**
 
     * Façade/orchestrator around **`mcp-use`**
     * Holds session-scoped LLM+MCP configuration and request context
+    * Remains the only public MCP backend boundary used by the rest of the application
     * Coordinates the MCP runtime with:
       - `ToolPolicyEngine` for tool invocation decisions
       - `GuardrailRunner` for guardrail execution
       - the audit/event layer for structured observability
     * Provides `initialize()` and `run_query(...)`
+  * `mcp_wrapper_*` internal modules:
+
+    * `mcp_wrapper_llm`: provider imports, sandbox normalization, LLM creation
+    * `mcp_wrapper_transport`: guarded MCP client/session proxies
+    * `mcp_wrapper_guardrails_pii`: PII detection/redaction and related guardrail factories
+    * `mcp_wrapper_guardrails_bias`: bias detectors, bias guardrails, output sanitization helpers
+    * `mcp_wrapper_errors`: structured MCP boundary errors
   * `ToolPolicyEngine`:
 
     * Evaluates tool-level allow/deny policy before MCP tool calls
@@ -211,7 +219,7 @@ Project: **mcp-bridge – MCP + A2A integration**
 
 ### 3.2 MCP Wrapper
 
-`MCPWrapper` is a class that encapsulates mcp-use integration:
+`MCPWrapper` is the public class that encapsulates the mcp-use integration boundary:
 
 * Constructor receives all config:
 
@@ -221,17 +229,19 @@ Project: **mcp-bridge – MCP + A2A integration**
   * Sandbox options
   * Disallowed tools
 
-* Runtime role:
+  * Runtime role:
 
-  * Keeps the public/session-facing API stable
-  * Wraps the `mcp-use` client/session boundary so tool policy is enforced before every MCP tool call
-  * Delegates guardrail execution to `GuardrailRunner`
-  * Records structured events through the audit layer
+    * Keeps the public/session-facing API stable
+    * Wraps the `mcp-use` client/session boundary so tool policy is enforced before every MCP tool call
+    * Delegates guardrail execution to `GuardrailRunner`
+    * Records structured events through the audit layer
+    * Delegates boundary internals to focused helper modules (`mcp_wrapper_*`) while keeping the external boundary stable
 
 * Main methods and attributes:
 
   * `async initialize()`:
 
+    * Wires boundary-specific helper modules (`mcp_wrapper_llm`, `mcp_wrapper_transport`, guardrail modules)
     * Creates `mcp-use` client(s)
     * Connects to configured MCP servers
     * Prepares tools and sessions
