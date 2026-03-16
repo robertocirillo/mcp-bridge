@@ -262,7 +262,7 @@ class SessionData:
 
 ## 4. MCPWrapper – High-Level Shape
 
-> NOTE: This is conceptual; exact implementation is in `app/core/mcp_wrapper.py` and uses `mcp-use`.
+> NOTE: This is conceptual; exact implementation is centered on `app/core/mcp_wrapper.py` and its internal `app/core/mcp_wrapper_*.py` helper modules, all within the same MCP boundary around `mcp-use`.
 
 ```python
 from typing import Any, Dict, Optional

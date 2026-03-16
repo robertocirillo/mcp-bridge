@@ -41,7 +41,12 @@ mcp-bridge/
     │   ├── routes/             # REST endpoints (sessions, queries, a2a, health, etc.)
     │   └── dependencies.py     # Dependency injection helpers (SessionManager, A2A, TenantContext)
     ├── core/
-    │   ├── mcp_wrapper.py      # MCP façade/orchestrator around mcp-use
+    │   ├── mcp_wrapper.py      # Public MCP boundary / façade around mcp-use
+    │   ├── mcp_wrapper_llm.py  # Internal LLM/runtime bootstrap for the MCP boundary
+    │   ├── mcp_wrapper_transport.py       # Internal guarded MCP client/session proxies
+    │   ├── mcp_wrapper_guardrails_pii.py  # Internal PII guardrail logic
+    │   ├── mcp_wrapper_guardrails_bias.py # Internal bias guardrail logic
+    │   ├── mcp_wrapper_errors.py          # Internal MCP boundary errors
     │   ├── guardrail_runner.py # Guardrail execution pipeline
     │   ├── mcp_policy_engine.py# Tool policy evaluation
     │   ├── mcp_audit.py        # Audit event primitives/recorder
@@ -159,7 +164,18 @@ mcp-bridge supports **session-scoped guardrails** in two distinct execution scop
 
 Guardrails are configured **per session** via the `guardrails` object in `POST /sessions`.
 
-`MCPWrapper` remains the façade/orchestrator for the MCP runtime. It coordinates:
+`MCPWrapper` remains the façade/orchestrator for the MCP runtime. The rest of the application should keep depending on `MCPWrapper`, not on `mcp-use` or on boundary internals.
+
+Internally, the MCP boundary is now split into focused modules:
+
+- `mcp_wrapper.py`: public façade, session lifecycle, query orchestration
+- `mcp_wrapper_llm.py`: provider imports, sandbox normalization, LLM construction
+- `mcp_wrapper_transport.py`: guarded MCP client/session proxies
+- `mcp_wrapper_guardrails_pii.py`: PII detection, redaction, before/after-model factories
+- `mcp_wrapper_guardrails_bias.py`: local/service-backed bias guardrails and output sanitization helpers
+- `mcp_wrapper_errors.py`: structured MCP boundary exceptions
+
+`MCPWrapper` coordinates:
 
 - `ToolPolicyEngine` for pre-tool-call policy enforcement
 - `GuardrailRunner` for guardrail execution
