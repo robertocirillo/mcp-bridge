@@ -60,18 +60,22 @@ Project: **mcp-bridge – MCP + A2A integration**
     * Façade/orchestrator around **`mcp-use`**
     * Holds session-scoped LLM+MCP configuration and request context
     * Remains the only public MCP backend boundary used by the rest of the application
+    * Remains the chosen public facade while internal MCP boundary concerns are consolidated behind it
     * Coordinates the MCP runtime with:
       - `ToolPolicyEngine` for tool invocation decisions
       - `GuardrailRunner` for guardrail execution
       - the audit/event layer for structured observability
+    * The recent cleanup of guardrail execution, invocation-context handling, and audit events belongs to this consolidation, not to a new public abstraction
     * Provides `initialize()` and `run_query(...)`
   * `mcp_wrapper_*` internal modules:
 
+    * This focused internal split is the intended current architecture for the MCP boundary
     * `mcp_wrapper_llm`: provider imports, sandbox normalization, LLM creation
     * `mcp_wrapper_transport`: guarded MCP client/session proxies
     * `mcp_wrapper_guardrails_pii`: PII detection/redaction and related guardrail factories
     * `mcp_wrapper_guardrails_bias`: bias detectors, bias guardrails, output sanitization helpers
     * `mcp_wrapper_errors`: structured MCP boundary errors
+    * `MCPRuntimeAdapter` is not part of the current design; it should be reconsidered only if a concrete reusable runtime seam emerges later
   * `ToolPolicyEngine`:
 
     * Evaluates tool-level allow/deny policy before MCP tool calls
@@ -236,6 +240,7 @@ Project: **mcp-bridge – MCP + A2A integration**
     * Delegates guardrail execution to `GuardrailRunner`
     * Records structured events through the audit layer
     * Delegates boundary internals to focused helper modules (`mcp_wrapper_*`) while keeping the external boundary stable
+    * Does not imply another imminent MCP boundary redesign or a new adapter layer
 
 * Main methods and attributes:
 
