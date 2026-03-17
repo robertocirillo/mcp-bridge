@@ -132,7 +132,11 @@ async def delete_session(
 
         # If we reach here, the session belongs to this tenant.
         # We can safely schedule the cleanup in the background.
-        background_tasks.add_task(session_manager.delete_session, session_id)
+        background_tasks.add_task(
+            session_manager.delete_session,
+            session_id,
+            tenant_ctx.tenant_id,
+        )
 
         return {"message": f"Session {session_id} deleted successfully"}
 
