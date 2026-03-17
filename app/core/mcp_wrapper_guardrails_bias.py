@@ -23,6 +23,7 @@ class BiasDetector:
     """Minimal, pluggable bias detector interface."""
 
     def detect(self, text: str) -> BiasDetectionResult:  # pragma: no cover
+        # Force concrete detectors to implement the bias classification contract.
         raise NotImplementedError
 
 
@@ -30,6 +31,7 @@ class NoOpBiasDetector(BiasDetector):
     """Default detector: never detects bias."""
 
     def detect(self, text: str) -> BiasDetectionResult:
+        # Always return a negative result when bias detection is intentionally disabled.
         return BiasDetectionResult(detected=False)
 
 
@@ -144,20 +146,26 @@ class RuleBasedBiasDetector(BiasDetector):
     ]
 
     def __init__(self, *, threshold: int = 4) -> None:
+        # Store the minimum score required before the text is considered biased.
         self.threshold = int(threshold)
 
+        # Precompile the group matcher once so repeated detections stay inexpensive.
         group_alt = "|".join(sorted((re.escape(g) for g in self._GROUP_TERMS), key=len, reverse=True))
         self._group_re = re.compile(rf"\b(?:{group_alt})\b", re.IGNORECASE)
 
+        # Precompile the negative descriptor matcher used for generalization checks.
         neg_alt = "|".join(sorted((re.escape(w) for w in self._NEGATIVE_DESCRIPTORS), key=len, reverse=True))
         self._neg_re = re.compile(rf"\b(?:{neg_alt})\b", re.IGNORECASE)
 
+        # Precompile dehumanizing language patterns so they can be reused across inputs.
         deh_alt = "|".join(sorted((re.escape(w) for w in self._DEHUMANIZATION_TERMS), key=len, reverse=True))
         self._deh_re = re.compile(rf"\b(?:{deh_alt})\b", re.IGNORECASE)
 
+        # Precompile exclusion and violence expressions that should trigger a strong signal.
         excl_alt = "|".join(sorted((re.escape(w) for w in self._EXCLUSION_VIOLENCE_TERMS), key=len, reverse=True))
         self._excl_re = re.compile(rf"(?:{excl_alt})", re.IGNORECASE)
 
+        # Match blanket statements that combine group references with broad negative claims.
         self._generalization_re = re.compile(
             rf"\b(?:tutti|tutte|all|every)\b[^.\n\r]{{0,80}}?\b(?:{group_alt})\b[^.\n\r]{{0,80}}?\b(?:sono|are|sempre|always)\b",
             re.IGNORECASE,
@@ -165,11 +173,13 @@ class RuleBasedBiasDetector(BiasDetector):
 
     @staticmethod
     def _normalize(text: str) -> str:
+        # Collapse whitespace and line breaks so rule matching works on a stable text shape.
         stripped = (text or "").replace("\n", " ").split()
         return " ".join(stripped)
 
     @staticmethod
     def _strip_accents(text: str) -> str:
+        # Normalize accented characters to improve matching for Italian text variants.
         table = str.maketrans({
             "à": "a",
             "á": "a",
@@ -186,21 +196,26 @@ class RuleBasedBiasDetector(BiasDetector):
 
     @staticmethod
     def _split_sentences(text: str) -> List[str]:
+        # Split the text into simple sentence-like chunks for localized rule checks.
         parts = re.split(r"[.!?]+", text)
         return [p.strip() for p in parts if p.strip()]
 
     def detect(self, text: str) -> BiasDetectionResult:
+        # Normalize the input before applying any rule-based heuristics.
         normalized_text = self._normalize(text)
         if not normalized_text:
             return BiasDetectionResult(detected=False)
 
+        # Accumulate a score and evidence so multiple weak signals can combine into a block.
         score = 0
         categories: set[str] = set()
         findings: List[str] = []
 
+        # Check whether the text is likely quoting or criticizing biased content instead of endorsing it.
         lower = self._strip_accents(normalized_text)
         mitigated_context = any(marker in lower for marker in self._CONTEXT_MITIGATIONS)
 
+        # Look for explicit exclusion or violence directed at a protected or social group.
         for sentence in self._split_sentences(normalized_text):
             if self._group_re.search(sentence) and self._excl_re.search(sentence):
                 score += 6
@@ -208,22 +223,26 @@ class RuleBasedBiasDetector(BiasDetector):
                 findings.append("rule:exclusion_or_violence")
                 break
 
+        # Flag dehumanizing language when it appears alongside a recognized group reference.
         if self._group_re.search(normalized_text) and self._deh_re.search(normalized_text):
             score += 6
             categories.add("dehumanization")
             findings.append("rule:dehumanization")
 
+        # Flag strong negative generalizations that apply harmful traits to an entire group.
         if self._generalization_re.search(normalized_text) and self._neg_re.search(normalized_text):
             score += 4
             categories.add("strong_generalization")
             findings.append("rule:strong_generalization_negative")
 
+        # Reduce the score when the surrounding wording indicates condemnation of biased speech.
         if mitigated_context:
             score = max(0, score - 6)
             if score == 0:
                 categories.clear()
                 findings.clear()
 
+        # Return structured evidence only when the score crosses the configured threshold.
         detected = score >= self.threshold
         return BiasDetectionResult(
             detected=detected,
