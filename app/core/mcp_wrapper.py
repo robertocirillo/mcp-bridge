@@ -7,6 +7,7 @@ while the implementation details live in mcp_wrapper_* helper modules.
 
 from __future__ import annotations
 
+import inspect
 import os
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
@@ -661,10 +662,26 @@ class MCPWrapper:
                 pass
             self._bias_detector_service = None
 
-        # Close all managed MCP sessions when the guarded client was initialized.
-        if self._client:
+        agent = self._agent
+        client = self._client
+        client_closed = False
+
+        # Prefer the higher-level mcp-use runtime close if available because it owns
+        # the full MCP session lifecycle, including stdio-backed transports.
+        if agent and hasattr(agent, "close"):
             try:
-                await self._client.close_all_sessions()
+                maybe_awaitable = agent.close()
+                if inspect.isawaitable(maybe_awaitable):
+                    await maybe_awaitable
+                client_closed = True
+                logger.debug("MCP agent closed successfully")
+            except Exception as exc:
+                logger.warning("Error closing MCP agent: %s", exc)
+
+        # Fall back to the client-level session cleanup for older or partial runtimes.
+        if client and not client_closed:
+            try:
+                await client.close_all_sessions()
                 logger.debug("MCP client closed successfully")
             except Exception as exc:
                 logger.warning("Error closing MCP client: %s", exc)
