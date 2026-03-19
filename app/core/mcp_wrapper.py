@@ -12,7 +12,12 @@ import os
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from app.core.bias_detector_client import BiasDetectorClient
-from app.core.exceptions import ConfigurationError, MCPWrapperError
+from app.core.exceptions import (
+    ConfigurationError,
+    MCPCapabilityNotSupportedError,
+    MCPCapabilityUpstreamError,
+    MCPWrapperError,
+)
 from app.core.guardrail_runner import GuardrailExecutionContext, GuardrailRunner
 from app.core.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
 from app.core.mcp_policy_engine import ToolInvocationContext, ToolInvocationDecision, ToolPolicy, ToolPolicyEngine
@@ -508,6 +513,301 @@ class MCPWrapper:
                 session_id=self.session_id,
                 reason=decision.reason,
             )
+
+    async def _await_if_needed(self, value: Any) -> Any:
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    @staticmethod
+    def _is_signature_compatible(
+        method: Any,
+        args: tuple[Any, ...],
+        kwargs: Dict[str, Any],
+    ) -> Optional[bool]:
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            return None
+
+        try:
+            signature.bind(*args, **kwargs)
+        except TypeError:
+            return False
+        return True
+
+    @staticmethod
+    def _type_error_entered_callable(method: Any, exc: TypeError) -> bool:
+        target = getattr(method, "__func__", method)
+        target_code = getattr(target, "__code__", None)
+        if target_code is None:
+            return False
+
+        tb = exc.__traceback__
+        while tb is not None:
+            if tb.tb_frame.f_code is target_code:
+                return True
+            tb = tb.tb_next
+        return False
+
+    @staticmethod
+    def _resolve_invocation_target(container: Any, method_name: str, fallback: Any) -> Any:
+        saw_wrapped_target = False
+        for attr_name in ("_session", "_client"):
+            inner = getattr(container, attr_name, None)
+            if inner is None:
+                continue
+            saw_wrapped_target = True
+            target = getattr(inner, method_name, None)
+            if target is not None:
+                return target
+        if saw_wrapped_target:
+            return None
+        return fallback
+
+    def _resolve_capability_server_name(self, server_name: Optional[str]) -> str:
+        configured_servers = list(self.mcp_servers.keys())
+        if server_name:
+            if server_name not in self.mcp_servers:
+                raise ConfigurationError(f"Server '{server_name}' not configured")
+            return server_name
+
+        if not configured_servers:
+            raise ConfigurationError("No MCP servers configured for this session")
+
+        if len(configured_servers) == 1:
+            return configured_servers[0]
+
+        raise ConfigurationError(
+            "server_name is required when multiple MCP servers are configured"
+        )
+
+    async def _get_capability_session(self, server_name: str) -> Any:
+        if not self._initialized:
+            await self.initialize()
+
+        client = self._client
+        if client is None:
+            raise MCPWrapperError("MCP client not initialized")
+
+        get_session = getattr(client, "get_session", None)
+        if get_session is None:
+            return client
+
+        signature_mismatch = False
+        attempts: List[tuple[tuple[Any, ...], Dict[str, Any]]] = [
+            ((), {"server_name": server_name}),
+            ((server_name,), {}),
+            ((), {"name": server_name}),
+        ]
+        if len(self.mcp_servers) == 1:
+            attempts.append(((), {}))
+
+        target_get_session = self._resolve_invocation_target(client, "get_session", get_session)
+        for args, kwargs in attempts:
+            compatibility = self._is_signature_compatible(target_get_session, args, kwargs)
+            if compatibility is False:
+                signature_mismatch = True
+                continue
+            try:
+                return await self._await_if_needed(get_session(*args, **kwargs))
+            except MCPCapabilityNotSupportedError as exc:
+                raise MCPCapabilityNotSupportedError(
+                    "session_transport",
+                    str(exc),
+                    server_name=server_name,
+                ) from exc
+            except TypeError as exc:
+                if compatibility is None and not self._type_error_entered_callable(target_get_session, exc):
+                    signature_mismatch = True
+                    continue
+                raise MCPCapabilityUpstreamError(
+                    "session_transport",
+                    f"Unable to obtain MCP session for server '{server_name}': {exc}",
+                    server_name=server_name,
+                ) from exc
+            except Exception as exc:
+                raise MCPCapabilityUpstreamError(
+                    "session_transport",
+                    f"Unable to obtain MCP session for server '{server_name}': {exc}",
+                    server_name=server_name,
+                ) from exc
+
+        if signature_mismatch:
+            raise MCPCapabilityNotSupportedError(
+                "session_transport",
+                (
+                    f"Unable to obtain MCP session for server '{server_name}': "
+                    "the MCP runtime exposes an incompatible get_session signature"
+                ),
+                server_name=server_name,
+            )
+
+        raise MCPCapabilityUpstreamError(
+            "session_transport",
+            f"Unable to obtain MCP session for server '{server_name}'",
+            server_name=server_name,
+        )
+
+    async def _invoke_capability_method(
+        self,
+        session: Any,
+        *,
+        operation: str,
+        method_names: List[str],
+        call_variants: List[tuple[tuple[Any, ...], Dict[str, Any]]],
+        server_name: str,
+    ) -> Any:
+        found_method = False
+        signature_mismatch = False
+
+        for method_name in method_names:
+            method = getattr(session, method_name, None)
+            if method is None:
+                continue
+
+            target_method = self._resolve_invocation_target(session, method_name, method)
+            if target_method is None:
+                continue
+
+            found_method = True
+            for args, kwargs in call_variants:
+                compatibility = self._is_signature_compatible(target_method, args, kwargs)
+                if compatibility is False:
+                    signature_mismatch = True
+                    continue
+                try:
+                    return await self._await_if_needed(method(*args, **kwargs))
+                except MCPCapabilityNotSupportedError:
+                    break
+                except TypeError as exc:
+                    if compatibility is None and not self._type_error_entered_callable(target_method, exc):
+                        signature_mismatch = True
+                        continue
+                    raise MCPCapabilityUpstreamError(
+                        operation,
+                        f"{operation} failed: {exc}",
+                        server_name=server_name,
+                    ) from exc
+                except Exception as exc:
+                    raise MCPCapabilityUpstreamError(
+                        operation,
+                        f"{operation} failed: {exc}",
+                        server_name=server_name,
+                    ) from exc
+
+        if not found_method:
+            supported = ", ".join(method_names)
+            raise MCPCapabilityNotSupportedError(
+                operation,
+                f"MCP runtime does not support {operation} (expected one of: {supported})",
+                server_name=server_name,
+            )
+
+        if signature_mismatch:
+            raise MCPCapabilityNotSupportedError(
+                operation,
+                f"MCP runtime does not support {operation} with a compatible method signature",
+                server_name=server_name,
+            )
+
+        raise MCPCapabilityUpstreamError(
+            operation,
+            f"{operation} failed",
+            server_name=server_name,
+        )
+
+    async def _run_capability_operation(
+        self,
+        *,
+        operation: str,
+        method_names: List[str],
+        call_variants: List[tuple[tuple[Any, ...], Dict[str, Any]]],
+        server_name: Optional[str],
+    ) -> Any:
+        resolved_server_name = self._resolve_capability_server_name(server_name)
+        previous_active_server_name = getattr(self, "_active_server_name", None)
+        self._active_server_name = resolved_server_name
+
+        try:
+            session = await self._get_capability_session(resolved_server_name)
+            result = await self._invoke_capability_method(
+                session,
+                operation=operation,
+                method_names=method_names,
+                call_variants=call_variants,
+                server_name=resolved_server_name,
+            )
+            self._last_server_used = resolved_server_name
+            return result
+        finally:
+            self._active_server_name = previous_active_server_name
+
+    async def list_prompts(self, server_name: Optional[str] = None) -> Any:
+        return await self._run_capability_operation(
+            operation="list_prompts",
+            method_names=["list_prompts"],
+            call_variants=[((), {})],
+            server_name=server_name,
+        )
+
+    async def get_prompt(
+        self,
+        prompt_name: str,
+        *,
+        arguments: Optional[Dict[str, Any]] = None,
+        server_name: Optional[str] = None,
+    ) -> Any:
+        prompt_arguments = dict(arguments or {})
+        return await self._run_capability_operation(
+            operation="get_prompt",
+            method_names=["get_prompt", "render_prompt"],
+            call_variants=[
+                ((prompt_name,), {"arguments": prompt_arguments}),
+                ((prompt_name, prompt_arguments), {}),
+                ((), {"name": prompt_name, "arguments": prompt_arguments}),
+                ((), {"prompt_name": prompt_name, "arguments": prompt_arguments}),
+            ],
+            server_name=server_name,
+        )
+
+    async def render_prompt(
+        self,
+        prompt_name: str,
+        *,
+        arguments: Optional[Dict[str, Any]] = None,
+        server_name: Optional[str] = None,
+    ) -> Any:
+        return await self.get_prompt(
+            prompt_name,
+            arguments=arguments,
+            server_name=server_name,
+        )
+
+    async def list_resources(self, server_name: Optional[str] = None) -> Any:
+        return await self._run_capability_operation(
+            operation="list_resources",
+            method_names=["list_resources"],
+            call_variants=[((), {})],
+            server_name=server_name,
+        )
+
+    async def read_resource(
+        self,
+        uri: str,
+        *,
+        server_name: Optional[str] = None,
+    ) -> Any:
+        return await self._run_capability_operation(
+            operation="read_resource",
+            method_names=["read_resource"],
+            call_variants=[
+                ((uri,), {}),
+                ((), {"uri": uri}),
+                ((), {"resource_uri": uri}),
+            ],
+            server_name=server_name,
+        )
 
     async def initialize(self) -> None:
         # Initialize runtime resources once and retry transient setup failures.

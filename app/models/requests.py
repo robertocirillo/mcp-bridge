@@ -18,6 +18,29 @@ class QueryRequest(BaseModel):
     max_steps: Optional[int] = Field(None, gt=0, le=100, description="Override for maximum number of steps")
     server_name: Optional[str] = Field(None, description="Specific server name to use")
 
+
+class PromptRenderRequest(BaseModel):
+    """Request to render/get a prompt from an MCP server."""
+
+    server_name: Optional[str] = Field(
+        default=None,
+        description="Specific server name to use. Optional only when the session has exactly one MCP server.",
+    )
+    arguments: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Prompt arguments forwarded to the MCP server.",
+    )
+
+
+class ResourceReadRequest(BaseModel):
+    """Request to read an MCP resource."""
+
+    uri: str = Field(..., min_length=1, description="Resource URI to read")
+    server_name: Optional[str] = Field(
+        default=None,
+        description="Specific server name to use. Optional only when the session has exactly one MCP server.",
+    )
+
 class SessionUpdateRequest(BaseModel):
     """Request to update a session"""
     max_steps: Optional[int] = Field(None, gt=0, le=100, description="New maximum number of steps")

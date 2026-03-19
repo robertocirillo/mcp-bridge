@@ -52,6 +52,84 @@ class SessionInfo(BaseModel):
     llm_provider: str = Field(..., description="LLM provider used")
     llm_model: str = Field(..., description="LLM model used")
 
+
+class PromptArgument(BaseModel):
+    """Prompt argument metadata exposed by the MCP server."""
+
+    name: str = Field(..., description="Argument name")
+    description: Optional[str] = Field(None, description="Optional argument description")
+    required: Optional[bool] = Field(None, description="Whether the argument is required")
+
+
+class PromptInfo(BaseModel):
+    """Prompt metadata exposed by the MCP server."""
+
+    name: str = Field(..., description="Prompt name")
+    description: Optional[str] = Field(None, description="Optional prompt description")
+    arguments: List[PromptArgument] = Field(default_factory=list, description="Prompt arguments metadata")
+
+
+class PromptListResponse(BaseModel):
+    """List of prompts available for a session/server."""
+
+    session_id: str = Field(..., description="Session identifier")
+    server_name: str = Field(..., description="Resolved MCP server name")
+    prompts: List[PromptInfo] = Field(default_factory=list, description="Available prompts")
+
+
+class PromptRenderMessage(BaseModel):
+    """Single message returned by MCP prompt rendering."""
+
+    role: Optional[str] = Field(None, description="Message role, if provided by the server")
+    content: Dict[str, Any] = Field(default_factory=dict, description="Normalized MCP message content")
+
+
+class PromptRenderResponse(BaseModel):
+    """Rendered prompt payload."""
+
+    session_id: str = Field(..., description="Session identifier")
+    server_name: str = Field(..., description="Resolved MCP server name")
+    prompt_name: str = Field(..., description="Prompt name")
+    description: Optional[str] = Field(None, description="Optional rendered prompt description")
+    messages: List[PromptRenderMessage] = Field(default_factory=list, description="Rendered prompt messages")
+
+
+class ResourceInfo(BaseModel):
+    """Resource metadata exposed by the MCP server."""
+
+    uri: str = Field(..., description="Resource URI")
+    name: Optional[str] = Field(None, description="Human-readable resource name")
+    description: Optional[str] = Field(None, description="Optional resource description")
+    mime_type: Optional[str] = Field(None, description="Declared MIME type")
+    size: Optional[int] = Field(None, description="Optional size in bytes")
+
+
+class ResourceListResponse(BaseModel):
+    """List of resources available for a session/server."""
+
+    session_id: str = Field(..., description="Session identifier")
+    server_name: str = Field(..., description="Resolved MCP server name")
+    resources: List[ResourceInfo] = Field(default_factory=list, description="Available resources")
+
+
+class ResourceContent(BaseModel):
+    """Explicit representation of resource content."""
+
+    uri: Optional[str] = Field(None, description="Content URI, when provided by the server")
+    mime_type: Optional[str] = Field(None, description="Content MIME type")
+    text: Optional[str] = Field(None, description="Decoded textual content")
+    blob_base64: Optional[str] = Field(None, description="Base64-encoded binary content")
+    structured: Optional[Any] = Field(None, description="Structured/JSON-like payload")
+
+
+class ResourceReadResponse(BaseModel):
+    """Read result for an MCP resource."""
+
+    session_id: str = Field(..., description="Session identifier")
+    server_name: str = Field(..., description="Resolved MCP server name")
+    uri: str = Field(..., description="Requested resource URI")
+    contents: List[ResourceContent] = Field(default_factory=list, description="Explicit resource contents")
+
 class HealthResponse(BaseModel):
     """Response for health check"""
     status: str = Field(..., description="Service status")
@@ -297,5 +375,4 @@ class A2ATaskStatusResponse(BaseModel):
             except Exception:
                 self.is_terminal = False
         return self
-
 
