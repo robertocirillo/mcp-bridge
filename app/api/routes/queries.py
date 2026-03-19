@@ -11,8 +11,8 @@ import asyncio
 import logging
 from datetime import datetime
 
-from app.models.requests import QueryRequest
-from app.models.responses import QueryResponse
+from app.models.requests import QueryOperationCreateRequest, QueryRequest
+from app.models.responses import QueryOperationResponse, QueryResponse
 from app.core.session_manager import SessionManager
 from app.core.exceptions import SessionNotFoundError, ConfigurationError, MCPWrapperError
 from app.core.mcp_wrapper import MCPToolNotAllowedError, GuardrailViolationError
@@ -170,6 +170,129 @@ async def execute_query(
             tenant_id=tenant_ctx.tenant_id,
             run_id=tenant_ctx.run_id,
             session_id=session_id,
+        )
+
+
+@router.post("/{session_id}/query-operations", response_model=QueryOperationResponse)
+async def create_query_operation(
+    session_id: str,
+    request: QueryOperationCreateRequest,
+    tenant_ctx: TenantDep,
+    session_manager: SessionManager = Depends(get_session_manager),
+):
+    """Create an asynchronous query operation for an existing session."""
+    try:
+        return await session_manager.create_query_operation(
+            session_id=session_id,
+            request=request,
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+        )
+
+    except SessionNotFoundError as e:
+        logger.warning("Session not found for query operation: %s", e)
+        raise http_error(
+            404,
+            "MCP_SESSION_NOT_FOUND",
+            str(e),
+            operation="create_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+        )
+    except ConfigurationError as e:
+        raise http_error(
+            400,
+            "MCP_CONFIGURATION_ERROR",
+            str(e),
+            operation="create_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+        )
+    except MCPWrapperError as e:
+        raise http_error(
+            502,
+            "MCP_UPSTREAM_ERROR",
+            str(e),
+            operation="create_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+        )
+    except Exception:
+        raise http_error(
+            500,
+            "MCP_INTERNAL_ERROR",
+            "Internal Error",
+            operation="create_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+        )
+
+
+@router.get("/{session_id}/query-operations/{operation_id}", response_model=QueryOperationResponse)
+async def get_query_operation(
+    session_id: str,
+    operation_id: str,
+    tenant_ctx: TenantDep,
+    session_manager: SessionManager = Depends(get_session_manager),
+):
+    """Return the current state of an asynchronous query operation."""
+    try:
+        return await session_manager.get_query_operation(
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id=tenant_ctx.tenant_id,
+        )
+
+    except SessionNotFoundError as e:
+        logger.warning("Query operation not found: %s", e)
+        message = str(e)
+        code = "MCP_QUERY_OPERATION_NOT_FOUND" if "Query operation" in message else "MCP_SESSION_NOT_FOUND"
+        raise http_error(
+            404,
+            code,
+            message,
+            operation="get_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
+        )
+    except ConfigurationError as e:
+        raise http_error(
+            400,
+            "MCP_CONFIGURATION_ERROR",
+            str(e),
+            operation="get_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
+        )
+    except MCPWrapperError as e:
+        raise http_error(
+            502,
+            "MCP_UPSTREAM_ERROR",
+            str(e),
+            operation="get_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
+        )
+    except Exception:
+        raise http_error(
+            500,
+            "MCP_INTERNAL_ERROR",
+            "Internal Error",
+            operation="get_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
         )
 
 

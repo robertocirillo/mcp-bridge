@@ -4,13 +4,23 @@ Session Manager to handle active MCP sessions
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any, Optional, List
 import uuid
 
 from app.core.mcp_wrapper import MCPWrapper
 from app.core.exceptions import SessionNotFoundError, MaxSessionsExceededError, ConfigurationError
+from app.core.mcp_wrapper import MCPToolNotAllowedError, GuardrailViolationError
 from app.models.config import SessionConfig
+from app.models.requests import QueryOperationCreateRequest
+from app.models.responses import (
+    QueryOperationError,
+    QueryOperationInput,
+    QueryOperationMetadata,
+    QueryOperationResponse,
+    QueryOperationResult,
+    QueryOperationStatus,
+)
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -64,6 +74,8 @@ class SessionManager:
 
     def __init__(self):
         self._sessions: Dict[str, SessionData] = {}
+        self._query_operations: Dict[str, Dict[str, QueryOperationResponse]] = {}
+        self._query_operation_tasks: Dict[str, Dict[str, asyncio.Task]] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
 
@@ -280,6 +292,19 @@ class SessionManager:
             session_data = self._sessions[session_id]
             if tenant_id is not None and session_data.tenant_id != tenant_id:
                 raise SessionNotFoundError(f"Session {session_id} not found")
+            operation_tasks = list(self._query_operation_tasks.pop(session_id, {}).values())
+            self._query_operations.pop(session_id, None)
+
+        for task in operation_tasks:
+            if not task.done():
+                task.cancel()
+        if operation_tasks:
+            await asyncio.gather(*operation_tasks, return_exceptions=True)
+
+        async with self._lock:
+            session_data = self._sessions[session_id]
+            if tenant_id is not None and session_data.tenant_id != tenant_id:
+                raise SessionNotFoundError(f"Session {session_id} not found")
             # Close the wrapper
             try:
                 await session_data.wrapper.close()
@@ -293,6 +318,70 @@ class SessionManager:
                 session_id,
                 session_data.tenant_id,
             )
+
+    async def create_query_operation(
+        self,
+        session_id: str,
+        request: QueryOperationCreateRequest,
+        tenant_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> QueryOperationResponse:
+        """Create and schedule an asynchronous query operation for a session."""
+        await self.get_session(session_id=session_id, tenant_id=tenant_id)
+
+        operation_id = str(uuid.uuid4())
+        timestamp = datetime.now()
+        operation = QueryOperationResponse(
+            operation_id=operation_id,
+            session_id=session_id,
+            status=QueryOperationStatus.queued,
+            metadata=QueryOperationMetadata(
+                created_at=timestamp,
+                updated_at=timestamp,
+                request=QueryOperationInput(
+                    query=request.query,
+                    max_steps=request.max_steps,
+                    server_name=request.server_name,
+                ),
+            ),
+        )
+
+        async with self._lock:
+            self._query_operations.setdefault(session_id, {})[operation_id] = operation
+
+        initial_response = operation.model_copy(deep=True)
+
+        task = asyncio.create_task(
+            self._run_query_operation(
+                session_id=session_id,
+                operation_id=operation_id,
+                tenant_id=tenant_id,
+                run_id=run_id,
+            )
+        )
+
+        async with self._lock:
+            if session_id in self._sessions and operation_id in self._query_operations.get(session_id, {}):
+                self._query_operation_tasks.setdefault(session_id, {})[operation_id] = task
+            else:
+                task.cancel()
+
+        return initial_response
+
+    async def get_query_operation(
+        self,
+        session_id: str,
+        operation_id: str,
+        tenant_id: Optional[str] = None,
+    ) -> QueryOperationResponse:
+        """Return the current state of an asynchronous query operation."""
+        await self.get_session(session_id=session_id, tenant_id=tenant_id)
+
+        async with self._lock:
+            operation = self._query_operations.get(session_id, {}).get(operation_id)
+            if operation is None:
+                raise SessionNotFoundError(f"Query operation {operation_id} not found for session {session_id}")
+            return operation.model_copy(deep=True)
 
     async def list_sessions(
         self,
@@ -370,6 +459,179 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"Error in cleanup task: {e}")
                 await asyncio.sleep(60)  # Retry in 1 minute
+
+    async def _run_query_operation(
+        self,
+        *,
+        session_id: str,
+        operation_id: str,
+        tenant_id: Optional[str],
+        run_id: Optional[str],
+    ) -> None:
+        request: QueryOperationInput | None = None
+
+        try:
+            request = await self._set_query_operation_status(
+                session_id=session_id,
+                operation_id=operation_id,
+                status=QueryOperationStatus.running,
+            )
+            if request is None:
+                return
+
+            session_data = await self.get_session(session_id=session_id, tenant_id=tenant_id)
+            wrapper = session_data.wrapper
+            wrapper.set_context(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                session_id=session_id,
+            )
+
+            start_time = asyncio.get_running_loop().time()
+            result = await wrapper.run_query(
+                query=request.query,
+                max_steps=request.max_steps,
+                server_name=request.server_name,
+            )
+            execution_time = asyncio.get_running_loop().time() - start_time
+
+            server_used = wrapper.last_server_used
+            has_mcp_servers = getattr(wrapper, "has_mcp_servers", None)
+            if has_mcp_servers is False:
+                server_used = None
+
+            await self._complete_query_operation(
+                session_id=session_id,
+                operation_id=operation_id,
+                result=QueryOperationResult(
+                    result=result,
+                    execution_time=execution_time,
+                    steps_used=wrapper.steps_used,
+                    timestamp=datetime.now(),
+                    server_used=server_used,
+                    has_mcp_servers=has_mcp_servers,
+                ),
+            )
+
+        except asyncio.CancelledError:
+            await self._cancel_query_operation(
+                session_id=session_id,
+                operation_id=operation_id,
+            )
+            raise
+        except Exception as exc:
+            await self._fail_query_operation(
+                session_id=session_id,
+                operation_id=operation_id,
+                error=self._serialize_query_operation_error(exc),
+            )
+        finally:
+            async with self._lock:
+                session_tasks = self._query_operation_tasks.get(session_id)
+                if session_tasks is not None:
+                    session_tasks.pop(operation_id, None)
+                    if not session_tasks:
+                        self._query_operation_tasks.pop(session_id, None)
+
+    async def _set_query_operation_status(
+        self,
+        *,
+        session_id: str,
+        operation_id: str,
+        status: QueryOperationStatus,
+    ) -> Optional[QueryOperationInput]:
+        async with self._lock:
+            operation = self._query_operations.get(session_id, {}).get(operation_id)
+            if operation is None:
+                return None
+            operation.status = status
+            operation.metadata.updated_at = datetime.now()
+            return operation.metadata.request.model_copy(deep=True)
+
+    async def _complete_query_operation(
+        self,
+        *,
+        session_id: str,
+        operation_id: str,
+        result: QueryOperationResult,
+    ) -> None:
+        async with self._lock:
+            operation = self._query_operations.get(session_id, {}).get(operation_id)
+            if operation is None:
+                return
+            operation.status = QueryOperationStatus.completed
+            operation.result = result
+            operation.error = None
+            operation.metadata.updated_at = datetime.now()
+
+    async def _fail_query_operation(
+        self,
+        *,
+        session_id: str,
+        operation_id: str,
+        error: QueryOperationError,
+    ) -> None:
+        async with self._lock:
+            operation = self._query_operations.get(session_id, {}).get(operation_id)
+            if operation is None:
+                return
+            operation.status = QueryOperationStatus.failed
+            operation.result = None
+            operation.error = error
+            operation.metadata.updated_at = datetime.now()
+
+    async def _cancel_query_operation(
+        self,
+        *,
+        session_id: str,
+        operation_id: str,
+    ) -> None:
+        async with self._lock:
+            operation = self._query_operations.get(session_id, {}).get(operation_id)
+            if operation is None:
+                return
+            operation.status = QueryOperationStatus.cancelled
+            operation.result = None
+            operation.error = QueryOperationError(
+                code="MCP_QUERY_OPERATION_CANCELLED",
+                message="Query operation cancelled",
+            )
+            operation.metadata.updated_at = datetime.now()
+
+    @staticmethod
+    def _serialize_query_operation_error(exc: Exception) -> QueryOperationError:
+        if isinstance(exc, MCPToolNotAllowedError):
+            details = {}
+            tool_name = getattr(exc, "tool_name", None)
+            if tool_name is not None:
+                details["tool_name"] = tool_name
+            return QueryOperationError(
+                code="MCP_TOOL_NOT_ALLOWED",
+                message=str(exc),
+                details=details,
+            )
+        if isinstance(exc, GuardrailViolationError):
+            details = {}
+            for key in ("phase", "rule", "tool_name"):
+                value = getattr(exc, key, None)
+                if value is not None:
+                    details[key] = value
+            extra_details = getattr(exc, "details", None)
+            if isinstance(extra_details, dict):
+                details["details"] = extra_details
+            return QueryOperationError(
+                code=getattr(exc, "code", "GUARDRAIL_VIOLATION"),
+                message=getattr(exc, "message", str(exc)),
+                details=details,
+            )
+        if isinstance(exc, ConfigurationError):
+            return QueryOperationError(code="MCP_CONFIGURATION_ERROR", message=str(exc))
+        if isinstance(exc, SessionNotFoundError):
+            return QueryOperationError(code="MCP_SESSION_NOT_FOUND", message=str(exc))
+        if isinstance(exc, ValueError):
+            return QueryOperationError(code="MCP_SCHEMA_ERROR", message=str(exc))
+        message = str(exc) if str(exc) else "Internal Error"
+        return QueryOperationError(code="MCP_UPSTREAM_ERROR", message=message)
 
     @staticmethod
     def _convert_mcp_servers(servers) -> Dict[str, Dict[str, Any]]:

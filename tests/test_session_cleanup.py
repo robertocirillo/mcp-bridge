@@ -1,3 +1,5 @@
+import asyncio
+from datetime import datetime
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -7,6 +9,12 @@ from app.api.dependencies import get_session_manager
 from app.api.routes.sessions import router as sessions_router
 from app.core.mcp_wrapper import MCPWrapper
 from app.core.session_manager import SessionData, SessionManager
+from app.models.responses import (
+    QueryOperationInput,
+    QueryOperationMetadata,
+    QueryOperationResponse,
+    QueryOperationStatus,
+)
 
 
 class _DummyWrapper:
@@ -120,6 +128,51 @@ def test_cleanup_all_closes_all_sessions():
     assert wrapper_one.closed == 1
     assert wrapper_two.closed == 1
     assert manager._sessions == {}
+
+
+def test_delete_session_cleans_up_query_operations_and_tasks():
+    manager = SessionManager()
+
+    wrapper = _DummyWrapper()
+    config = _session_config_stub()
+    manager._sessions["s1"] = SessionData("s1", config, wrapper, tenant_id="t1")
+    manager._query_operations["s1"] = {
+        "op1": QueryOperationResponse(
+            operation_id="op1",
+            session_id="s1",
+            status=QueryOperationStatus.running,
+            metadata=QueryOperationMetadata(
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                request=QueryOperationInput(query="slow query"),
+            ),
+        )
+    }
+
+    cancellations: list[str] = []
+    started = asyncio.Event()
+
+    async def _pending():
+        try:
+            started.set()
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancellations.append("cancelled")
+            raise
+
+    async def _exercise():
+        task = asyncio.create_task(_pending())
+        manager._query_operation_tasks["s1"] = {"op1": task}
+        await started.wait()
+        await manager.delete_session("s1", tenant_id="t1")
+
+    asyncio.run(_exercise())
+
+    assert cancellations == ["cancelled"]
+    assert wrapper.closed == 1
+    assert "s1" not in manager._sessions
+    assert "s1" not in manager._query_operations
+    assert "s1" not in manager._query_operation_tasks
 
 
 def test_delete_route_passes_tenant_id_to_background_task():

@@ -41,6 +41,76 @@ class QueryResponse(BaseModel):
     server_used: Optional[str] = Field(None, description="Server used for execution")
     has_mcp_servers: Optional[bool] = Field(None, description="True if session configured with one or more mcp servers")
 
+
+class QueryOperationStatus(str, Enum):
+    """Lifecycle states for asynchronous query operations."""
+
+    queued = "queued"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class QueryOperationInput(BaseModel):
+    """Snapshot of the request payload associated with an operation."""
+
+    query: str = Field(..., description="Query to execute")
+    max_steps: Optional[int] = Field(None, description="Optional max steps override")
+    server_name: Optional[str] = Field(None, description="Specific server name to use")
+
+
+class QueryOperationMetadata(BaseModel):
+    """Stable metadata for a query operation."""
+
+    created_at: datetime = Field(..., description="Operation creation timestamp")
+    updated_at: datetime = Field(..., description="Last operation update timestamp")
+    request: QueryOperationInput = Field(..., description="Original request snapshot")
+
+
+class QueryOperationResult(BaseModel):
+    """Terminal result payload for a completed operation."""
+
+    result: str = Field(..., description="Execution result")
+    execution_time: float = Field(..., description="Execution time in seconds")
+    steps_used: int = Field(..., description="Number of steps used")
+    timestamp: datetime = Field(..., description="Execution timestamp")
+    server_used: Optional[str] = Field(None, description="Server used for execution")
+    has_mcp_servers: Optional[bool] = Field(None, description="True if session configured with one or more MCP servers")
+
+
+class QueryOperationError(BaseModel):
+    """Serialized failure details for a failed operation."""
+
+    code: str = Field(..., description="Stable error code")
+    message: str = Field(..., description="Human-readable error message")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Optional structured error details")
+
+
+class QueryOperationInteraction(BaseModel):
+    """Placeholder for future input-required / elicitation state."""
+
+    kind: Optional[str] = Field(None, description="Future interaction kind")
+    prompt: Optional[str] = Field(None, description="Future prompt or instruction for the client")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Future interaction payload")
+
+
+class QueryOperationResponse(BaseModel):
+    """Response for asynchronous query operations."""
+
+    operation_id: str = Field(..., description="Operation identifier")
+    session_id: str = Field(..., description="Session identifier")
+    status: QueryOperationStatus = Field(..., description="Current operation status")
+    metadata: QueryOperationMetadata = Field(..., description="Operation metadata")
+    result: Optional[QueryOperationResult] = Field(None, description="Completed operation result")
+    error: Optional[QueryOperationError] = Field(None, description="Failure details for failed operations")
+    requires_input: bool = Field(False, description="Reserved for future input-required flows")
+    pending_interaction: Optional[QueryOperationInteraction] = Field(
+        None,
+        description="Reserved for future elicitation payloads",
+    )
+
+
 class SessionInfo(BaseModel):
     """Detailed information about a session"""
     session_id: str
@@ -375,4 +445,3 @@ class A2ATaskStatusResponse(BaseModel):
             except Exception:
                 self.is_terminal = False
         return self
-

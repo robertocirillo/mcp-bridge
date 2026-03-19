@@ -1,7 +1,11 @@
+import asyncio
 import base64
+import time
+
+import pytest
 
 
-def _build_test_app(
+def _build_test_api(
     monkeypatch,
     *,
     get_session_style: str = "positional",
@@ -9,7 +13,6 @@ def _build_test_app(
     capability_mode: str = "normal",
 ):
     from fastapi import FastAPI
-    from fastapi.testclient import TestClient
 
     from app.api.dependencies import get_session_manager
     from app.core.mcp_wrapper import MCPWrapper, _GuardedMCPClient
@@ -189,6 +192,24 @@ def _build_test_app(
     app.include_router(queries_router, prefix="/sessions")
     app.dependency_overrides[get_session_manager] = lambda: mgr
 
+    return app, mgr
+
+
+def _build_test_app(
+    monkeypatch,
+    *,
+    get_session_style: str = "positional",
+    prompt_signature: str = "standard",
+    capability_mode: str = "normal",
+):
+    from fastapi.testclient import TestClient
+
+    app, mgr = _build_test_api(
+        monkeypatch,
+        get_session_style=get_session_style,
+        prompt_signature=prompt_signature,
+        capability_mode=capability_mode,
+    )
     return TestClient(app), mgr
 
 
@@ -198,6 +219,20 @@ def _create_session(client, *, tenant_id: str, mcp_servers: dict):
         "mcp_servers": mcp_servers,
     }
     response = client.post(
+        "/sessions",
+        json=payload,
+        headers={"X-Tenant-Id": tenant_id},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["session_id"]
+
+
+async def _create_session_async(client, *, tenant_id: str, mcp_servers: dict):
+    payload = {
+        "llm_provider": {"provider": "ollama", "model": "dummy", "temperature": 0},
+        "mcp_servers": mcp_servers,
+    }
+    response = await client.post(
         "/sessions",
         json=payload,
         headers={"X-Tenant-Id": tenant_id},
@@ -352,6 +387,226 @@ def test_existing_query_flow_still_works(monkeypatch):
     assert body["result"] == "QUERY:hello"
     assert body["steps_used"] == 2
     assert body["has_mcp_servers"] is False
+
+
+def test_query_operation_create_returns_queued_state(monkeypatch):
+    from app.core.mcp_wrapper import MCPWrapper
+
+    async def _run_query(self, query: str, max_steps=None, server_name=None):
+        await asyncio.sleep(0.05)
+        self._steps_used = 3
+        self._last_server_used = server_name
+        return f"ASYNC:{query}"
+
+    monkeypatch.setattr(MCPWrapper, "run_query", _run_query)
+
+    client, _mgr = _build_test_app(monkeypatch)
+    session_id = _create_session(
+        client,
+        tenant_id="tenant-a",
+        mcp_servers={"alpha": _server_config()},
+    )
+
+    response = client.post(
+        f"/sessions/{session_id}/query-operations",
+        json={"query": "hello async", "server_name": "alpha"},
+        headers={"X-Tenant-Id": "tenant-a", "X-Run-Id": "run-op-1"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["session_id"] == session_id
+    assert body["status"] == "queued"
+    assert body["operation_id"]
+    assert body["metadata"]["request"] == {
+        "query": "hello async",
+        "max_steps": None,
+        "server_name": "alpha",
+    }
+    assert body["result"] is None
+    assert body["error"] is None
+    assert body["requires_input"] is False
+    assert body["pending_interaction"] is None
+
+
+@pytest.mark.asyncio
+async def test_query_operation_polling_reaches_completed_with_result(monkeypatch):
+    from app.core.mcp_wrapper import MCPWrapper
+    from httpx import ASGITransport, AsyncClient
+
+    release_query = asyncio.Event()
+
+    async def _run_query(self, query: str, max_steps=None, server_name=None):
+        await release_query.wait()
+        self._steps_used = 4
+        self._last_server_used = server_name or "alpha"
+        return f"ASYNC:{query}"
+
+    monkeypatch.setattr(MCPWrapper, "run_query", _run_query)
+
+    app, _mgr = _build_test_api(monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"alpha": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={"query": "poll me", "server_name": "alpha", "max_steps": 7},
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+        operation_id = create_response.json()["operation_id"]
+
+        running_body = None
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            poll_response = await client.get(
+                f"/sessions/{session_id}/query-operations/{operation_id}",
+                headers={"X-Tenant-Id": "tenant-a"},
+            )
+            assert poll_response.status_code == 200, poll_response.text
+            running_body = poll_response.json()
+            if running_body["status"] == "running":
+                break
+            await asyncio.sleep(0.01)
+
+        assert running_body is not None
+        assert running_body["status"] == "running"
+        assert running_body["result"] is None
+
+        release_query.set()
+
+        final_body = None
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            poll_response = await client.get(
+                f"/sessions/{session_id}/query-operations/{operation_id}",
+                headers={"X-Tenant-Id": "tenant-a"},
+            )
+            assert poll_response.status_code == 200, poll_response.text
+            final_body = poll_response.json()
+            if final_body["status"] == "completed":
+                break
+            await asyncio.sleep(0.01)
+
+        assert final_body is not None
+        assert final_body["status"] == "completed"
+        assert final_body["result"]["result"] == "ASYNC:poll me"
+        assert final_body["result"]["steps_used"] == 4
+        assert final_body["result"]["server_used"] == "alpha"
+        assert final_body["result"]["has_mcp_servers"] is True
+        assert final_body["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_query_operation_failure_serializes_error(monkeypatch):
+    from app.core.mcp_wrapper import MCPWrapper
+    from httpx import ASGITransport, AsyncClient
+
+    release_query = asyncio.Event()
+
+    async def _run_query(self, query: str, max_steps=None, server_name=None):
+        await release_query.wait()
+        raise ValueError("bad query payload")
+
+    monkeypatch.setattr(MCPWrapper, "run_query", _run_query)
+
+    app, _mgr = _build_test_api(monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"alpha": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={"query": "explode", "server_name": "alpha"},
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+        operation_id = create_response.json()["operation_id"]
+
+        running_body = None
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            poll_response = await client.get(
+                f"/sessions/{session_id}/query-operations/{operation_id}",
+                headers={"X-Tenant-Id": "tenant-a"},
+            )
+            assert poll_response.status_code == 200, poll_response.text
+            running_body = poll_response.json()
+            if running_body["status"] == "running":
+                break
+            await asyncio.sleep(0.01)
+
+        assert running_body is not None
+        assert running_body["status"] == "running"
+
+        release_query.set()
+
+        final_body = None
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            poll_response = await client.get(
+                f"/sessions/{session_id}/query-operations/{operation_id}",
+                headers={"X-Tenant-Id": "tenant-a"},
+            )
+            assert poll_response.status_code == 200, poll_response.text
+            final_body = poll_response.json()
+            if final_body["status"] == "failed":
+                break
+            await asyncio.sleep(0.01)
+
+        assert final_body is not None
+        assert final_body["status"] == "failed"
+        assert final_body["result"] is None
+        assert final_body["error"]["code"] == "MCP_SCHEMA_ERROR"
+        assert final_body["error"]["message"] == "bad query payload"
+
+
+def test_query_operation_routes_enforce_tenant_isolation(monkeypatch):
+    from app.core.mcp_wrapper import MCPWrapper
+
+    async def _run_query(self, query: str, max_steps=None, server_name=None):
+        await asyncio.sleep(0.02)
+        self._steps_used = 1
+        self._last_server_used = server_name
+        return f"ASYNC:{query}"
+
+    monkeypatch.setattr(MCPWrapper, "run_query", _run_query)
+
+    client, _mgr = _build_test_app(monkeypatch)
+    session_id = _create_session(
+        client,
+        tenant_id="tenant-a",
+        mcp_servers={"alpha": _server_config()},
+    )
+
+    create_response = client.post(
+        f"/sessions/{session_id}/query-operations",
+        json={"query": "owned", "server_name": "alpha"},
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+    assert create_response.status_code == 200, create_response.text
+    operation_id = create_response.json()["operation_id"]
+
+    wrong_tenant_create = client.post(
+        f"/sessions/{session_id}/query-operations",
+        json={"query": "forbidden", "server_name": "alpha"},
+        headers={"X-Tenant-Id": "tenant-b"},
+    )
+    assert wrong_tenant_create.status_code == 404
+    assert wrong_tenant_create.json()["detail"]["code"] == "MCP_SESSION_NOT_FOUND"
+
+    wrong_tenant_poll = client.get(
+        f"/sessions/{session_id}/query-operations/{operation_id}",
+        headers={"X-Tenant-Id": "tenant-b"},
+    )
+    assert wrong_tenant_poll.status_code == 404
+    assert wrong_tenant_poll.json()["detail"]["code"] == "MCP_SESSION_NOT_FOUND"
 
 
 def test_capability_fallback_supports_keyword_signatures_without_typeerror_probing(monkeypatch):

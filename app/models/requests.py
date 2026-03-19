@@ -19,6 +19,10 @@ class QueryRequest(BaseModel):
     server_name: Optional[str] = Field(None, description="Specific server name to use")
 
 
+class QueryOperationCreateRequest(QueryRequest):
+    """Request to create an asynchronous query operation."""
+
+
 class PromptRenderRequest(BaseModel):
     """Request to render/get a prompt from an MCP server."""
 
