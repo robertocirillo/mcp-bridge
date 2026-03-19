@@ -11,6 +11,7 @@ from app.core.mcp_wrapper import MCPWrapper
 from app.core.session_manager import SessionData, SessionManager
 from app.models.responses import (
     QueryOperationInput,
+    QueryOperationInteraction,
     QueryOperationMetadata,
     QueryOperationResponse,
     QueryOperationStatus,
@@ -173,6 +174,50 @@ def test_delete_session_cleans_up_query_operations_and_tasks():
     assert "s1" not in manager._sessions
     assert "s1" not in manager._query_operations
     assert "s1" not in manager._query_operation_tasks
+
+
+def test_delete_session_cancels_pending_elicitations():
+    manager = SessionManager()
+
+    wrapper = _DummyWrapper()
+    config = _session_config_stub()
+    manager._sessions["s1"] = SessionData("s1", config, wrapper, tenant_id="t1")
+    manager._query_operations["s1"] = {
+        "op1": QueryOperationResponse(
+            operation_id="op1",
+            session_id="s1",
+            status=QueryOperationStatus.input_required,
+            metadata=QueryOperationMetadata(
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                request=QueryOperationInput(query="needs human input"),
+            ),
+            requires_input=True,
+            pending_interaction=QueryOperationInteraction(
+                interaction_id="interaction-1",
+                message="Provide details",
+                requested_at=datetime.now(),
+            ),
+        )
+    }
+
+    async def _exercise():
+        future = asyncio.get_running_loop().create_future()
+        manager._pending_elicitations["s1"] = {
+            "op1": SimpleNamespace(
+                interaction_id="interaction-1",
+                future=future,
+                created_at=datetime.now(),
+            )
+        }
+        await manager.delete_session("s1", tenant_id="t1")
+        return future
+
+    future = asyncio.run(_exercise())
+
+    assert future.cancelled() is True
+    assert wrapper.closed == 1
+    assert "s1" not in manager._pending_elicitations
 
 
 def test_delete_route_passes_tenant_id_to_background_task():

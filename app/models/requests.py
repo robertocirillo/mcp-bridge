@@ -2,8 +2,10 @@
 Pydantic models for HTTP requests
 """
 
+from typing import Any, Dict, Literal, Optional
+
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+
 from app.models.config import SessionConfig
 
 
@@ -21,6 +23,23 @@ class QueryRequest(BaseModel):
 
 class QueryOperationCreateRequest(QueryRequest):
     """Request to create an asynchronous query operation."""
+
+
+class QueryOperationResumeRequest(BaseModel):
+    """Request to resume a paused asynchronous query operation."""
+
+    action: Literal["accept", "decline", "cancel"] = Field(
+        ...,
+        description="How the user responded to the pending elicitation request.",
+    )
+    content: Optional[Any] = Field(
+        default=None,
+        description="Structured user response payload. Required for accept.",
+    )
+    interaction_id: Optional[str] = Field(
+        default=None,
+        description="Optional interaction identifier to guard against stale resumes.",
+    )
 
 
 class PromptRenderRequest(BaseModel):

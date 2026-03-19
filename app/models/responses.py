@@ -2,10 +2,11 @@
 Pydantic models for HTTP responses
 """
 
-from pydantic import BaseModel, Field, model_validator
-from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class A2ATaskState(str, Enum):
@@ -47,6 +48,7 @@ class QueryOperationStatus(str, Enum):
 
     queued = "queued"
     running = "running"
+    input_required = "input-required"
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
@@ -88,11 +90,21 @@ class QueryOperationError(BaseModel):
 
 
 class QueryOperationInteraction(BaseModel):
-    """Placeholder for future input-required / elicitation state."""
+    """Serialized pending interaction payload exposed by query operations."""
 
-    kind: Optional[str] = Field(None, description="Future interaction kind")
-    prompt: Optional[str] = Field(None, description="Future prompt or instruction for the client")
-    details: Dict[str, Any] = Field(default_factory=dict, description="Future interaction payload")
+    interaction_id: str = Field(..., description="Stable interaction identifier")
+    kind: Literal["elicitation"] = Field("elicitation", description="Pending interaction kind")
+    message: str = Field(..., description="User-facing elicitation message")
+    requested_schema: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Optional JSON schema describing the expected structured input.",
+    )
+    requested_at: datetime = Field(..., description="Timestamp when the elicitation was raised")
+    actions: List[str] = Field(
+        default_factory=lambda: ["accept", "decline", "cancel"],
+        description="Allowed resume actions for this interaction.",
+    )
+    details: Dict[str, Any] = Field(default_factory=dict, description="Additional interaction metadata")
 
 
 class QueryOperationResponse(BaseModel):
@@ -104,10 +116,10 @@ class QueryOperationResponse(BaseModel):
     metadata: QueryOperationMetadata = Field(..., description="Operation metadata")
     result: Optional[QueryOperationResult] = Field(None, description="Completed operation result")
     error: Optional[QueryOperationError] = Field(None, description="Failure details for failed operations")
-    requires_input: bool = Field(False, description="Reserved for future input-required flows")
+    requires_input: bool = Field(False, description="True when the operation is waiting for user input")
     pending_interaction: Optional[QueryOperationInteraction] = Field(
         None,
-        description="Reserved for future elicitation payloads",
+        description="Serialized pending elicitation payload, when the operation is paused for input.",
     )
 
 

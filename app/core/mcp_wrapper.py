@@ -7,8 +7,11 @@ while the implementation details live in mcp_wrapper_* helper modules.
 
 from __future__ import annotations
 
+import contextvars
 import inspect
 import os
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from app.core.bias_detector_client import BiasDetectorClient
@@ -107,6 +110,10 @@ class MCPWrapper:
         self.tenant_id: Optional[str] = None
         self.run_id: Optional[str] = None
         self.session_id: Optional[str] = None
+        self._elicitation_handler: Optional[Callable[..., Awaitable[Any]]] = None
+        self._query_operation_context: contextvars.ContextVar[Optional[Dict[str, Optional[str]]]] = (
+            contextvars.ContextVar("mcp_wrapper_query_operation_context", default=None)
+        )
 
         # Maintain independent guardrail pipelines for input and output phases.
         self.before_model_guardrails: List[Callable[[GuardrailContext], Union[GuardrailContext, Awaitable[GuardrailContext]]]] = []
@@ -182,6 +189,37 @@ class MCPWrapper:
         self.tenant_id = tenant_id
         self.run_id = run_id
         self.session_id = session_id
+
+    def set_elicitation_handler(
+        self,
+        handler: Optional[Callable[..., Awaitable[Any]]],
+    ) -> None:
+        # Public wrapper contract: callers may set, replace, or clear the bridge elicitation hook.
+        # Passing None is allowed and simply disables elicitation wiring for this wrapper instance.
+        self._elicitation_handler = handler
+
+    @asynccontextmanager
+    async def query_operation_scope(
+        self,
+        *,
+        operation_id: str,
+        tenant_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ):
+        # Keep operation identity task-local so concurrent query operations do not leak state.
+        token = self._query_operation_context.set(
+            {
+                "operation_id": operation_id,
+                "tenant_id": tenant_id or self.tenant_id,
+                "run_id": run_id or self.run_id,
+                "session_id": session_id or self.session_id,
+            }
+        )
+        try:
+            yield
+        finally:
+            self._query_operation_context.reset(token)
 
     @staticmethod
     def _normalize_mode(mode: Optional[str], *, default: str, allowed: set[str]) -> str:
@@ -809,6 +847,56 @@ class MCPWrapper:
             server_name=server_name,
         )
 
+    @staticmethod
+    def _serialize_request_context(context: Any) -> Dict[str, Any]:
+        if context is None:
+            return {}
+
+        serialized: Dict[str, Any] = {}
+        for attr in ("request_id", "session_id", "client_id", "server_name"):
+            value = getattr(context, attr, None)
+            if value is not None:
+                serialized[attr] = value
+        return serialized
+
+    @staticmethod
+    def _extract_requested_schema(params: Any) -> Optional[Dict[str, Any]]:
+        schema = getattr(params, "requestedSchema", None)
+        if schema is None:
+            schema = getattr(params, "requested_schema", None)
+        return schema if isinstance(schema, dict) else schema
+
+    def _build_runtime_elicitation_result(self, *, content: Any) -> Any:
+        try:
+            from mcp.types import ElicitResult
+
+            return ElicitResult(action="accept", content=content)
+        except Exception:
+            return SimpleNamespace(action="accept", content=content)
+
+    async def _handle_runtime_elicitation(self, context: Any, params: Any) -> Any:
+        handler = self._elicitation_handler
+        if handler is None:
+            raise MCPWrapperError("Elicitation callback is not configured")
+
+        operation_context = self._query_operation_context.get()
+        if not operation_context or not operation_context.get("operation_id"):
+            raise MCPWrapperError(
+                "Elicitation requires a stateful query operation; POST /sessions/{id}/query remains unsupported"
+            )
+
+        content = await handler(
+            session_id=str(operation_context["session_id"] or self.session_id or ""),
+            operation_id=str(operation_context["operation_id"]),
+            payload={
+                "message": str(getattr(params, "message", "") or ""),
+                "requested_schema": self._extract_requested_schema(params),
+                "request_context": self._serialize_request_context(context),
+                "server_name": self._active_server_name,
+            },
+        )
+        return self._build_runtime_elicitation_result(content=content)
+
     async def initialize(self) -> None:
         # Initialize runtime resources once and retry transient setup failures.
         if self._initialized:
@@ -828,6 +916,8 @@ class MCPWrapper:
         # Create the LLM first because both agent-only and MCP-backed modes depend on it.
         llm = self._create_llm()
         client_kwargs: Dict[str, Any] = {"config": {"mcpServers": self.mcp_servers}}
+        if self._elicitation_handler is not None:
+            client_kwargs["elicitation_callback"] = self._handle_runtime_elicitation
 
         # Forward sandbox settings only when sandbox execution was explicitly enabled.
         if self.sandbox:

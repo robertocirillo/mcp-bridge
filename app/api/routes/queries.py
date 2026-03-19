@@ -11,10 +11,18 @@ import asyncio
 import logging
 from datetime import datetime
 
-from app.models.requests import QueryOperationCreateRequest, QueryRequest
+from app.models.requests import QueryOperationCreateRequest, QueryOperationResumeRequest, QueryRequest
 from app.models.responses import QueryOperationResponse, QueryResponse
 from app.core.session_manager import SessionManager
-from app.core.exceptions import SessionNotFoundError, ConfigurationError, MCPWrapperError
+from app.core.exceptions import (
+    ConfigurationError,
+    MCPWrapperError,
+    QueryOperationElicitationExpiredError,
+    QueryOperationElicitationUnavailableError,
+    QueryOperationNotFoundError,
+    QueryOperationResumeInvalidError,
+    SessionNotFoundError,
+)
 from app.core.mcp_wrapper import MCPToolNotAllowedError, GuardrailViolationError
 from app.api.dependencies import get_session_manager, get_tenant_context, TenantContext
 from app.api.errors import http_error
@@ -247,14 +255,24 @@ async def get_query_operation(
             tenant_id=tenant_ctx.tenant_id,
         )
 
-    except SessionNotFoundError as e:
+    except QueryOperationNotFoundError as e:
         logger.warning("Query operation not found: %s", e)
-        message = str(e)
-        code = "MCP_QUERY_OPERATION_NOT_FOUND" if "Query operation" in message else "MCP_SESSION_NOT_FOUND"
         raise http_error(
             404,
-            code,
-            message,
+            "MCP_QUERY_OPERATION_NOT_FOUND",
+            str(e),
+            operation="get_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
+        )
+    except SessionNotFoundError as e:
+        logger.warning("Query operation not found: %s", e)
+        raise http_error(
+            404,
+            "MCP_SESSION_NOT_FOUND",
+            str(e),
             operation="get_query_operation",
             tenant_id=tenant_ctx.tenant_id,
             run_id=tenant_ctx.run_id,
@@ -289,6 +307,113 @@ async def get_query_operation(
             "MCP_INTERNAL_ERROR",
             "Internal Error",
             operation="get_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
+        )
+
+
+@router.post("/{session_id}/query-operations/{operation_id}/resume", response_model=QueryOperationResponse)
+async def resume_query_operation(
+    session_id: str,
+    operation_id: str,
+    request: QueryOperationResumeRequest,
+    tenant_ctx: TenantDep,
+    session_manager: SessionManager = Depends(get_session_manager),
+):
+    """Resume a paused query operation waiting on elicitation."""
+    try:
+        return await session_manager.resume_query_operation(
+            session_id=session_id,
+            operation_id=operation_id,
+            request=request,
+            tenant_id=tenant_ctx.tenant_id,
+        )
+
+    except QueryOperationNotFoundError as e:
+        raise http_error(
+            404,
+            "MCP_QUERY_OPERATION_NOT_FOUND",
+            str(e),
+            operation="resume_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
+        )
+    except SessionNotFoundError as e:
+        raise http_error(
+            404,
+            "MCP_SESSION_NOT_FOUND",
+            str(e),
+            operation="resume_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
+        )
+    except QueryOperationElicitationUnavailableError as e:
+        raise http_error(
+            409,
+            "MCP_QUERY_OPERATION_ELICITATION_UNAVAILABLE",
+            str(e),
+            operation="resume_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
+        )
+    except QueryOperationElicitationExpiredError as e:
+        raise http_error(
+            409,
+            "MCP_QUERY_OPERATION_ELICITATION_EXPIRED",
+            str(e),
+            operation="resume_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
+        )
+    except QueryOperationResumeInvalidError as e:
+        raise http_error(
+            400,
+            "MCP_QUERY_OPERATION_RESUME_INVALID",
+            str(e),
+            operation="resume_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
+        )
+    except ConfigurationError as e:
+        raise http_error(
+            400,
+            "MCP_CONFIGURATION_ERROR",
+            str(e),
+            operation="resume_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
+        )
+    except MCPWrapperError as e:
+        raise http_error(
+            502,
+            "MCP_UPSTREAM_ERROR",
+            str(e),
+            operation="resume_query_operation",
+            tenant_id=tenant_ctx.tenant_id,
+            run_id=tenant_ctx.run_id,
+            session_id=session_id,
+            operation_id=operation_id,
+        )
+    except Exception:
+        raise http_error(
+            500,
+            "MCP_INTERNAL_ERROR",
+            "Internal Error",
+            operation="resume_query_operation",
             tenant_id=tenant_ctx.tenant_id,
             run_id=tenant_ctx.run_id,
             session_id=session_id,

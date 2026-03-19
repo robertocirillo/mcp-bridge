@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -246,6 +247,31 @@ def _server_config():
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-everything"],
     }
+
+
+async def _wait_for_operation_status(
+    client,
+    *,
+    session_id: str,
+    operation_id: str,
+    tenant_id: str,
+    expected_status: str,
+    timeout: float = 2.0,
+):
+    deadline = time.monotonic() + timeout
+    last_body = None
+    while time.monotonic() < deadline:
+        response = await client.get(
+            f"/sessions/{session_id}/query-operations/{operation_id}",
+            headers={"X-Tenant-Id": tenant_id},
+        )
+        assert response.status_code == 200, response.text
+        last_body = response.json()
+        if last_body["status"] == expected_status:
+            return last_body
+        await asyncio.sleep(0.01)
+
+    raise AssertionError(f"Timed out waiting for status {expected_status!r}: {last_body}")
 
 
 def test_prompt_list_and_render_routes(monkeypatch):
@@ -567,6 +593,203 @@ async def test_query_operation_failure_serializes_error(monkeypatch):
         assert final_body["error"]["message"] == "bad query payload"
 
 
+@pytest.mark.asyncio
+async def test_query_operation_elicitation_reaches_input_required_and_resumes_to_completed(monkeypatch):
+    from app.core.mcp_wrapper import MCPWrapper
+    from httpx import ASGITransport, AsyncClient
+
+    requested_schema = {
+        "type": "object",
+        "properties": {
+            "item_name": {"type": "string"},
+            "quantity": {"type": "integer"},
+        },
+        "required": ["item_name", "quantity"],
+    }
+
+    async def _run_query(self, query: str, max_steps=None, server_name=None):
+        self._steps_used = 1
+        self._active_server_name = server_name or "alpha"
+        resume = await self._handle_runtime_elicitation(
+            SimpleNamespace(request_id="req-1"),
+            SimpleNamespace(
+                message="Please provide purchase details",
+                requestedSchema=requested_schema,
+            ),
+        )
+        self._steps_used = 5
+        self._last_server_used = server_name or "alpha"
+        return f"ASYNC:{query}:{resume.content['item_name']}:{resume.content['quantity']}"
+
+    monkeypatch.setattr(MCPWrapper, "run_query", _run_query)
+
+    app, _mgr = _build_test_api(monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"alpha": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={"query": "buy apples", "server_name": "alpha"},
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+        operation_id = create_response.json()["operation_id"]
+
+        input_required_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="input-required",
+        )
+        assert input_required_body["requires_input"] is True
+        assert input_required_body["pending_interaction"]["kind"] == "elicitation"
+        assert input_required_body["pending_interaction"]["message"] == "Please provide purchase details"
+        assert input_required_body["pending_interaction"]["requested_schema"] == requested_schema
+        assert input_required_body["pending_interaction"]["actions"] == ["accept", "decline", "cancel"]
+
+        interaction_id = input_required_body["pending_interaction"]["interaction_id"]
+        resume_response = await client.post(
+            f"/sessions/{session_id}/query-operations/{operation_id}/resume",
+            json={
+                "action": "accept",
+                "interaction_id": interaction_id,
+                "content": {"item_name": "apples", "quantity": 3},
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert resume_response.status_code == 200, resume_response.text
+        assert resume_response.json()["status"] in {"running", "completed"}
+
+        completed_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="completed",
+        )
+        assert completed_body["requires_input"] is False
+        assert completed_body["pending_interaction"] is None
+        assert completed_body["result"]["result"] == "ASYNC:buy apples:apples:3"
+
+
+@pytest.mark.asyncio
+async def test_query_operation_elicitation_decline_fails_operation(monkeypatch):
+    from app.core.mcp_wrapper import MCPWrapper
+    from httpx import ASGITransport, AsyncClient
+
+    async def _run_query(self, query: str, max_steps=None, server_name=None):
+        self._active_server_name = server_name or "alpha"
+        await self._handle_runtime_elicitation(
+            SimpleNamespace(request_id="req-2"),
+            SimpleNamespace(message="Need approval", requestedSchema=None),
+        )
+        return f"ASYNC:{query}"
+
+    monkeypatch.setattr(MCPWrapper, "run_query", _run_query)
+
+    app, _mgr = _build_test_api(monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"alpha": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={"query": "needs approval", "server_name": "alpha"},
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+        operation_id = create_response.json()["operation_id"]
+
+        input_required_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="input-required",
+        )
+
+        decline_response = await client.post(
+            f"/sessions/{session_id}/query-operations/{operation_id}/resume",
+            json={
+                "action": "decline",
+                "interaction_id": input_required_body["pending_interaction"]["interaction_id"],
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert decline_response.status_code == 200, decline_response.text
+
+        failed_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="failed",
+        )
+        assert failed_body["error"]["code"] == "MCP_ELICITATION_DECLINED"
+        assert failed_body["requires_input"] is False
+        assert failed_body["pending_interaction"] is None
+
+
+@pytest.mark.asyncio
+async def test_query_operation_elicitation_cancel_cancels_operation(monkeypatch):
+    from app.core.mcp_wrapper import MCPWrapper
+    from httpx import ASGITransport, AsyncClient
+
+    async def _run_query(self, query: str, max_steps=None, server_name=None):
+        self._active_server_name = server_name or "alpha"
+        await self._handle_runtime_elicitation(
+            SimpleNamespace(request_id="req-3"),
+            SimpleNamespace(message="Need confirmation", requestedSchema=None),
+        )
+        return f"ASYNC:{query}"
+
+    monkeypatch.setattr(MCPWrapper, "run_query", _run_query)
+
+    app, _mgr = _build_test_api(monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"alpha": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={"query": "cancel me", "server_name": "alpha"},
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+        operation_id = create_response.json()["operation_id"]
+
+        input_required_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="input-required",
+        )
+
+        cancel_response = await client.post(
+            f"/sessions/{session_id}/query-operations/{operation_id}/resume",
+            json={
+                "action": "cancel",
+                "interaction_id": input_required_body["pending_interaction"]["interaction_id"],
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert cancel_response.status_code == 200, cancel_response.text
+        assert cancel_response.json()["status"] == "cancelled"
+        assert cancel_response.json()["error"]["code"] == "MCP_QUERY_OPERATION_CANCELLED"
+
+
 def test_query_operation_routes_enforce_tenant_isolation(monkeypatch):
     from app.core.mcp_wrapper import MCPWrapper
 
@@ -607,6 +830,139 @@ def test_query_operation_routes_enforce_tenant_isolation(monkeypatch):
     )
     assert wrong_tenant_poll.status_code == 404
     assert wrong_tenant_poll.json()["detail"]["code"] == "MCP_SESSION_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_query_operation_resume_route_enforces_tenant_isolation(monkeypatch):
+    from app.core.mcp_wrapper import MCPWrapper
+    from httpx import ASGITransport, AsyncClient
+
+    async def _run_query(self, query: str, max_steps=None, server_name=None):
+        self._active_server_name = server_name or "alpha"
+        await self._handle_runtime_elicitation(
+            SimpleNamespace(request_id="req-4"),
+            SimpleNamespace(message="Need tenant-owned input", requestedSchema=None),
+        )
+        return f"ASYNC:{query}"
+
+    monkeypatch.setattr(MCPWrapper, "run_query", _run_query)
+
+    app, _mgr = _build_test_api(monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"alpha": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={"query": "owned elicitation", "server_name": "alpha"},
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+        operation_id = create_response.json()["operation_id"]
+
+        input_required_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="input-required",
+        )
+
+        wrong_tenant_resume = await client.post(
+            f"/sessions/{session_id}/query-operations/{operation_id}/resume",
+            json={
+                "action": "accept",
+                "interaction_id": input_required_body["pending_interaction"]["interaction_id"],
+                "content": {"value": "nope"},
+            },
+            headers={"X-Tenant-Id": "tenant-b"},
+        )
+        assert wrong_tenant_resume.status_code == 404
+        assert wrong_tenant_resume.json()["detail"]["code"] == "MCP_SESSION_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_query_operation_resume_rejects_invalid_payload_and_expired_elicitation(monkeypatch):
+    from app.core.mcp_wrapper import MCPWrapper
+    from httpx import ASGITransport, AsyncClient
+
+    async def _run_query(self, query: str, max_steps=None, server_name=None):
+        self._active_server_name = server_name or "alpha"
+        resume = await self._handle_runtime_elicitation(
+            SimpleNamespace(request_id="req-5"),
+            SimpleNamespace(message="Need form data", requestedSchema={"type": "object"}),
+        )
+        self._last_server_used = server_name or "alpha"
+        return f"ASYNC:{query}:{resume.content['value']}"
+
+    monkeypatch.setattr(MCPWrapper, "run_query", _run_query)
+
+    app, _mgr = _build_test_api(monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"alpha": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={"query": "validate me", "server_name": "alpha"},
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+        operation_id = create_response.json()["operation_id"]
+
+        input_required_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="input-required",
+        )
+        interaction_id = input_required_body["pending_interaction"]["interaction_id"]
+
+        invalid_resume = await client.post(
+            f"/sessions/{session_id}/query-operations/{operation_id}/resume",
+            json={"action": "accept", "interaction_id": interaction_id},
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert invalid_resume.status_code == 400
+        assert invalid_resume.json()["detail"]["code"] == "MCP_QUERY_OPERATION_RESUME_INVALID"
+
+        valid_resume = await client.post(
+            f"/sessions/{session_id}/query-operations/{operation_id}/resume",
+            json={
+                "action": "accept",
+                "interaction_id": interaction_id,
+                "content": {"value": "ok"},
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert valid_resume.status_code == 200, valid_resume.text
+
+        await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="completed",
+        )
+
+        expired_resume = await client.post(
+            f"/sessions/{session_id}/query-operations/{operation_id}/resume",
+            json={
+                "action": "accept",
+                "interaction_id": interaction_id,
+                "content": {"value": "stale"},
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert expired_resume.status_code == 409
+        assert expired_resume.json()["detail"]["code"] == "MCP_QUERY_OPERATION_ELICITATION_EXPIRED"
 
 
 def test_capability_fallback_supports_keyword_signatures_without_typeerror_probing(monkeypatch):
