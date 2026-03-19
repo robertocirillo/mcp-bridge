@@ -12,6 +12,7 @@ def _build_test_api(
     get_session_style: str = "positional",
     prompt_signature: str = "standard",
     capability_mode: str = "normal",
+    session_materialization: str = "eager",
 ):
     from fastapi import FastAPI
 
@@ -132,6 +133,22 @@ def _build_test_api(
                 server_name: _SessionStub(server_name)
                 for server_name in server_names
             }
+            self.active_sessions = (
+                dict(self.sessions)
+                if session_materialization == "eager"
+                else {}
+            )
+
+        def activate_session(self, server_name: str):
+            session = self.sessions[server_name]
+            self.active_sessions[server_name] = session
+            return session
+
+        def _require_active_session(self, server_name: str):
+            session = self.active_sessions.get(server_name)
+            if session is None:
+                raise RuntimeError(f"No session exists for server '{server_name}'")
+            return session
 
         def __getattribute__(self, item):
             if item == "get_session":
@@ -141,18 +158,45 @@ def _build_test_api(
                     return object.__getattribute__(self, "get_session_keyword_only")
                 if get_session_style == "name_kw":
                     return object.__getattribute__(self, "get_session_name_kw")
+                if get_session_style == "sync_positional":
+                    return object.__getattribute__(self, "get_session_sync_positional")
+                if get_session_style == "sync_keyword_only":
+                    return object.__getattribute__(self, "get_session_sync_keyword_only")
+                if get_session_style == "sync_name_kw":
+                    return object.__getattribute__(self, "get_session_sync_name_kw")
                 raise AssertionError(f"Unsupported get_session_style: {get_session_style}")
             return object.__getattribute__(self, item)
 
         async def get_session_positional(self, server_name: str):
-            return self.sessions[server_name]
+            return self._require_active_session(server_name)
 
         async def get_session_keyword_only(self, *, server_name: str):
-            return self.sessions[server_name]
+            return self._require_active_session(server_name)
 
         async def get_session_name_kw(self, *, name: str):
             server_name = name
-            return self.sessions[server_name]
+            return self._require_active_session(server_name)
+
+        def get_session_sync_positional(self, server_name: str):
+            return self._require_active_session(server_name)
+
+        def get_session_sync_keyword_only(self, *, server_name: str):
+            return self._require_active_session(server_name)
+
+        def get_session_sync_name_kw(self, *, name: str):
+            server_name = name
+            return self._require_active_session(server_name)
+
+        async def create_session(self, server_name: str, auto_initialize: bool = True):
+            return self.activate_session(server_name)
+
+        async def create_all_sessions(self, auto_initialize: bool = True):
+            for server_name in self.sessions:
+                self.activate_session(server_name)
+            return dict(self.active_sessions)
+
+        async def get_all_active_sessions(self):
+            return dict(self.active_sessions)
 
         async def close_all_sessions(self):
             return None
@@ -167,8 +211,10 @@ def _build_test_api(
             self.steps_used = 2
             if server_name is not None:
                 self.last_server_used = server_name
+                self.wrapper._base_client.activate_session(server_name)
             elif len(self.wrapper.mcp_servers) == 1:
                 self.last_server_used = next(iter(self.wrapper.mcp_servers))
+                self.wrapper._base_client.activate_session(self.last_server_used)
             else:
                 self.last_server_used = None
             return f"QUERY:{query}"
@@ -202,6 +248,7 @@ def _build_test_app(
     get_session_style: str = "positional",
     prompt_signature: str = "standard",
     capability_mode: str = "normal",
+    session_materialization: str = "eager",
 ):
     from fastapi.testclient import TestClient
 
@@ -210,6 +257,7 @@ def _build_test_app(
         get_session_style=get_session_style,
         prompt_signature=prompt_signature,
         capability_mode=capability_mode,
+        session_materialization=session_materialization,
     )
     return TestClient(app), mgr
 
@@ -311,6 +359,86 @@ def test_prompt_list_and_render_routes(monkeypatch):
     assert beta_session.prompt_calls == [
         {"name": "beta-welcome", "arguments": {"topic": "bridges"}}
     ]
+
+
+def test_capability_lookup_supports_sync_get_session(monkeypatch):
+    client, _mgr = _build_test_app(monkeypatch, get_session_style="sync_positional")
+    session_id = _create_session(
+        client,
+        tenant_id="tenant-a",
+        mcp_servers={"everything": _server_config()},
+    )
+
+    response = client.get(
+        f"/sessions/{session_id}/prompts",
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["server_name"] == "everything"
+    assert response.json()["prompts"][0]["name"] == "everything-welcome"
+
+
+def test_capability_lookup_supports_async_get_session(monkeypatch):
+    client, _mgr = _build_test_app(monkeypatch, get_session_style="keyword_only")
+    session_id = _create_session(
+        client,
+        tenant_id="tenant-a",
+        mcp_servers={"everything": _server_config()},
+    )
+
+    response = client.get(
+        f"/sessions/{session_id}/prompts",
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["server_name"] == "everything"
+    assert response.json()["prompts"][0]["name"] == "everything-welcome"
+
+
+def test_capabilities_materialize_server_session_on_first_access_without_warmup(monkeypatch):
+    client, mgr = _build_test_app(
+        monkeypatch,
+        get_session_style="keyword_only",
+        session_materialization="lazy",
+    )
+    session_id = _create_session(
+        client,
+        tenant_id="tenant-a",
+        mcp_servers={"everything": _server_config()},
+    )
+
+    prompts_response = client.get(
+        f"/sessions/{session_id}/prompts",
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+    assert prompts_response.status_code == 200, prompts_response.text
+    assert prompts_response.json()["server_name"] == "everything"
+
+    render_response = client.post(
+        f"/sessions/{session_id}/prompts/everything-welcome/render",
+        json={"arguments": {"topic": "lazy init"}},
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+    assert render_response.status_code == 200, render_response.text
+    assert render_response.json()["messages"][0]["content"]["text"] == "everything:everything-welcome:lazy init"
+
+    list_resources_response = client.get(
+        f"/sessions/{session_id}/resources",
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+    assert list_resources_response.status_code == 200, list_resources_response.text
+    assert list_resources_response.json()["server_name"] == "everything"
+
+    read_resource_response = client.post(
+        f"/sessions/{session_id}/resources/read",
+        json={"uri": "memo://everything/guide"},
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+    assert read_resource_response.status_code == 200, read_resource_response.text
+    assert read_resource_response.json()["contents"][0]["text"] == "text:everything:memo://everything/guide"
+
+    session_data = asyncio.run(mgr.get_session(session_id, tenant_id="tenant-a"))
+    assert "everything" in session_data.wrapper._base_client.active_sessions
 
 
 def test_resource_list_and_read_routes_expose_text_structured_and_binary(monkeypatch):

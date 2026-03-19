@@ -83,7 +83,7 @@ class _GuardedMCPClient:
     async def get_session(self, *args: Any, **kwargs: Any) -> Any:
         # Wrap each created session so per-tool policy enforcement also happens inside sessions.
         try:
-            session = await self._client.get_session(*args, **kwargs)
+            session = await self._invoke_passthrough("get_session", *args, **kwargs)
         except AttributeError as exc:
             raise MCPCapabilityNotSupportedError(
                 "session_transport",
