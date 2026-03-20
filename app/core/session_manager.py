@@ -47,6 +47,7 @@ class PendingElicitation:
     interaction_id: str
     future: asyncio.Future
     created_at: datetime
+    provisional: bool = False
 
 
 class SessionData:
@@ -155,6 +156,7 @@ class SessionManager:
                 # Set context for guardrails/logging
                 wrapper.set_context(tenant_id=tenant_id, run_id=run_id, session_id=session_id)
                 self._wire_wrapper_elicitation_handler(wrapper)
+                self._wire_wrapper_task_status_handler(wrapper)
 
                 # -----------------------------
                 # Session-scoped guardrails
@@ -449,9 +451,11 @@ class SessionManager:
 
             self._validate_resume_request(request=request, interaction_id=interaction.interaction_id)
 
-            self._pending_elicitations.get(session_id, {}).pop(operation_id, None)
-            if not self._pending_elicitations.get(session_id):
-                self._pending_elicitations.pop(session_id, None)
+            preserve_pending = pending.provisional and self._is_provisional_interaction(interaction)
+            if not preserve_pending:
+                self._pending_elicitations.get(session_id, {}).pop(operation_id, None)
+                if not self._pending_elicitations.get(session_id):
+                    self._pending_elicitations.pop(session_id, None)
 
             operation.requires_input = False
             operation.pending_interaction = None
@@ -574,6 +578,16 @@ class SessionManager:
                 type(wrapper).__name__,
             )
 
+    def _wire_wrapper_task_status_handler(self, wrapper: Any) -> None:
+        setter = getattr(wrapper, "set_task_status_handler", None)
+        if callable(setter):
+            setter(self._handle_wrapper_task_status)
+        else:
+            logger.debug(
+                "Wrapper %s does not expose set_task_status_handler; skipping task status wiring",
+                type(wrapper).__name__,
+            )
+
     async def _run_query_operation(
         self,
         *,
@@ -672,6 +686,7 @@ class SessionManager:
         operation_id: str,
         payload: Dict[str, Any],
     ) -> Any:
+        request_context = payload.get("request_context", {})
         interaction = QueryOperationInteraction(
             interaction_id=str(uuid.uuid4()),
             message=str(payload.get("message") or ""),
@@ -679,7 +694,7 @@ class SessionManager:
             requested_at=datetime.now(),
             details={
                 "server_name": payload.get("server_name"),
-                "request_context": payload.get("request_context", {}),
+                "request_context": request_context,
             },
         )
         future = asyncio.get_running_loop().create_future()
@@ -697,7 +712,25 @@ class SessionManager:
                 )
 
             existing = self._pending_elicitations.setdefault(session_id, {}).get(operation_id)
-            if existing is not None and not existing.future.done():
+            if existing is not None and existing.provisional:
+                current_interaction = operation.pending_interaction
+                interaction.interaction_id = existing.interaction_id
+                interaction.requested_at = existing.created_at
+                if current_interaction is not None:
+                    interaction.details = {
+                        **current_interaction.details,
+                        "server_name": payload.get("server_name"),
+                        "request_context": request_context,
+                        "provisional": False,
+                    }
+                future = existing.future
+                pending = PendingElicitation(
+                    interaction_id=existing.interaction_id,
+                    future=existing.future,
+                    created_at=existing.created_at,
+                    provisional=False,
+                )
+            elif existing is not None and not existing.future.done():
                 existing.future.cancel()
 
             self._pending_elicitations.setdefault(session_id, {})[operation_id] = pending
@@ -721,6 +754,98 @@ class SessionManager:
                 operation_id=operation_id,
                 interaction_id=interaction.interaction_id,
             )
+
+    @staticmethod
+    def _is_provisional_interaction(interaction: Optional[QueryOperationInteraction]) -> bool:
+        return bool(interaction and interaction.details.get("provisional") is True)
+
+    async def _handle_wrapper_task_status(
+        self,
+        *,
+        session_id: str,
+        operation_id: str,
+        payload: Dict[str, Any],
+    ) -> None:
+        status = str(payload.get("status") or "").strip().lower()
+        if not status:
+            return
+
+        async with self._lock:
+            operation = self._query_operations.get(session_id, {}).get(operation_id)
+            if operation is None:
+                raise QueryOperationNotFoundError(
+                    f"Query operation {operation_id} not found for session {session_id}"
+                )
+            if operation.status in {
+                QueryOperationStatus.completed,
+                QueryOperationStatus.failed,
+                QueryOperationStatus.cancelled,
+            }:
+                return
+
+            session_pending = self._pending_elicitations.setdefault(session_id, {})
+            pending = session_pending.get(operation_id)
+            now = datetime.now()
+
+            task_details = {
+                "task_id": payload.get("task_id"),
+                "server_name": payload.get("server_name"),
+                "poll_interval": payload.get("poll_interval"),
+                "ttl": payload.get("ttl"),
+                "created_at": payload.get("created_at"),
+                "last_updated_at": payload.get("last_updated_at"),
+                "source": "task-status-notification",
+            }
+            task_details = {key: value for key, value in task_details.items() if value is not None}
+
+            if status == "working":
+                operation.status = QueryOperationStatus.running
+                operation.requires_input = False
+                operation.result = None
+                operation.error = None
+                if pending is not None and pending.provisional:
+                    session_pending.pop(operation_id, None)
+                    if not session_pending:
+                        self._pending_elicitations.pop(session_id, None)
+                operation.pending_interaction = None
+                operation.metadata.updated_at = now
+                return
+
+            if status != "input_required":
+                return
+
+            interaction = operation.pending_interaction
+            if pending is None:
+                task_id = str(payload.get("task_id") or uuid.uuid4())
+                future = asyncio.get_running_loop().create_future()
+                pending = PendingElicitation(
+                    interaction_id=f"task-status:{task_id}",
+                    future=future,
+                    created_at=now,
+                    provisional=True,
+                )
+                session_pending[operation_id] = pending
+
+            if interaction is None or self._is_provisional_interaction(interaction):
+                interaction = QueryOperationInteraction(
+                    interaction_id=pending.interaction_id,
+                    message=str(payload.get("status_message") or "Task requires input"),
+                    requested_schema=None,
+                    requested_at=interaction.requested_at if interaction is not None else pending.created_at,
+                    details={**task_details, "provisional": True},
+                )
+            else:
+                interaction.details = {
+                    **interaction.details,
+                    **task_details,
+                }
+
+            operation.status = QueryOperationStatus.input_required
+            operation.requires_input = True
+            operation.result = None
+            operation.error = None
+            operation.pending_interaction = interaction
+            operation.metadata.updated_at = now
 
     async def _clear_pending_elicitation(
         self,

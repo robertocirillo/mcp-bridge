@@ -15,6 +15,8 @@ def _build_test_api(
     capability_mode: str = "normal",
     session_materialization: str = "eager",
     agent_supports_server_name: bool = True,
+    task_creation_mode: str = "normal",
+    task_status_mode: str = "normal",
 ):
     from fastapi import FastAPI
 
@@ -30,6 +32,156 @@ def _build_test_api(
     monkeypatch.setattr(settings.multi_tenancy, "require_header", False, raising=False)
     monkeypatch.setattr(settings.multi_tenancy, "default_tenant_id", "default", raising=False)
 
+    class _ProtocolSessionStub:
+        def __init__(self, session_stub):
+            self.session_stub = session_stub
+            self.wrapper = session_stub.wrapper
+            self._tasks = {}
+            self._task_counter = 0
+
+        async def send_request(self, request, result_type):
+            from mcp.shared.exceptions import McpError
+            from mcp.types import ErrorData
+
+            payload = request.model_dump(by_alias=True, exclude_none=False)
+            self.session_stub.protocol_calls.append(payload)
+            method = payload["method"]
+            params = payload.get("params") or {}
+
+            if method == "tools/call":
+                name = params["name"]
+                arguments = dict(params.get("arguments") or {})
+                if name != "simulate-research-query":
+                    raise AssertionError(f"Unexpected task-aware tool call for {name}")
+
+                if task_creation_mode == "real_invalid_task_creation_result" and "topic" not in arguments:
+                    raise McpError(
+                        ErrorData(
+                            code=-32602,
+                            message=(
+                                "Invalid task creation result: ["
+                                "{\"expected\":\"object\",\"code\":\"invalid_type\",\"path\":[\"task\"],"
+                                "\"message\":\"Invalid input: expected object, received undefined\"}]"
+                            ),
+                        )
+                    )
+
+                if "task" not in params:
+                    return result_type.model_validate(
+                        {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": (
+                                        "MCP error -32601: Tool simulate-research-query requires task "
+                                        "augmentation (taskSupport: 'required')"
+                                    ),
+                                }
+                            ],
+                            "isError": True,
+                        }
+                    )
+
+                self._task_counter += 1
+                task_id = f"{self.session_stub.server_name}-task-{self._task_counter}"
+                self.session_stub.task_calls.append(
+                    {
+                        "name": name,
+                        "arguments": arguments,
+                        "task": dict(params.get("task") or {}),
+                    }
+                )
+                self._tasks[task_id] = {
+                    "name": name,
+                    "arguments": arguments,
+                }
+                return result_type.model_validate(
+                    {
+                        "task": {
+                            "taskId": task_id,
+                            "status": "working",
+                            "pollInterval": 0,
+                        }
+                    }
+                )
+
+            if method == "tasks/result":
+                task_id = params["taskId"]
+                task = self._tasks[task_id]
+                name = task["name"]
+                arguments = task["arguments"]
+
+                await self.wrapper._handle_runtime_message(
+                    SimpleNamespace(
+                        method="notifications/tasks/status",
+                        params={
+                            "taskId": task_id,
+                            "status": "working",
+                            "pollInterval": 0,
+                            "statusMessage": "Task is working",
+                        },
+                    )
+                )
+
+                if task_status_mode == "pause_after_working":
+                    await asyncio.sleep(0.05)
+
+                if arguments.get("ambiguous") is True:
+                    await self.wrapper._handle_runtime_message(
+                        SimpleNamespace(
+                            method="notifications/tasks/status",
+                            params={
+                                "taskId": task_id,
+                                "status": "input_required",
+                                "pollInterval": 0,
+                                "statusMessage": "Task requires additional input",
+                            },
+                        )
+                    )
+                    if task_status_mode == "pause_on_input_required":
+                        await asyncio.sleep(0.05)
+                    resume = await self.wrapper._handle_protocol_elicitation(
+                        SimpleNamespace(
+                            request_id=f"task-{task_id}",
+                            meta={"io.modelcontextprotocol/related-task": {"taskId": task_id}},
+                        ),
+                        SimpleNamespace(
+                            message="Please disambiguate the research query",
+                            requestedSchema={
+                                "type": "object",
+                                "properties": {
+                                    "topic": {"type": "string"},
+                                    "region": {"type": "string"},
+                                },
+                                "required": ["topic"],
+                            },
+                            meta={"io.modelcontextprotocol/related-task": {"taskId": task_id}},
+                        ),
+                    )
+                    if resume.action == "decline":
+                        raise McpError(ErrorData(code=-32603, message="Elicitation declined"))
+                    if resume.action == "cancel":
+                        raise McpError(ErrorData(code=-32800, message="Task cancelled"))
+                    return result_type.model_validate(
+                        {
+                            "tool": name,
+                            "server": self.session_stub.server_name,
+                            "arguments": arguments,
+                            "resolved_with": resume.content,
+                        }
+                    )
+
+                return result_type.model_validate(
+                    {
+                        "tool": name,
+                        "server": self.session_stub.server_name,
+                        "arguments": arguments,
+                        "status": "completed",
+                    }
+                )
+
+            raise AssertionError(f"Unsupported raw MCP method: {method}")
+
     class _SessionStub:
         def __init__(self, server_name: str, wrapper):
             self.server_name = server_name
@@ -37,7 +189,13 @@ def _build_test_api(
             self.prompt_calls = []
             self.resource_calls = []
             self.tool_calls = []
+            self.task_calls = []
+            self.protocol_calls = []
             self.capability_mode = capability_mode
+            self.connector = SimpleNamespace(
+                client_session=_ProtocolSessionStub(self),
+                capabilities={"tasks": {"requests": {"tools": {"call": {}}}}},
+            )
 
         def __getattribute__(self, item):
             capability_state = object.__getattribute__(self, "capability_mode")
@@ -109,6 +267,28 @@ def _build_test_api(
                 ]
             }
 
+        async def list_tools(self):
+            return [
+                {
+                    "name": "plain-tool",
+                    "description": "Standard MCP tool",
+                    "inputSchema": {"type": "object"},
+                },
+                {
+                    "name": "simulate-research-query",
+                    "description": "Task-aware research simulation tool",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "topic": {"type": "string"},
+                            "ambiguous": {"type": "boolean"},
+                        },
+                        "required": ["topic"],
+                    },
+                    "execution": {"taskSupport": "required"},
+                },
+            ]
+
         async def read_resource(self, uri: str):
             self.resource_calls.append({"uri": uri})
             return {
@@ -135,33 +315,25 @@ def _build_test_api(
             tool_arguments = dict(arguments or {})
             self.tool_calls.append({"name": name, "arguments": tool_arguments})
 
-            if name == "simulate-research-query" and tool_arguments.get("ambiguous") is True:
-                resume = await self.wrapper._handle_runtime_elicitation(
-                    SimpleNamespace(request_id=f"tool-{self.server_name}-1"),
-                    SimpleNamespace(
-                        message="Please disambiguate the research query",
-                        requestedSchema={
-                            "type": "object",
-                            "properties": {
-                                "topic": {"type": "string"},
-                                "region": {"type": "string"},
-                            },
-                            "required": ["topic"],
-                        },
-                    ),
-                )
+            if name == "plain-tool":
                 return {
                     "tool": name,
                     "server": self.server_name,
                     "arguments": tool_arguments,
-                    "resolved_with": resume.content,
+                    "status": "completed",
                 }
 
             return {
-                "tool": name,
-                "server": self.server_name,
-                "arguments": tool_arguments,
-                "status": "completed",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "MCP error -32601: Tool simulate-research-query requires task "
+                            "augmentation (taskSupport: 'required')"
+                        ),
+                    }
+                ],
+                "isError": True,
             }
 
     class _BaseClientStub:
@@ -302,6 +474,8 @@ def _build_test_app(
     capability_mode: str = "normal",
     session_materialization: str = "eager",
     agent_supports_server_name: bool = True,
+    task_creation_mode: str = "normal",
+    task_status_mode: str = "normal",
 ):
     from fastapi.testclient import TestClient
 
@@ -312,6 +486,8 @@ def _build_test_app(
         capability_mode=capability_mode,
         session_materialization=session_materialization,
         agent_supports_server_name=agent_supports_server_name,
+        task_creation_mode=task_creation_mode,
+        task_status_mode=task_status_mode,
     )
     return TestClient(app), mgr
 
@@ -945,8 +1121,8 @@ async def test_direct_tool_invocation_completed(monkeypatch):
             f"/sessions/{session_id}/query-operations",
             json={
                 "server_name": "everything",
-                "tool_name": "simulate-research-query",
-                "arguments": {"ambiguous": False, "topic": "bridges"},
+                "tool_name": "plain-tool",
+                "arguments": {"topic": "bridges"},
             },
             headers={"X-Tenant-Id": "tenant-a"},
         )
@@ -954,8 +1130,8 @@ async def test_direct_tool_invocation_completed(monkeypatch):
         create_body = create_response.json()
         assert create_body["metadata"]["request"] == {
             "server_name": "everything",
-            "tool_name": "simulate-research-query",
-            "arguments": {"ambiguous": False, "topic": "bridges"},
+            "tool_name": "plain-tool",
+            "arguments": {"topic": "bridges"},
         }
 
         completed_body = await _wait_for_operation_status(
@@ -968,6 +1144,54 @@ async def test_direct_tool_invocation_completed(monkeypatch):
         assert completed_body["result"]["steps_used"] == 0
         assert completed_body["result"]["server_used"] == "everything"
         assert completed_body["result"]["result"] == {
+            "tool": "plain-tool",
+            "server": "everything",
+            "arguments": {"topic": "bridges"},
+            "status": "completed",
+        }
+
+        session_data = await mgr.get_session(session_id, tenant_id="tenant-a")
+        session = session_data.wrapper._base_client.sessions["everything"]
+        assert session.tool_calls == [
+            {
+                "name": "plain-tool",
+                "arguments": {"topic": "bridges"},
+            }
+        ]
+        assert session.task_calls == []
+
+
+@pytest.mark.asyncio
+async def test_task_required_direct_tool_invocation_completed(monkeypatch):
+    from httpx import ASGITransport, AsyncClient
+
+    app, mgr = _build_test_api(monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"everything": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={
+                "server_name": "everything",
+                "tool_name": "simulate-research-query",
+                "arguments": {"ambiguous": False, "topic": "bridges"},
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+
+        completed_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=create_response.json()["operation_id"],
+            tenant_id="tenant-a",
+            expected_status="completed",
+        )
+        assert completed_body["result"]["result"] == {
             "tool": "simulate-research-query",
             "server": "everything",
             "arguments": {"ambiguous": False, "topic": "bridges"},
@@ -976,12 +1200,55 @@ async def test_direct_tool_invocation_completed(monkeypatch):
 
         session_data = await mgr.get_session(session_id, tenant_id="tenant-a")
         session = session_data.wrapper._base_client.sessions["everything"]
-        assert session.tool_calls == [
+        assert session.tool_calls == []
+        assert session.task_calls == [
             {
                 "name": "simulate-research-query",
                 "arguments": {"ambiguous": False, "topic": "bridges"},
+                "task": {},
             }
         ]
+        assert [call["method"] for call in session.protocol_calls] == ["tools/call", "tasks/result"]
+
+
+@pytest.mark.asyncio
+async def test_task_required_direct_tool_invocation_validates_arguments_before_task_creation(monkeypatch):
+    from httpx import ASGITransport, AsyncClient
+
+    app, mgr = _build_test_api(monkeypatch, task_creation_mode="real_invalid_task_creation_result")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"everything": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={
+                "server_name": "everything",
+                "tool_name": "simulate-research-query",
+                "arguments": {"ambiguous": True},
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+
+        failed_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=create_response.json()["operation_id"],
+            tenant_id="tenant-a",
+            expected_status="failed",
+        )
+        assert failed_body["error"]["code"] == "MCP_SCHEMA_ERROR"
+        assert "topic" in failed_body["error"]["message"]
+
+        session_data = await mgr.get_session(session_id, tenant_id="tenant-a")
+        session = session_data.wrapper._base_client.sessions["everything"]
+        assert session.protocol_calls == []
+        assert session.task_calls == []
+        assert session.tool_calls == []
 
 
 @pytest.mark.asyncio
@@ -1001,7 +1268,7 @@ async def test_direct_tool_invocation_reaches_input_required(monkeypatch):
             json={
                 "server_name": "everything",
                 "tool_name": "simulate-research-query",
-                "arguments": {"ambiguous": True},
+                "arguments": {"ambiguous": True, "topic": "python"},
             },
             headers={"X-Tenant-Id": "tenant-a"},
         )
@@ -1026,13 +1293,14 @@ async def test_direct_tool_invocation_reaches_input_required(monkeypatch):
             },
             "required": ["topic"],
         }
+        assert input_required_body["pending_interaction"]["details"]["task_id"].startswith("everything-task-")
 
 
 @pytest.mark.asyncio
-async def test_direct_tool_invocation_resume_accept_completes(monkeypatch):
+async def test_task_status_working_keeps_operation_running_without_pending_interaction(monkeypatch):
     from httpx import ASGITransport, AsyncClient
 
-    app, _mgr = _build_test_api(monkeypatch)
+    app, _mgr = _build_test_api(monkeypatch, task_status_mode="pause_after_working")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         session_id = await _create_session_async(
             client,
@@ -1045,7 +1313,153 @@ async def test_direct_tool_invocation_resume_accept_completes(monkeypatch):
             json={
                 "server_name": "everything",
                 "tool_name": "simulate-research-query",
-                "arguments": {"ambiguous": True},
+                "arguments": {"ambiguous": False, "topic": "python"},
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+        operation_id = create_response.json()["operation_id"]
+
+        await asyncio.sleep(0.01)
+        running_response = await client.get(
+            f"/sessions/{session_id}/query-operations/{operation_id}",
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert running_response.status_code == 200, running_response.text
+        running_body = running_response.json()
+        assert running_body["status"] == "running"
+        assert running_body["requires_input"] is False
+        assert running_body["pending_interaction"] is None
+
+        completed_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="completed",
+        )
+        assert completed_body["result"]["result"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_task_status_input_required_creates_provisional_pending_interaction(monkeypatch):
+    from httpx import ASGITransport, AsyncClient
+
+    app, _mgr = _build_test_api(monkeypatch, task_status_mode="pause_on_input_required")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"everything": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={
+                "server_name": "everything",
+                "tool_name": "simulate-research-query",
+                "arguments": {"ambiguous": True, "topic": "python"},
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+        operation_id = create_response.json()["operation_id"]
+
+        input_required_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="input-required",
+        )
+        assert input_required_body["requires_input"] is True
+        assert input_required_body["pending_interaction"]["message"] == "Task requires additional input"
+        assert input_required_body["pending_interaction"]["requested_schema"] is None
+        assert input_required_body["pending_interaction"]["details"]["source"] == "task-status-notification"
+        assert input_required_body["pending_interaction"]["details"]["provisional"] is True
+        assert input_required_body["pending_interaction"]["details"]["task_id"].startswith("everything-task-")
+        assert input_required_body["pending_interaction"]["interaction_id"].startswith("task-status:")
+
+
+@pytest.mark.asyncio
+async def test_task_status_input_required_resume_before_elicitation_still_completes(monkeypatch):
+    from httpx import ASGITransport, AsyncClient
+
+    app, _mgr = _build_test_api(monkeypatch, task_status_mode="pause_on_input_required")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"everything": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={
+                "server_name": "everything",
+                "tool_name": "simulate-research-query",
+                "arguments": {"ambiguous": True, "topic": "python"},
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+        operation_id = create_response.json()["operation_id"]
+
+        input_required_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="input-required",
+        )
+        interaction_id = input_required_body["pending_interaction"]["interaction_id"]
+        assert input_required_body["pending_interaction"]["details"]["provisional"] is True
+
+        resume_response = await client.post(
+            f"/sessions/{session_id}/query-operations/{operation_id}/resume",
+            json={
+                "action": "accept",
+                "interaction_id": interaction_id,
+                "content": {"topic": "climate", "region": "eu"},
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert resume_response.status_code == 200, resume_response.text
+        assert resume_response.json()["status"] == "running"
+
+        completed_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="completed",
+        )
+        assert completed_body["result"]["result"] == {
+            "tool": "simulate-research-query",
+            "server": "everything",
+            "arguments": {"ambiguous": True, "topic": "python"},
+            "resolved_with": {"topic": "climate", "region": "eu"},
+        }
+
+
+@pytest.mark.asyncio
+async def test_direct_tool_invocation_resume_accept_completes(monkeypatch):
+    from httpx import ASGITransport, AsyncClient
+
+    app, mgr = _build_test_api(monkeypatch)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"everything": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={
+                "server_name": "everything",
+                "tool_name": "simulate-research-query",
+                "arguments": {"ambiguous": True, "topic": "python"},
             },
             headers={"X-Tenant-Id": "tenant-a"},
         )
@@ -1059,6 +1473,8 @@ async def test_direct_tool_invocation_resume_accept_completes(monkeypatch):
             expected_status="input-required",
         )
         interaction_id = input_required_body["pending_interaction"]["interaction_id"]
+        assert input_required_body["pending_interaction"]["details"]["task_id"].startswith("everything-task-")
+        assert input_required_body["pending_interaction"]["details"]["provisional"] is False
 
         resume_response = await client.post(
             f"/sessions/{session_id}/query-operations/{operation_id}/resume",
@@ -1083,9 +1499,14 @@ async def test_direct_tool_invocation_resume_accept_completes(monkeypatch):
         assert completed_body["result"]["result"] == {
             "tool": "simulate-research-query",
             "server": "everything",
-            "arguments": {"ambiguous": True},
+            "arguments": {"ambiguous": True, "topic": "python"},
             "resolved_with": {"topic": "climate", "region": "eu"},
         }
+
+        session_data = await mgr.get_session(session_id, tenant_id="tenant-a")
+        session = session_data.wrapper._base_client.sessions["everything"]
+        assert session.tool_calls == []
+        assert [call["method"] for call in session.protocol_calls] == ["tools/call", "tasks/result"]
 
 
 @pytest.mark.asyncio
@@ -1105,7 +1526,7 @@ async def test_direct_tool_invocation_resume_cancel_cancels(monkeypatch):
             json={
                 "server_name": "everything",
                 "tool_name": "simulate-research-query",
-                "arguments": {"ambiguous": True},
+                "arguments": {"ambiguous": True, "topic": "python"},
             },
             headers={"X-Tenant-Id": "tenant-a"},
         )
@@ -1157,7 +1578,7 @@ async def test_direct_tool_invocation_resume_decline_fails(monkeypatch):
             json={
                 "server_name": "everything",
                 "tool_name": "simulate-research-query",
-                "arguments": {"ambiguous": True},
+                "arguments": {"ambiguous": True, "topic": "python"},
             },
             headers={"X-Tenant-Id": "tenant-a"},
         )
@@ -1204,7 +1625,7 @@ def test_direct_tool_invocation_routes_enforce_tenant_isolation(monkeypatch):
         json={
             "server_name": "everything",
             "tool_name": "simulate-research-query",
-            "arguments": {"ambiguous": False},
+            "arguments": {"ambiguous": False, "topic": "bridges"},
         },
         headers={"X-Tenant-Id": "tenant-a"},
     )

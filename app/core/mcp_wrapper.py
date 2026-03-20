@@ -7,12 +7,16 @@ while the implementation details live in mcp_wrapper_* helper modules.
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import inspect
+import json
 import os
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+
+from pydantic import BaseModel, ConfigDict
 
 from app.core.bias_detector_client import BiasDetectorClient
 from app.core.exceptions import (
@@ -25,6 +29,7 @@ from app.core.exceptions import (
 from app.core.guardrail_runner import GuardrailExecutionContext, GuardrailRunner
 from app.core.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
 from app.core.mcp_policy_engine import ToolInvocationContext, ToolInvocationDecision, ToolPolicy, ToolPolicyEngine
+from app.core.mcp_task_runtime import BridgeTaskStatusNotification, install_task_notification_runtime_patch
 from app.core.mcp_wrapper_errors import GuardrailViolationError, MCPToolNotAllowedError
 from app.core.mcp_wrapper_guardrails_bias import (
     BiasDetectionResult,
@@ -54,6 +59,20 @@ from app.utils.logging import get_logger
 logger = get_logger(__name__)
 
 GuardrailContext = GuardrailExecutionContext
+
+
+class _RawMCPRequest(BaseModel):
+    """Minimal JSON-RPC request envelope for MCP methods not modeled by the Python SDK."""
+
+    method: str
+    params: Optional[Dict[str, Any]] = None
+    model_config = ConfigDict(extra="allow")
+
+
+class _RawMCPResult(BaseModel):
+    """Generic response model for raw MCP requests with task payloads."""
+
+    model_config = ConfigDict(extra="allow")
 
 
 class MCPWrapper:
@@ -114,9 +133,11 @@ class MCPWrapper:
         self.run_id: Optional[str] = None
         self.session_id: Optional[str] = None
         self._elicitation_handler: Optional[Callable[..., Awaitable[Any]]] = None
+        self._task_status_handler: Optional[Callable[..., Awaitable[Any]]] = None
         self._query_operation_context: contextvars.ContextVar[Optional[Dict[str, Optional[str]]]] = (
             contextvars.ContextVar("mcp_wrapper_query_operation_context", default=None)
         )
+        self._task_operation_contexts: Dict[str, Dict[str, Optional[str]]] = {}
 
         # Maintain independent guardrail pipelines for input and output phases.
         self.before_model_guardrails: List[Callable[[GuardrailContext], Union[GuardrailContext, Awaitable[GuardrailContext]]]] = []
@@ -165,7 +186,8 @@ class MCPWrapper:
         self.MCPClient = runtime.MCPClient
         self.SandboxOptions = runtime.SandboxOptions
         self.ChatLLM = runtime.ChatLLM
-        logger.debug("mcp-use and provider runtime imported")
+        install_task_notification_runtime_patch()
+        logger.debug("mcp-use and provider runtime imported with task notification patch")
 
     def _create_llm(self) -> Any:
         # Build the configured chat model through the dedicated helper so provider differences stay isolated.
@@ -200,6 +222,12 @@ class MCPWrapper:
         # Public wrapper contract: callers may set, replace, or clear the bridge elicitation hook.
         # Passing None is allowed and simply disables elicitation wiring for this wrapper instance.
         self._elicitation_handler = handler
+
+    def set_task_status_handler(
+        self,
+        handler: Optional[Callable[..., Awaitable[Any]]],
+    ) -> None:
+        self._task_status_handler = handler
 
     @asynccontextmanager
     async def query_operation_scope(
@@ -993,6 +1021,406 @@ class MCPWrapper:
             server_name=server_name,
         )
 
+    @staticmethod
+    def _coerce_mapping(value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return value
+        if hasattr(value, "model_dump"):
+            dumped = value.model_dump(by_alias=True, exclude_none=False)
+            if isinstance(dumped, dict):
+                return dumped
+        if hasattr(value, "dict"):
+            dumped = value.dict(exclude_none=False)  # type: ignore[call-arg]
+            if isinstance(dumped, dict):
+                return dumped
+        if hasattr(value, "__dict__"):
+            dumped = vars(value)
+            if isinstance(dumped, dict):
+                return dict(dumped)
+        return None
+
+    @classmethod
+    def _extract_nested_value(cls, value: Any, *keys: str) -> Any:
+        current = value
+        for key in keys:
+            if current is None:
+                return None
+            if isinstance(current, dict):
+                current = current.get(key)
+                continue
+            if hasattr(current, key):
+                current = getattr(current, key)
+                continue
+            dumped = cls._coerce_mapping(current)
+            if dumped is None:
+                return None
+            current = dumped.get(key)
+        return current
+
+    @classmethod
+    def _extract_tool_input_schema(cls, tool: Any) -> Optional[Dict[str, Any]]:
+        schema = cls._extract_nested_value(tool, "inputSchema")
+        return schema if isinstance(schema, dict) else None
+
+    @staticmethod
+    def _truncate_log_value(value: Any, *, limit: int = 2000) -> str:
+        try:
+            rendered = json.dumps(value, default=str, ensure_ascii=True)
+        except Exception:
+            rendered = str(value)
+        if len(rendered) > limit:
+            return f"{rendered[:limit]}...(truncated)"
+        return rendered
+
+    @classmethod
+    def _validate_task_tool_arguments(
+        cls,
+        *,
+        tool_name: str,
+        tool_definition: Any,
+        arguments: Dict[str, Any],
+    ) -> None:
+        input_schema = cls._extract_tool_input_schema(tool_definition)
+        if input_schema is None:
+            return
+
+        try:
+            from jsonschema import SchemaError, ValidationError, validate
+
+            validate(instance=arguments or {}, schema=input_schema)
+        except ValidationError as exc:
+            raise ValueError(f"Invalid tool arguments for '{tool_name}': {exc.message}") from exc
+        except SchemaError:
+            logger.warning(
+                "Skipping local inputSchema validation for tool '%s' due to invalid upstream schema",
+                tool_name,
+            )
+
+    @classmethod
+    def _extract_tool_task_support(cls, tool: Any) -> Optional[str]:
+        execution = cls._extract_nested_value(tool, "execution")
+        if execution is None:
+            meta = cls._extract_nested_value(tool, "_meta")
+            execution = cls._extract_nested_value(meta, "execution")
+        task_support = cls._extract_nested_value(execution, "taskSupport")
+        if task_support is None:
+            task_support = cls._extract_nested_value(execution, "task_support")
+        return str(task_support).strip().lower() if task_support is not None else None
+
+    @classmethod
+    def _extract_task_request_capability(cls, capabilities: Any) -> Optional[bool]:
+        task_call_support = cls._extract_nested_value(
+            capabilities,
+            "tasks",
+            "requests",
+            "tools",
+            "call",
+        )
+        if task_call_support is None:
+            return None
+        if isinstance(task_call_support, bool):
+            return task_call_support
+        if isinstance(task_call_support, dict):
+            return True
+        dumped = cls._coerce_mapping(task_call_support)
+        if dumped is not None:
+            return True
+        return bool(task_call_support)
+
+    @staticmethod
+    def _unwrap_capability_session(session: Any) -> Any:
+        return getattr(session, "_session", session)
+
+    def _get_operation_context_snapshot(self) -> Optional[Dict[str, Optional[str]]]:
+        operation_context = self._query_operation_context.get()
+        if not operation_context:
+            return None
+        operation_id = operation_context.get("operation_id")
+        if not operation_id:
+            return None
+        return {
+            "operation_id": str(operation_id),
+            "session_id": str(operation_context.get("session_id") or self.session_id or ""),
+            "tenant_id": operation_context.get("tenant_id") or self.tenant_id,
+            "run_id": operation_context.get("run_id") or self.run_id,
+            "server_name": self._active_server_name,
+            "last_elicitation_action": None,
+        }
+
+    def _set_task_elicitation_action(self, task_id: Optional[str], action: str) -> None:
+        if not task_id:
+            return
+        task_context = self._task_operation_contexts.get(task_id)
+        if task_context is not None:
+            task_context["last_elicitation_action"] = action
+
+    @classmethod
+    def _extract_related_task_id(cls, context: Any, params: Any) -> Optional[str]:
+        for source in (
+            cls._extract_nested_value(params, "meta"),
+            cls._extract_nested_value(params, "_meta"),
+            cls._extract_nested_value(context, "meta"),
+        ):
+            if source is None:
+                continue
+            related_task = cls._extract_nested_value(source, "io.modelcontextprotocol/related-task")
+            if related_task is None:
+                related_task = cls._extract_nested_value(source, "relatedTask")
+            task_id = cls._extract_nested_value(related_task, "taskId")
+            if task_id is None:
+                task_id = cls._extract_nested_value(related_task, "task_id")
+            if task_id is not None:
+                return str(task_id)
+        return None
+
+    def _resolve_elicitation_operation_context(
+        self,
+        *,
+        context: Any,
+        params: Any,
+    ) -> Optional[Dict[str, Optional[str]]]:
+        task_id = self._extract_related_task_id(context, params)
+        if task_id is not None:
+            task_context = self._task_operation_contexts.get(task_id)
+            if task_context is not None:
+                return task_context
+        return self._get_operation_context_snapshot()
+
+    @classmethod
+    def _get_protocol_client_session(cls, session: Any) -> Any:
+        raw_session = cls._unwrap_capability_session(session)
+        connector = getattr(raw_session, "connector", None)
+        if connector is None:
+            return None
+        return getattr(connector, "client_session", None)
+
+    @classmethod
+    def _get_server_capabilities(cls, session: Any) -> Any:
+        raw_session = cls._unwrap_capability_session(session)
+        connector = getattr(raw_session, "connector", None)
+        capabilities = getattr(connector, "capabilities", None)
+        if capabilities is not None:
+            return capabilities
+        session_info = getattr(raw_session, "session_info", None)
+        if isinstance(session_info, dict):
+            return session_info.get("capabilities")
+        return cls._extract_nested_value(session_info, "capabilities")
+
+    async def _get_tool_definition(
+        self,
+        *,
+        session: Any,
+        server_name: str,
+        tool_name: str,
+    ) -> Any:
+        try:
+            tools_result = await self._invoke_capability_method(
+                session,
+                operation="list_tools",
+                method_names=["list_tools"],
+                call_variants=[((), {})],
+                server_name=server_name,
+            )
+        except MCPCapabilityError:
+            logger.info(
+                "mcp_task_support_detection server=%s tool=%s list_tools=unavailable",
+                server_name,
+                tool_name,
+            )
+            return None
+
+        tools: Any = tools_result if isinstance(tools_result, list) else self._extract_nested_value(tools_result, "tools")
+        if not isinstance(tools, list):
+            logger.info(
+                "mcp_task_support_detection server=%s tool=%s list_tools_type=%s extracted_tools_type=%s",
+                server_name,
+                tool_name,
+                type(tools_result).__name__,
+                type(tools).__name__ if tools is not None else "None",
+            )
+            return None
+        logger.info(
+            "mcp_task_support_detection server=%s tool=%s list_tools_type=%s tools_count=%s",
+            server_name,
+            tool_name,
+            type(tools_result).__name__,
+            len(tools),
+        )
+        for tool in tools:
+            if self._extract_nested_value(tool, "name") == tool_name:
+                logger.info(
+                    "mcp_task_support_detection server=%s tool=%s matched=true task_support=%s",
+                    server_name,
+                    tool_name,
+                    self._extract_tool_task_support(tool),
+                )
+                return tool
+        logger.info(
+            "mcp_task_support_detection server=%s tool=%s matched=false",
+            server_name,
+            tool_name,
+        )
+        return None
+
+    async def _send_raw_mcp_request(
+        self,
+        *,
+        client_session: Any,
+        method: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if client_session is None or not hasattr(client_session, "send_request"):
+            raise MCPCapabilityNotSupportedError(
+                "task_transport",
+                "MCP runtime does not expose a raw client session for task-based tool execution",
+                server_name=self._active_server_name,
+            )
+
+        logger.info(
+            "mcp_task_transport_request server=%s method=%s params_keys=%s",
+            self._active_server_name,
+            method,
+            sorted((params or {}).keys()),
+        )
+        request = _RawMCPRequest(method=method, params=params)
+        try:
+            result = await client_session.send_request(request, _RawMCPResult)
+        except Exception as exc:
+            error_payload = getattr(exc, "error", None)
+            logger.warning(
+                "mcp_task_transport_error server=%s method=%s code=%s message=%s data=%s",
+                self._active_server_name,
+                method,
+                getattr(error_payload, "code", None),
+                getattr(error_payload, "message", str(exc)),
+                self._truncate_log_value(getattr(error_payload, "data", None)),
+            )
+            raise
+        dumped = result.model_dump(by_alias=True, exclude_none=False)
+        logger.info(
+            "mcp_task_transport_response server=%s method=%s has_task=%s result_keys=%s",
+            self._active_server_name,
+            method,
+            isinstance(dumped.get("task"), dict) if isinstance(dumped, dict) else False,
+            sorted(dumped.keys()) if isinstance(dumped, dict) else [],
+        )
+        logger.debug(
+            "mcp_task_transport_payload server=%s method=%s payload=%s",
+            self._active_server_name,
+            method,
+            self._truncate_log_value(dumped),
+        )
+        return dumped if isinstance(dumped, dict) else {}
+
+    def _coerce_call_tool_result(self, result: Dict[str, Any]) -> Any:
+        try:
+            from mcp.types import CallToolResult
+
+            return CallToolResult.model_validate(result)
+        except Exception:
+            return result
+
+    async def _call_tool_with_task_support(
+        self,
+        *,
+        session: Any,
+        tool_definition: Any,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        server_name: str,
+    ) -> Any:
+        self._enforce_tool_allowed(tool_name, arguments)
+        self._validate_task_tool_arguments(
+            tool_name=tool_name,
+            tool_definition=tool_definition,
+            arguments=arguments,
+        )
+
+        client_session = self._get_protocol_client_session(session)
+        capabilities = self._get_server_capabilities(session)
+        task_capability = self._extract_task_request_capability(capabilities)
+        if task_capability is False:
+            raise MCPCapabilityNotSupportedError(
+                "task_transport",
+                (
+                    f"Tool '{tool_name}' requires task augmentation, but server '{server_name}' "
+                    "did not advertise tasks.requests.tools.call support"
+                ),
+                server_name=server_name,
+            )
+        logger.info(
+            "mcp_task_transport_selected server=%s tool=%s task_capability=%s",
+            server_name,
+            tool_name,
+            task_capability,
+        )
+
+        create_result = await self._send_raw_mcp_request(
+            client_session=client_session,
+            method="tools/call",
+            params={
+                "name": tool_name,
+                "arguments": arguments or {},
+                "task": {},
+            },
+        )
+        task_payload = self._extract_nested_value(create_result, "task")
+        if not isinstance(task_payload, dict):
+            logger.info(
+                "mcp_task_transport_fallback server=%s tool=%s reason=missing_task_payload",
+                server_name,
+                tool_name,
+            )
+            direct_result = self._coerce_call_tool_result(create_result)
+            return self._wrap_tool_result(tool_name, direct_result, arguments=arguments)
+
+        task_id = self._extract_nested_value(task_payload, "taskId")
+        if task_id is None:
+            raise MCPWrapperError(
+                f"Task-aware tool '{tool_name}' did not return a taskId in the create-task response"
+            )
+        logger.info(
+            "mcp_task_transport_created server=%s tool=%s task_id=%s",
+            server_name,
+            tool_name,
+            task_id,
+        )
+
+        task_context = self._get_operation_context_snapshot()
+        if task_context is not None:
+            self._task_operation_contexts[str(task_id)] = task_context
+
+        try:
+            result_payload = await self._send_raw_mcp_request(
+                client_session=client_session,
+                method="tasks/result",
+                params={"taskId": str(task_id)},
+            )
+        except Exception:
+            last_action = self._task_operation_contexts.get(str(task_id), {}).get("last_elicitation_action")
+            if last_action == "cancel":
+                raise asyncio.CancelledError()
+            if last_action == "decline":
+                raise QueryOperationElicitationDeclinedError(
+                    f"Elicitation declined for task-aware tool '{tool_name}'"
+                )
+            raise
+        else:
+            last_action = self._task_operation_contexts.get(str(task_id), {}).get("last_elicitation_action")
+            if last_action == "cancel":
+                raise asyncio.CancelledError()
+            if last_action == "decline":
+                raise QueryOperationElicitationDeclinedError(
+                    f"Elicitation declined for task-aware tool '{tool_name}'"
+                )
+
+            tool_result = self._coerce_call_tool_result(result_payload)
+            return self._wrap_tool_result(tool_name, tool_result, arguments=arguments)
+        finally:
+            self._task_operation_contexts.pop(str(task_id), None)
+
     async def call_tool(
         self,
         tool_name: str,
@@ -1005,19 +1433,46 @@ class MCPWrapper:
 
         tool_arguments = dict(arguments or {})
         resolved_server_name = self._resolve_capability_server_name(server_name)
+        previous_active_server_name = getattr(self, "_active_server_name", None)
+        self._active_server_name = resolved_server_name
 
         try:
-            result = await self._run_capability_operation(
-                operation="call_tool",
-                method_names=["call_tool"],
-                call_variants=[
-                    ((tool_name,), {"arguments": tool_arguments}),
-                    ((tool_name, tool_arguments), {}),
-                    ((), {"name": tool_name, "arguments": tool_arguments}),
-                    ((), {"tool_name": tool_name, "arguments": tool_arguments}),
-                ],
+            task_session = await self._get_capability_session(resolved_server_name)
+            tool_definition = await self._get_tool_definition(
+                session=task_session,
                 server_name=resolved_server_name,
+                tool_name=tool_name,
             )
+            task_support = self._extract_tool_task_support(tool_definition)
+            logger.info(
+                "mcp_tool_execution_path server=%s tool=%s task_support=%s branch=%s",
+                resolved_server_name,
+                tool_name,
+                task_support,
+                "task-aware" if task_support == "required" else "standard",
+            )
+
+            if task_support == "required":
+                result = await self._call_tool_with_task_support(
+                    session=task_session,
+                    tool_definition=tool_definition,
+                    tool_name=tool_name,
+                    arguments=tool_arguments,
+                    server_name=resolved_server_name,
+                )
+            else:
+                result = await self._invoke_capability_method(
+                    task_session,
+                    operation="call_tool",
+                    method_names=["call_tool"],
+                    call_variants=[
+                        ((tool_name,), {"arguments": tool_arguments}),
+                        ((tool_name, tool_arguments), {}),
+                        ((), {"name": tool_name, "arguments": tool_arguments}),
+                        ((), {"tool_name": tool_name, "arguments": tool_arguments}),
+                    ],
+                    server_name=resolved_server_name,
+                )
             self._steps_used = 0
             self._last_server_used = resolved_server_name
             self._record_audit_event(
@@ -1046,11 +1501,13 @@ class MCPWrapper:
                 details={"reason": "guardrail", "server_name": resolved_server_name},
             )
             raise
-        except (ConfigurationError, MCPWrapperError, QueryOperationElicitationDeclinedError):
+        except (ConfigurationError, MCPWrapperError, QueryOperationElicitationDeclinedError, ValueError):
             raise
         except Exception as exc:
             logger.error("Tool execution error: %s", exc)
             raise MCPWrapperError(f"Tool execution failed: {exc}")
+        finally:
+            self._active_server_name = previous_active_server_name
 
     @staticmethod
     def _serialize_request_context(context: Any) -> Dict[str, Any]:
@@ -1071,36 +1528,131 @@ class MCPWrapper:
             schema = getattr(params, "requested_schema", None)
         return schema if isinstance(schema, dict) else schema
 
-    def _build_runtime_elicitation_result(self, *, content: Any) -> Any:
+    @classmethod
+    def _extract_task_status_notification(cls, message: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(message, BridgeTaskStatusNotification):
+            method = message.method
+            params = message.params
+        else:
+            method = getattr(message, "method", None)
+            params = getattr(message, "params", None)
+            if method is None and isinstance(message, dict):
+                method = message.get("method")
+                params = message.get("params")
+
+        if method != "notifications/tasks/status":
+            return None
+
+        params_mapping = cls._coerce_mapping(params) or {}
+        task_id = cls._extract_nested_value(params_mapping, "taskId")
+        if task_id is None:
+            task_id = cls._extract_nested_value(params_mapping, "task_id")
+        status = cls._extract_nested_value(params_mapping, "status")
+        if task_id is None or status is None:
+            return None
+
+        return {
+            "task_id": str(task_id),
+            "status": str(status).strip().lower(),
+            "ttl": cls._extract_nested_value(params_mapping, "ttl"),
+            "created_at": cls._extract_nested_value(params_mapping, "createdAt"),
+            "last_updated_at": cls._extract_nested_value(params_mapping, "lastUpdatedAt"),
+            "poll_interval": cls._extract_nested_value(params_mapping, "pollInterval"),
+            "status_message": cls._extract_nested_value(params_mapping, "statusMessage"),
+        }
+
+    async def _handle_runtime_message(self, message: Any) -> None:
+        task_status = self._extract_task_status_notification(message)
+        if task_status is None:
+            return
+
+        task_id = task_status["task_id"]
+        operation_context = self._task_operation_contexts.get(task_id)
+        logger.info(
+            "mcp_task_status_notification server=%s task_id=%s status=%s correlated=%s payload=%s",
+            (operation_context or {}).get("server_name") or self._active_server_name,
+            task_id,
+            task_status["status"],
+            operation_context is not None,
+            self._truncate_log_value(task_status),
+        )
+        if operation_context is None:
+            return
+
+        handler = self._task_status_handler
+        if handler is None:
+            return
+
+        try:
+            await handler(
+                session_id=str(operation_context["session_id"] or self.session_id or ""),
+                operation_id=str(operation_context["operation_id"]),
+                payload={
+                    **task_status,
+                    "server_name": operation_context.get("server_name") or self._active_server_name,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Failed to process task status notification for task_id=%s operation_id=%s",
+                task_id,
+                operation_context.get("operation_id"),
+            )
+
+    def _build_runtime_elicitation_result(
+        self,
+        *,
+        action: str = "accept",
+        content: Any = None,
+    ) -> Any:
+        if action != "accept":
+            content = None
         try:
             from mcp.types import ElicitResult
 
-            return ElicitResult(action="accept", content=content)
+            return ElicitResult(action=action, content=content)
         except Exception:
-            return SimpleNamespace(action="accept", content=content)
+            return SimpleNamespace(action=action, content=content)
 
-    async def _handle_runtime_elicitation(self, context: Any, params: Any) -> Any:
+    async def _await_runtime_elicitation_content(self, context: Any, params: Any) -> Any:
         handler = self._elicitation_handler
         if handler is None:
             raise MCPWrapperError("Elicitation callback is not configured")
 
-        operation_context = self._query_operation_context.get()
+        operation_context = self._resolve_elicitation_operation_context(context=context, params=params)
         if not operation_context or not operation_context.get("operation_id"):
             raise MCPWrapperError(
                 "Elicitation requires a stateful query operation; POST /sessions/{id}/query remains unsupported"
             )
 
-        content = await handler(
+        return await handler(
             session_id=str(operation_context["session_id"] or self.session_id or ""),
             operation_id=str(operation_context["operation_id"]),
             payload={
                 "message": str(getattr(params, "message", "") or ""),
                 "requested_schema": self._extract_requested_schema(params),
                 "request_context": self._serialize_request_context(context),
-                "server_name": self._active_server_name,
+                "server_name": operation_context.get("server_name") or self._active_server_name,
             },
         )
+
+    async def _handle_runtime_elicitation(self, context: Any, params: Any) -> Any:
+        content = await self._await_runtime_elicitation_content(context, params)
         return self._build_runtime_elicitation_result(content=content)
+
+    async def _handle_protocol_elicitation(self, context: Any, params: Any) -> Any:
+        task_id = self._extract_related_task_id(context, params)
+        try:
+            content = await self._await_runtime_elicitation_content(context, params)
+        except QueryOperationElicitationDeclinedError:
+            self._set_task_elicitation_action(task_id, "decline")
+            return self._build_runtime_elicitation_result(action="decline")
+        except asyncio.CancelledError:
+            self._set_task_elicitation_action(task_id, "cancel")
+            return self._build_runtime_elicitation_result(action="cancel")
+
+        self._set_task_elicitation_action(task_id, "accept")
+        return self._build_runtime_elicitation_result(action="accept", content=content)
 
     def _build_client_kwargs(
         self,
@@ -1116,7 +1668,8 @@ class MCPWrapper:
 
         client_kwargs: Dict[str, Any] = {"config": {"mcpServers": selected_servers}}
         if self._elicitation_handler is not None:
-            client_kwargs["elicitation_callback"] = self._handle_runtime_elicitation
+            client_kwargs["elicitation_callback"] = self._handle_protocol_elicitation
+        client_kwargs["message_handler"] = self._handle_runtime_message
 
         if self.sandbox:
             client_kwargs["sandbox"] = True
