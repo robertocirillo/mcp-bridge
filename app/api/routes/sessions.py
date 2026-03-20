@@ -2,20 +2,84 @@
 Endpoints for managing MCP-Bridge sessions.
 """
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
-from typing import List, Annotated
 import logging
+from typing import Any, Annotated, List, Optional
 
-from app.models.config import SessionConfig
-from app.models.requests import SessionCreateRequest
-from app.models.responses import SessionResponse, SessionInfo
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import ValidationError
+
+from app.api.mcp_capabilities import (
+    normalize_prompt_list,
+    normalize_prompt_render,
+    normalize_resource_list,
+    normalize_resource_read,
+)
+from app.api.dependencies import TenantContext, get_session_manager, get_tenant_context
+from app.api.errors import http_error
+from app.core.exceptions import (
+    ConfigurationError,
+    MCPCapabilityNotSupportedError,
+    MCPCapabilityUpstreamError,
+    MCPWrapperError,
+    MaxSessionsExceededError,
+    SessionNotFoundError,
+)
 from app.core.session_manager import SessionManager
-from app.core.exceptions import SessionNotFoundError, MaxSessionsExceededError, ConfigurationError, MCPWrapperError
-from app.api.dependencies import get_session_manager, get_tenant_context, TenantContext
+from app.models.requests import PromptRenderRequest, ResourceReadRequest, SessionCreateRequest
+from app.models.responses import (
+    PromptListResponse,
+    PromptRenderResponse,
+    ResourceListResponse,
+    ResourceReadResponse,
+    SessionInfo,
+    SessionResponse,
+)
 
 TenantDep = Annotated[TenantContext, Depends(get_tenant_context)]
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _get_owned_wrapper(
+    *,
+    session_id: str,
+    tenant_ctx: TenantContext,
+    session_manager: SessionManager,
+):
+    session_data = await session_manager.get_session(
+        session_id=session_id,
+        tenant_id=tenant_ctx.tenant_id,
+    )
+    wrapper = session_data.wrapper
+    wrapper.set_context(
+        tenant_id=tenant_ctx.tenant_id,
+        run_id=tenant_ctx.run_id,
+        session_id=session_id,
+    )
+    return wrapper
+
+
+def _capability_error(
+    *,
+    status_code: int,
+    code: str,
+    message: str,
+    operation: str,
+    tenant_ctx: TenantContext,
+    session_id: str,
+    **extra: Any,
+) -> HTTPException:
+    return http_error(
+        status_code,
+        code,
+        message,
+        operation=operation,
+        tenant_id=tenant_ctx.tenant_id,
+        run_id=tenant_ctx.run_id,
+        session_id=session_id,
+        **extra,
+    )
+
 
 @router.post("", response_model=SessionResponse)
 async def create_session(
@@ -25,10 +89,8 @@ async def create_session(
 ):
     """New session"""
     try:
-        # request is already a SessionConfig (inherits from SessionConfig)
         config = request
 
-        # session creation (SessionManager will be updated to accept tenant_id / run_id)
         session_id = await session_manager.create_session(
             config=config,
             tenant_id=tenant_ctx.tenant_id,
@@ -75,6 +137,7 @@ async def list_sessions(
     except Exception:
         raise HTTPException(status_code=500, detail="Internal Error")
 
+
 @router.get("/{session_id}", response_model=SessionInfo)
 async def get_session_info(
     session_id: str,
@@ -83,7 +146,6 @@ async def get_session_info(
 ):
     """Get session info for the current tenant."""
     try:
-        # Enforce tenant isolation when retrieving the session
         session_data = await session_manager.get_session(
             session_id=session_id,
             tenant_id=tenant_ctx.tenant_id,
@@ -102,7 +164,6 @@ async def get_session_info(
 
     except SessionNotFoundError as e:
         logger.warning(f"Session not found {e}")
-        # 404: esiste per altri tenant o non esiste proprio
         raise HTTPException(status_code=404, detail=str(e))
     except ConfigurationError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -110,6 +171,388 @@ async def get_session_info(
         raise HTTPException(status_code=502, detail=str(e))
     except Exception:
         raise HTTPException(status_code=500, detail="Internal Error")
+
+
+@router.get("/{session_id}/prompts", response_model=PromptListResponse)
+async def list_prompts(
+    session_id: str,
+    tenant_ctx: TenantDep,
+    server_name: Optional[str] = Query(
+        default=None,
+        description="Specific server name to use. Optional only when the session has exactly one MCP server.",
+    ),
+    session_manager: SessionManager = Depends(get_session_manager),
+):
+    """List prompts exposed by the selected MCP server."""
+    operation = "list_prompts"
+    try:
+        wrapper = await _get_owned_wrapper(
+            session_id=session_id,
+            tenant_ctx=tenant_ctx,
+            session_manager=session_manager,
+        )
+        result = await wrapper.list_prompts(server_name=server_name)
+        return PromptListResponse(
+            session_id=session_id,
+            server_name=wrapper.last_server_used or server_name or "",
+            prompts=normalize_prompt_list(result),
+        )
+    except SessionNotFoundError as e:
+        raise _capability_error(
+            status_code=404,
+            code="MCP_SESSION_NOT_FOUND",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+        )
+    except ConfigurationError as e:
+        raise _capability_error(
+            status_code=400,
+            code="MCP_CONFIGURATION_ERROR",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+        )
+    except MCPCapabilityNotSupportedError as e:
+        raise _capability_error(
+            status_code=501,
+            code="MCP_CAPABILITY_NOT_SUPPORTED",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            capability=e.capability,
+            server_name=e.server_name,
+        )
+    except MCPCapabilityUpstreamError as e:
+        raise _capability_error(
+            status_code=502,
+            code="MCP_UPSTREAM_ERROR",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            capability=e.capability,
+            server_name=e.server_name,
+        )
+    except MCPWrapperError as e:
+        raise _capability_error(
+            status_code=502,
+            code="MCP_UPSTREAM_ERROR",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+        )
+    except Exception:
+        raise _capability_error(
+            status_code=500,
+            code="MCP_INTERNAL_ERROR",
+            message="Internal Error",
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+        )
+
+
+@router.post("/{session_id}/prompts/{prompt_name}/render", response_model=PromptRenderResponse)
+async def render_prompt(
+    session_id: str,
+    prompt_name: str,
+    request: PromptRenderRequest,
+    tenant_ctx: TenantDep,
+    session_manager: SessionManager = Depends(get_session_manager),
+):
+    """Render/get a prompt from the selected MCP server."""
+    operation = "render_prompt"
+    try:
+        wrapper = await _get_owned_wrapper(
+            session_id=session_id,
+            tenant_ctx=tenant_ctx,
+            session_manager=session_manager,
+        )
+        result = await wrapper.render_prompt(
+            prompt_name,
+            arguments=request.arguments,
+            server_name=request.server_name,
+        )
+        description, messages = normalize_prompt_render(result)
+        return PromptRenderResponse(
+            session_id=session_id,
+            server_name=wrapper.last_server_used or request.server_name or "",
+            prompt_name=prompt_name,
+            description=description,
+            messages=messages,
+        )
+    except SessionNotFoundError as e:
+        raise _capability_error(
+            status_code=404,
+            code="MCP_SESSION_NOT_FOUND",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            prompt_name=prompt_name,
+        )
+    except ConfigurationError as e:
+        raise _capability_error(
+            status_code=400,
+            code="MCP_CONFIGURATION_ERROR",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            prompt_name=prompt_name,
+        )
+    except MCPCapabilityNotSupportedError as e:
+        raise _capability_error(
+            status_code=501,
+            code="MCP_CAPABILITY_NOT_SUPPORTED",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            prompt_name=prompt_name,
+            capability=e.capability,
+            server_name=e.server_name,
+        )
+    except MCPCapabilityUpstreamError as e:
+        raise _capability_error(
+            status_code=502,
+            code="MCP_UPSTREAM_ERROR",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            prompt_name=prompt_name,
+            capability=e.capability,
+            server_name=e.server_name,
+        )
+    except MCPWrapperError as e:
+        raise _capability_error(
+            status_code=502,
+            code="MCP_UPSTREAM_ERROR",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            prompt_name=prompt_name,
+        )
+    except Exception:
+        raise _capability_error(
+            status_code=500,
+            code="MCP_INTERNAL_ERROR",
+            message="Internal Error",
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            prompt_name=prompt_name,
+        )
+
+
+@router.get("/{session_id}/resources", response_model=ResourceListResponse)
+async def list_resources(
+    session_id: str,
+    tenant_ctx: TenantDep,
+    server_name: Optional[str] = Query(
+        default=None,
+        description="Specific server name to use. Optional only when the session has exactly one MCP server.",
+    ),
+    session_manager: SessionManager = Depends(get_session_manager),
+):
+    """List resources exposed by the selected MCP server."""
+    operation = "list_resources"
+    try:
+        wrapper = await _get_owned_wrapper(
+            session_id=session_id,
+            tenant_ctx=tenant_ctx,
+            session_manager=session_manager,
+        )
+        result = await wrapper.list_resources(server_name=server_name)
+        return ResourceListResponse(
+            session_id=session_id,
+            server_name=wrapper.last_server_used or server_name or "",
+            resources=normalize_resource_list(result),
+        )
+    except SessionNotFoundError as e:
+        raise _capability_error(
+            status_code=404,
+            code="MCP_SESSION_NOT_FOUND",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+        )
+    except ConfigurationError as e:
+        raise _capability_error(
+            status_code=400,
+            code="MCP_CONFIGURATION_ERROR",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+        )
+    except MCPCapabilityNotSupportedError as e:
+        raise _capability_error(
+            status_code=501,
+            code="MCP_CAPABILITY_NOT_SUPPORTED",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            capability=e.capability,
+            server_name=e.server_name,
+        )
+    except MCPCapabilityUpstreamError as e:
+        raise _capability_error(
+            status_code=502,
+            code="MCP_UPSTREAM_ERROR",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            capability=e.capability,
+            server_name=e.server_name,
+        )
+    except MCPWrapperError as e:
+        raise _capability_error(
+            status_code=502,
+            code="MCP_UPSTREAM_ERROR",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+        )
+    except Exception:
+        raise _capability_error(
+            status_code=500,
+            code="MCP_INTERNAL_ERROR",
+            message="Internal Error",
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+        )
+
+
+@router.post("/{session_id}/resources/read", response_model=ResourceReadResponse)
+async def read_resource(
+    session_id: str,
+    request: ResourceReadRequest,
+    tenant_ctx: TenantDep,
+    session_manager: SessionManager = Depends(get_session_manager),
+):
+    """Read an MCP resource from the selected server."""
+    operation = "read_resource"
+    try:
+        wrapper = await _get_owned_wrapper(
+            session_id=session_id,
+            tenant_ctx=tenant_ctx,
+            session_manager=session_manager,
+        )
+        result = await wrapper.read_resource(
+            request.uri,
+            server_name=request.server_name,
+        )
+        try:
+            return ResourceReadResponse(
+                session_id=session_id,
+                server_name=wrapper.last_server_used or request.server_name or "",
+                uri=request.uri,
+                contents=normalize_resource_read(result),
+            )
+        except ValidationError as e:
+            logger.exception(
+                "Invalid MCP read_resource payload",
+                extra={
+                    "session_id": session_id,
+                    "server_name": wrapper.last_server_used or request.server_name,
+                    "uri": request.uri,
+                },
+            )
+            raise _capability_error(
+                status_code=502,
+                code="MCP_UPSTREAM_ERROR",
+                message=f"read_resource returned an incompatible payload: {e}",
+                operation=operation,
+                tenant_ctx=tenant_ctx,
+                session_id=session_id,
+                uri=request.uri,
+                server_name=wrapper.last_server_used or request.server_name,
+            )
+    except SessionNotFoundError as e:
+        raise _capability_error(
+            status_code=404,
+            code="MCP_SESSION_NOT_FOUND",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            uri=request.uri,
+        )
+    except ConfigurationError as e:
+        raise _capability_error(
+            status_code=400,
+            code="MCP_CONFIGURATION_ERROR",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            uri=request.uri,
+        )
+    except MCPCapabilityNotSupportedError as e:
+        raise _capability_error(
+            status_code=501,
+            code="MCP_CAPABILITY_NOT_SUPPORTED",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            uri=request.uri,
+            capability=e.capability,
+            server_name=e.server_name,
+        )
+    except MCPCapabilityUpstreamError as e:
+        raise _capability_error(
+            status_code=502,
+            code="MCP_UPSTREAM_ERROR",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            uri=request.uri,
+            capability=e.capability,
+            server_name=e.server_name,
+        )
+    except MCPWrapperError as e:
+        raise _capability_error(
+            status_code=502,
+            code="MCP_UPSTREAM_ERROR",
+            message=str(e),
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            uri=request.uri,
+        )
+    except Exception:
+        logger.exception(
+            "Unhandled exception while serving read_resource",
+            extra={
+                "session_id": session_id,
+                "server_name": request.server_name,
+                "uri": request.uri,
+            },
+        )
+        raise _capability_error(
+            status_code=500,
+            code="MCP_INTERNAL_ERROR",
+            message="Internal Error",
+            operation=operation,
+            tenant_ctx=tenant_ctx,
+            session_id=session_id,
+            uri=request.uri,
+        )
 
 
 @router.delete("/{session_id}")
@@ -121,17 +564,11 @@ async def delete_session(
 ):
     """Delete a session by ID for the current tenant."""
     try:
-        # First, ensure the session exists and belongs to the current tenant.
-        # get_session will raise SessionNotFoundError if:
-        # - the session does not exist, or
-        # - it exists but belongs to a different tenant.
         await session_manager.get_session(
             session_id=session_id,
             tenant_id=tenant_ctx.tenant_id,
         )
 
-        # If we reach here, the session belongs to this tenant.
-        # We can safely schedule the cleanup in the background.
         background_tasks.add_task(
             session_manager.delete_session,
             session_id,
@@ -142,7 +579,6 @@ async def delete_session(
 
     except SessionNotFoundError as e:
         logger.warning(f"Deleting not found session: {e}")
-        # 404 even if the session exists for another tenant (isolation)
         raise HTTPException(status_code=404, detail=str(e))
     except ConfigurationError as e:
         raise HTTPException(status_code=400, detail=str(e))

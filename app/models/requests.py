@@ -2,8 +2,10 @@
 Pydantic models for HTTP requests
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Literal, Optional
+
+from pydantic import BaseModel, Field, model_validator
+
 from app.models.config import SessionConfig
 
 
@@ -17,6 +19,75 @@ class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Query to execute")
     max_steps: Optional[int] = Field(None, gt=0, le=100, description="Override for maximum number of steps")
     server_name: Optional[str] = Field(None, description="Specific server name to use")
+
+
+class QueryOperationCreateRequest(BaseModel):
+    """Request to create an asynchronous session operation."""
+
+    query: Optional[str] = Field(None, min_length=1, description="Query to execute")
+    max_steps: Optional[int] = Field(None, gt=0, le=100, description="Override for maximum number of steps")
+    server_name: Optional[str] = Field(None, description="Specific server name to use")
+    tool_name: Optional[str] = Field(None, min_length=1, description="Direct MCP tool name to invoke")
+    arguments: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Tool arguments forwarded to the MCP server for direct tool invocation.",
+    )
+
+    @model_validator(mode="after")
+    def validate_operation_shape(self) -> "QueryOperationCreateRequest":
+        has_query = self.query is not None
+        has_tool_invocation = self.tool_name is not None
+
+        if has_query == has_tool_invocation:
+            raise ValueError("Exactly one of 'query' or 'tool_name' must be provided")
+
+        if has_query and self.arguments:
+            raise ValueError("Field 'arguments' is only supported when 'tool_name' is provided")
+
+        if has_tool_invocation and self.max_steps is not None:
+            raise ValueError("Field 'max_steps' is only supported when 'query' is provided")
+
+        return self
+
+
+class QueryOperationResumeRequest(BaseModel):
+    """Request to resume a paused asynchronous query operation."""
+
+    action: Literal["accept", "decline", "cancel"] = Field(
+        ...,
+        description="How the user responded to the pending elicitation request.",
+    )
+    content: Optional[Any] = Field(
+        default=None,
+        description="Structured user response payload. Required for accept.",
+    )
+    interaction_id: Optional[str] = Field(
+        default=None,
+        description="Optional interaction identifier to guard against stale resumes.",
+    )
+
+
+class PromptRenderRequest(BaseModel):
+    """Request to render/get a prompt from an MCP server."""
+
+    server_name: Optional[str] = Field(
+        default=None,
+        description="Specific server name to use. Optional only when the session has exactly one MCP server.",
+    )
+    arguments: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Prompt arguments forwarded to the MCP server.",
+    )
+
+
+class ResourceReadRequest(BaseModel):
+    """Request to read an MCP resource."""
+
+    uri: str = Field(..., min_length=1, description="Resource URI to read")
+    server_name: Optional[str] = Field(
+        default=None,
+        description="Specific server name to use. Optional only when the session has exactly one MCP server.",
+    )
 
 class SessionUpdateRequest(BaseModel):
     """Request to update a session"""
