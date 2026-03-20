@@ -20,6 +20,7 @@ from app.core.exceptions import (
     MCPCapabilityNotSupportedError,
     MCPCapabilityUpstreamError,
     MCPWrapperError,
+    QueryOperationElicitationDeclinedError,
 )
 from app.core.guardrail_runner import GuardrailExecutionContext, GuardrailRunner
 from app.core.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
@@ -845,6 +846,8 @@ class MCPWrapper:
                     return await self._await_if_needed(method(*args, **kwargs))
                 except MCPCapabilityNotSupportedError:
                     break
+                except QueryOperationElicitationDeclinedError:
+                    raise
                 except TypeError as exc:
                     if compatibility is None and not self._type_error_entered_callable(target_method, exc):
                         signature_mismatch = True
@@ -989,6 +992,65 @@ class MCPWrapper:
             ],
             server_name=server_name,
         )
+
+    async def call_tool(
+        self,
+        tool_name: str,
+        *,
+        arguments: Optional[Dict[str, Any]] = None,
+        server_name: Optional[str] = None,
+    ) -> Any:
+        if not self._initialized:
+            await self.initialize()
+
+        tool_arguments = dict(arguments or {})
+        resolved_server_name = self._resolve_capability_server_name(server_name)
+
+        try:
+            result = await self._run_capability_operation(
+                operation="call_tool",
+                method_names=["call_tool"],
+                call_variants=[
+                    ((tool_name,), {"arguments": tool_arguments}),
+                    ((tool_name, tool_arguments), {}),
+                    ((), {"name": tool_name, "arguments": tool_arguments}),
+                    ((), {"tool_name": tool_name, "arguments": tool_arguments}),
+                ],
+                server_name=resolved_server_name,
+            )
+            self._steps_used = 0
+            self._last_server_used = resolved_server_name
+            self._record_audit_event(
+                event_type="tool_execution",
+                outcome="completed",
+                tool_name=tool_name,
+                details={
+                    "server_name": resolved_server_name,
+                    "arguments_present": bool(tool_arguments),
+                },
+            )
+            return result
+        except MCPToolNotAllowedError:
+            self._record_audit_event(
+                event_type="tool_execution",
+                outcome="blocked",
+                tool_name=tool_name,
+                details={"reason": "tool_policy", "server_name": resolved_server_name},
+            )
+            raise
+        except GuardrailViolationError:
+            self._record_audit_event(
+                event_type="tool_execution",
+                outcome="blocked",
+                tool_name=tool_name,
+                details={"reason": "guardrail", "server_name": resolved_server_name},
+            )
+            raise
+        except (ConfigurationError, MCPWrapperError, QueryOperationElicitationDeclinedError):
+            raise
+        except Exception as exc:
+            logger.error("Tool execution error: %s", exc)
+            raise MCPWrapperError(f"Tool execution failed: {exc}")
 
     @staticmethod
     def _serialize_request_context(context: Any) -> Dict[str, Any]:

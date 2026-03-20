@@ -188,7 +188,7 @@ async def create_query_operation(
     tenant_ctx: TenantDep,
     session_manager: SessionManager = Depends(get_session_manager),
 ):
-    """Create an asynchronous query operation for an existing session."""
+    """Create an asynchronous session operation for an existing session."""
     try:
         return await session_manager.create_query_operation(
             session_id=session_id,

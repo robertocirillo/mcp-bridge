@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from fastapi.encoders import jsonable_encoder
+
 from app.core.mcp_wrapper import MCPWrapper
 from app.core.exceptions import (
     ConfigurationError,
@@ -31,6 +33,7 @@ from app.models.responses import (
     QueryOperationResponse,
     QueryOperationResult,
     QueryOperationStatus,
+    QueryOperationToolInput,
 )
 from config import settings
 
@@ -365,11 +368,7 @@ class SessionManager:
             metadata=QueryOperationMetadata(
                 created_at=timestamp,
                 updated_at=timestamp,
-                request=QueryOperationInput(
-                    query=request.query,
-                    max_steps=request.max_steps,
-                    server_name=request.server_name,
-                ),
+                request=self._build_query_operation_input(request),
             ),
         )
 
@@ -583,7 +582,7 @@ class SessionManager:
         tenant_id: Optional[str],
         run_id: Optional[str],
     ) -> None:
-        request: QueryOperationInput | None = None
+        request: QueryOperationInput | QueryOperationToolInput | None = None
 
         try:
             request = await self._set_query_operation_status(
@@ -609,11 +608,22 @@ class SessionManager:
                 run_id=run_id,
                 session_id=session_id,
             ):
-                result = await wrapper.run_query(
-                    query=request.query,
-                    max_steps=request.max_steps,
-                    server_name=request.server_name,
-                )
+                if isinstance(request, QueryOperationToolInput):
+                    result = await wrapper.call_tool(
+                        tool_name=request.tool_name,
+                        arguments=request.arguments,
+                        server_name=request.server_name,
+                    )
+                    serialized_result = self._serialize_operation_result(result)
+                    steps_used = 0
+                else:
+                    result = await wrapper.run_query(
+                        query=request.query,
+                        max_steps=request.max_steps,
+                        server_name=request.server_name,
+                    )
+                    serialized_result = result
+                    steps_used = wrapper.steps_used
             execution_time = asyncio.get_running_loop().time() - start_time
 
             server_used = wrapper.last_server_used
@@ -625,9 +635,9 @@ class SessionManager:
                 session_id=session_id,
                 operation_id=operation_id,
                 result=QueryOperationResult(
-                    result=result,
+                    result=serialized_result,
                     execution_time=execution_time,
-                    steps_used=wrapper.steps_used,
+                    steps_used=steps_used,
                     timestamp=datetime.now(),
                     server_used=server_used,
                     has_mcp_servers=has_mcp_servers,
@@ -755,13 +765,34 @@ class SessionManager:
                 f"Resume action '{request.action}' must not include a content payload"
             )
 
+    @staticmethod
+    def _build_query_operation_input(
+        request: QueryOperationCreateRequest,
+    ) -> QueryOperationInput | QueryOperationToolInput:
+        if request.tool_name is not None:
+            return QueryOperationToolInput(
+                server_name=request.server_name,
+                tool_name=request.tool_name,
+                arguments=dict(request.arguments),
+            )
+
+        return QueryOperationInput(
+            query=request.query or "",
+            max_steps=request.max_steps,
+            server_name=request.server_name,
+        )
+
+    @staticmethod
+    def _serialize_operation_result(result: Any) -> Any:
+        return jsonable_encoder(result)
+
     async def _set_query_operation_status(
         self,
         *,
         session_id: str,
         operation_id: str,
         status: QueryOperationStatus,
-    ) -> Optional[QueryOperationInput]:
+    ) -> Optional[QueryOperationInput | QueryOperationToolInput]:
         async with self._lock:
             operation = self._query_operations.get(session_id, {}).get(operation_id)
             if operation is None:

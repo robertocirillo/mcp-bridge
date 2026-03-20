@@ -62,18 +62,29 @@ class QueryOperationInput(BaseModel):
     server_name: Optional[str] = Field(None, description="Specific server name to use")
 
 
+class QueryOperationToolInput(BaseModel):
+    """Snapshot of a direct MCP tool invocation associated with an operation."""
+
+    server_name: Optional[str] = Field(None, description="Specific server name to use")
+    tool_name: str = Field(..., description="Direct MCP tool name to invoke")
+    arguments: Dict[str, Any] = Field(default_factory=dict, description="Tool arguments")
+
+
 class QueryOperationMetadata(BaseModel):
     """Stable metadata for a query operation."""
 
     created_at: datetime = Field(..., description="Operation creation timestamp")
     updated_at: datetime = Field(..., description="Last operation update timestamp")
-    request: QueryOperationInput = Field(..., description="Original request snapshot")
+    request: QueryOperationInput | QueryOperationToolInput = Field(
+        ...,
+        description="Original request snapshot.",
+    )
 
 
 class QueryOperationResult(BaseModel):
     """Terminal result payload for a completed operation."""
 
-    result: str = Field(..., description="Execution result")
+    result: Any = Field(..., description="Execution result")
     execution_time: float = Field(..., description="Execution time in seconds")
     steps_used: int = Field(..., description="Number of steps used")
     timestamp: datetime = Field(..., description="Execution timestamp")

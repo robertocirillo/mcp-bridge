@@ -4,7 +4,7 @@ Pydantic models for HTTP requests
 
 from typing import Any, Dict, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.models.config import SessionConfig
 
@@ -21,8 +21,33 @@ class QueryRequest(BaseModel):
     server_name: Optional[str] = Field(None, description="Specific server name to use")
 
 
-class QueryOperationCreateRequest(QueryRequest):
-    """Request to create an asynchronous query operation."""
+class QueryOperationCreateRequest(BaseModel):
+    """Request to create an asynchronous session operation."""
+
+    query: Optional[str] = Field(None, min_length=1, description="Query to execute")
+    max_steps: Optional[int] = Field(None, gt=0, le=100, description="Override for maximum number of steps")
+    server_name: Optional[str] = Field(None, description="Specific server name to use")
+    tool_name: Optional[str] = Field(None, min_length=1, description="Direct MCP tool name to invoke")
+    arguments: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Tool arguments forwarded to the MCP server for direct tool invocation.",
+    )
+
+    @model_validator(mode="after")
+    def validate_operation_shape(self) -> "QueryOperationCreateRequest":
+        has_query = self.query is not None
+        has_tool_invocation = self.tool_name is not None
+
+        if has_query == has_tool_invocation:
+            raise ValueError("Exactly one of 'query' or 'tool_name' must be provided")
+
+        if has_query and self.arguments:
+            raise ValueError("Field 'arguments' is only supported when 'tool_name' is provided")
+
+        if has_tool_invocation and self.max_steps is not None:
+            raise ValueError("Field 'max_steps' is only supported when 'query' is provided")
+
+        return self
 
 
 class QueryOperationResumeRequest(BaseModel):
