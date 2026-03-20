@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import time
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,7 @@ def _build_test_api(
     prompt_signature: str = "standard",
     capability_mode: str = "normal",
     session_materialization: str = "eager",
+    agent_supports_server_name: bool = True,
 ):
     from fastapi import FastAPI
 
@@ -207,8 +209,7 @@ def _build_test_api(
             self.steps_used = 0
             self.last_server_used = None
 
-        async def run(self, query: str, max_steps=None, server_name=None):
-            self.steps_used = 2
+        def _mark_server(self, server_name: str | None):
             if server_name is not None:
                 self.last_server_used = server_name
                 self.wrapper._base_client.activate_session(server_name)
@@ -217,7 +218,23 @@ def _build_test_api(
                 self.wrapper._base_client.activate_session(self.last_server_used)
             else:
                 self.last_server_used = None
+
+        async def run_with_server_name(self, query: str, max_steps=None, server_name=None):
+            self.steps_used = 2
+            self._mark_server(server_name)
             return f"QUERY:{query}"
+
+        async def run_without_server_name(self, query: str, max_steps=None):
+            self.steps_used = 2
+            self._mark_server(getattr(self.wrapper, "_active_server_name", None))
+            return f"QUERY:{query}"
+
+        def __getattribute__(self, item):
+            if item == "run":
+                if agent_supports_server_name:
+                    return object.__getattribute__(self, "run_with_server_name")
+                return object.__getattribute__(self, "run_without_server_name")
+            return object.__getattribute__(self, item)
 
     async def _stub_initialize(self):
         if getattr(self, "_initialized", False):
@@ -249,6 +266,7 @@ def _build_test_app(
     prompt_signature: str = "standard",
     capability_mode: str = "normal",
     session_materialization: str = "eager",
+    agent_supports_server_name: bool = True,
 ):
     from fastapi.testclient import TestClient
 
@@ -258,6 +276,7 @@ def _build_test_app(
         prompt_signature=prompt_signature,
         capability_mode=capability_mode,
         session_materialization=session_materialization,
+        agent_supports_server_name=agent_supports_server_name,
     )
     return TestClient(app), mgr
 
@@ -474,6 +493,50 @@ def test_resource_list_and_read_routes_expose_text_structured_and_binary(monkeyp
     assert read_body["contents"][2]["blob_base64"] == base64.b64encode(b"\x00\x01\x02").decode("ascii")
 
 
+def test_resource_read_route_supports_real_mcp_read_resource_result(monkeypatch):
+    from mcp import types
+
+    client, mgr = _build_test_app(monkeypatch)
+    session_id = _create_session(
+        client,
+        tenant_id="tenant-a",
+        mcp_servers={"everything": _server_config()},
+    )
+
+    session_data = asyncio.run(mgr.get_session(session_id, tenant_id="tenant-a"))
+    session = session_data.wrapper._base_client.sessions["everything"]
+
+    async def _read_resource_runtime_shape(uri: str):
+        return types.ReadResourceResult(
+            contents=[
+                types.TextResourceContents(
+                    uri=uri,
+                    mimeType="text/markdown",
+                    text="# Structure",
+                ),
+                types.BlobResourceContents(
+                    uri=uri,
+                    mimeType="application/octet-stream",
+                    blob=base64.b64encode(b"\x00\x01").decode("ascii"),
+                ),
+            ]
+        )
+
+    session.read_resource = _read_resource_runtime_shape
+
+    read_response = client.post(
+        f"/sessions/{session_id}/resources/read",
+        json={"uri": "demo://resource/static/document/structure.md"},
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+    assert read_response.status_code == 200, read_response.text
+    read_body = read_response.json()
+    assert read_body["server_name"] == "everything"
+    assert read_body["contents"][0]["uri"] == "demo://resource/static/document/structure.md"
+    assert read_body["contents"][0]["text"] == "# Structure"
+    assert read_body["contents"][1]["blob_base64"] == base64.b64encode(b"\x00\x01").decode("ascii")
+
+
 def test_server_name_resolution_for_new_capabilities(monkeypatch):
     client, _mgr = _build_test_app(monkeypatch)
 
@@ -541,6 +604,29 @@ def test_existing_query_flow_still_works(monkeypatch):
     assert body["result"] == "QUERY:hello"
     assert body["steps_used"] == 2
     assert body["has_mcp_servers"] is False
+
+
+def test_sync_query_route_supports_agent_runtime_without_server_name_kwarg(monkeypatch):
+    client, _mgr = _build_test_app(
+        monkeypatch,
+        agent_supports_server_name=False,
+    )
+    session_id = _create_session(
+        client,
+        tenant_id="tenant-a",
+        mcp_servers={"everything": _server_config()},
+    )
+
+    response = client.post(
+        f"/sessions/{session_id}/query",
+        json={"query": "hello", "server_name": "everything"},
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["result"] == "QUERY:hello"
+    assert body["server_used"] == "everything"
+    assert body["has_mcp_servers"] is True
 
 
 def test_query_operation_create_returns_queued_state(monkeypatch):
@@ -652,6 +738,93 @@ async def test_query_operation_polling_reaches_completed_with_result(monkeypatch
         assert final_body["result"]["server_used"] == "alpha"
         assert final_body["result"]["has_mcp_servers"] is True
         assert final_body["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_query_operation_supports_agent_runtime_without_server_name_kwarg(monkeypatch):
+    from httpx import ASGITransport, AsyncClient
+
+    app, _mgr = _build_test_api(
+        monkeypatch,
+        agent_supports_server_name=False,
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(
+            client,
+            tenant_id="tenant-a",
+            mcp_servers={"everything": _server_config()},
+        )
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={"query": "poll me", "server_name": "everything"},
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+        assert create_response.status_code == 200, create_response.text
+        operation_id = create_response.json()["operation_id"]
+
+        final_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=operation_id,
+            tenant_id="tenant-a",
+            expected_status="completed",
+        )
+        assert final_body["error"] is None
+        assert final_body["result"]["result"] == "QUERY:poll me"
+        assert final_body["result"]["server_used"] == "everything"
+
+
+@pytest.mark.asyncio
+async def test_run_query_uses_scoped_runtime_for_multi_server_target_when_agent_kwarg_is_unsupported(monkeypatch):
+    from app.core.mcp_wrapper import MCPWrapper
+
+    monkeypatch.setattr(MCPWrapper, "_import_dependencies", lambda self: None)
+
+    wrapper = MCPWrapper(
+        llm_provider="ollama",
+        model="dummy",
+        temperature=0,
+        mcp_servers={"alpha": _server_config(), "beta": _server_config()},
+    )
+    wrapper._initialized = True
+
+    class _AgentWithoutServerName:
+        steps_used = 1
+        last_server_used = None
+
+        async def run(self, query: str, max_steps=None):
+            raise AssertionError("Primary agent should not be used for targeted multi-server runs")
+
+    class _ScopedAgent:
+        def __init__(self, server_name: str):
+            self.server_name = server_name
+            self.steps_used = 4
+            self.last_server_used = server_name
+            self.calls = []
+
+        async def run(self, query: str, max_steps=None):
+            self.calls.append({"query": query, "max_steps": max_steps})
+            return f"SCOPED:{self.server_name}:{query}:{max_steps}"
+
+    wrapper._agent = _AgentWithoutServerName()
+    scoped_agents = []
+
+    @asynccontextmanager
+    async def _stub_temporary_query_agent(self, *, server_name: str):
+        agent = _ScopedAgent(server_name)
+        scoped_agents.append(agent)
+        yield agent
+
+    monkeypatch.setattr(MCPWrapper, "_temporary_query_agent", _stub_temporary_query_agent)
+
+    result = await wrapper.run_query("hello", max_steps=3, server_name="beta")
+
+    assert result == "SCOPED:beta:hello:3"
+    assert len(scoped_agents) == 1
+    assert scoped_agents[0].calls == [{"query": "hello", "max_steps": 3}]
+    assert wrapper.steps_used == 4
+    assert wrapper.last_server_used == "beta"
 
 
 @pytest.mark.asyncio

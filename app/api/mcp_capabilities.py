@@ -99,6 +99,14 @@ def normalize_json_value(value: Any) -> Any:
     return str(value)
 
 
+def normalize_string_value(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
 def normalize_message_content(content: Any) -> Dict[str, Any]:
     if content is None:
         return {}
@@ -181,6 +189,7 @@ def normalize_resource_read(raw_result: Any) -> List[ResourceContent]:
         text = pick_value(raw_content, "text")
         if text is None and isinstance(data_value, str):
             text = data_value
+        text = normalize_string_value(text)
 
         structured = pick_value(
             raw_content,
@@ -206,8 +215,10 @@ def normalize_resource_read(raw_result: Any) -> List[ResourceContent]:
 
         contents.append(
             ResourceContent(
-                uri=pick_value(raw_content, "uri"),
-                mime_type=pick_value(raw_content, "mimeType", "mime_type"),
+                uri=normalize_string_value(pick_value(raw_content, "uri")),
+                mime_type=normalize_string_value(
+                    pick_value(raw_content, "mimeType", "mime_type")
+                ),
                 text=text,
                 blob_base64=encode_blob(blob_value),
                 structured=normalize_json_value(structured),

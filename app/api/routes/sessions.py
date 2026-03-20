@@ -6,6 +6,7 @@ import logging
 from typing import Any, Annotated, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import ValidationError
 
 from app.api.mcp_capabilities import (
     normalize_prompt_list,
@@ -454,12 +455,32 @@ async def read_resource(
             request.uri,
             server_name=request.server_name,
         )
-        return ResourceReadResponse(
-            session_id=session_id,
-            server_name=wrapper.last_server_used or request.server_name or "",
-            uri=request.uri,
-            contents=normalize_resource_read(result),
-        )
+        try:
+            return ResourceReadResponse(
+                session_id=session_id,
+                server_name=wrapper.last_server_used or request.server_name or "",
+                uri=request.uri,
+                contents=normalize_resource_read(result),
+            )
+        except ValidationError as e:
+            logger.exception(
+                "Invalid MCP read_resource payload",
+                extra={
+                    "session_id": session_id,
+                    "server_name": wrapper.last_server_used or request.server_name,
+                    "uri": request.uri,
+                },
+            )
+            raise _capability_error(
+                status_code=502,
+                code="MCP_UPSTREAM_ERROR",
+                message=f"read_resource returned an incompatible payload: {e}",
+                operation=operation,
+                tenant_ctx=tenant_ctx,
+                session_id=session_id,
+                uri=request.uri,
+                server_name=wrapper.last_server_used or request.server_name,
+            )
     except SessionNotFoundError as e:
         raise _capability_error(
             status_code=404,
@@ -515,6 +536,14 @@ async def read_resource(
             uri=request.uri,
         )
     except Exception:
+        logger.exception(
+            "Unhandled exception while serving read_resource",
+            extra={
+                "session_id": session_id,
+                "server_name": request.server_name,
+                "uri": request.uri,
+            },
+        )
         raise _capability_error(
             status_code=500,
             code="MCP_INTERNAL_ERROR",

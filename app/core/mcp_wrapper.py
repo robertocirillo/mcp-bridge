@@ -101,6 +101,8 @@ class MCPWrapper:
         # Keep runtime handles and execution state separate from immutable configuration.
         self._agent = None
         self._client = None
+        self._base_client = None
+        self._llm = None
         self._initialized = False
         self._steps_used = 0
         self._last_server_used = None
@@ -847,12 +849,28 @@ class MCPWrapper:
                     if compatibility is None and not self._type_error_entered_callable(target_method, exc):
                         signature_mismatch = True
                         continue
+                    logger.exception(
+                        "MCP capability invocation failed",
+                        extra={
+                            "operation": operation,
+                            "server_name": server_name,
+                            "method_name": method_name,
+                        },
+                    )
                     raise MCPCapabilityUpstreamError(
                         operation,
                         f"{operation} failed: {exc}",
                         server_name=server_name,
                     ) from exc
                 except Exception as exc:
+                    logger.exception(
+                        "MCP capability invocation failed",
+                        extra={
+                            "operation": operation,
+                            "server_name": server_name,
+                            "method_name": method_name,
+                        },
+                    )
                     raise MCPCapabilityUpstreamError(
                         operation,
                         f"{operation} failed: {exc}",
@@ -1022,6 +1040,98 @@ class MCPWrapper:
         )
         return self._build_runtime_elicitation_result(content=content)
 
+    def _build_client_kwargs(
+        self,
+        *,
+        server_names: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        selected_servers = self.mcp_servers
+        if server_names is not None:
+            selected_servers = {
+                name: self.mcp_servers[name]
+                for name in server_names
+            }
+
+        client_kwargs: Dict[str, Any] = {"config": {"mcpServers": selected_servers}}
+        if self._elicitation_handler is not None:
+            client_kwargs["elicitation_callback"] = self._handle_runtime_elicitation
+
+        if self.sandbox:
+            client_kwargs["sandbox"] = True
+            if self.sandbox_options:
+                client_kwargs["sandbox_options"] = {
+                    "api_key": self.sandbox_options.get("api_key", os.getenv("E2B_API_KEY")),
+                    "sandbox_template_id": self.sandbox_options.get("sandbox_template_id", "base"),
+                    "supergateway_command": self.sandbox_options.get(
+                        "supergateway_command",
+                        "npx -y supergateway",
+                    ),
+                }
+
+        return client_kwargs
+
+    def _create_runtime_handles(
+        self,
+        *,
+        server_names: Optional[List[str]] = None,
+    ) -> tuple[Any, Any, Any]:
+        llm = self._llm
+        if llm is None:
+            llm = self._create_llm()
+            self._llm = llm
+
+        base_client = self.MCPClient(**self._build_client_kwargs(server_names=server_names))
+        client = _GuardedMCPClient(base_client, self)
+
+        agent_kwargs = {
+            "llm": llm,
+            "client": client,
+            "max_steps": self.max_steps,
+            "use_server_manager": self.use_server_manager,
+            "verbose": self.verbose,
+        }
+        if self.disallowed_tools:
+            agent_kwargs["disallowed_tools"] = self.disallowed_tools
+
+        agent = self.MCPAgent(**agent_kwargs)
+        return base_client, client, agent
+
+    @staticmethod
+    def _agent_run_supports_server_name(agent: Any) -> bool:
+        run = getattr(agent, "run", None)
+        if run is None:
+            return False
+        try:
+            signature = inspect.signature(run)
+        except (TypeError, ValueError):
+            return False
+        return "server_name" in signature.parameters
+
+    async def _close_runtime_handles(self, *, agent: Any, client: Any) -> None:
+        client_closed = False
+        if agent and hasattr(agent, "close"):
+            try:
+                maybe_awaitable = agent.close()
+                if inspect.isawaitable(maybe_awaitable):
+                    await maybe_awaitable
+                client_closed = True
+            except Exception as exc:
+                logger.warning("Error closing MCP agent runtime: %s", exc)
+
+        if client and not client_closed:
+            try:
+                await client.close_all_sessions()
+            except Exception as exc:
+                logger.warning("Error closing MCP client runtime: %s", exc)
+
+    @asynccontextmanager
+    async def _temporary_query_agent(self, *, server_name: str):
+        _, client, agent = self._create_runtime_handles(server_names=[server_name])
+        try:
+            yield agent
+        finally:
+            await self._close_runtime_handles(agent=agent, client=client)
+
     async def initialize(self) -> None:
         # Initialize runtime resources once and retry transient setup failures.
         if self._initialized:
@@ -1039,40 +1149,8 @@ class MCPWrapper:
 
     async def _initialize_internal(self) -> None:
         # Create the LLM first because both agent-only and MCP-backed modes depend on it.
-        llm = self._create_llm()
-        client_kwargs: Dict[str, Any] = {"config": {"mcpServers": self.mcp_servers}}
-        if self._elicitation_handler is not None:
-            client_kwargs["elicitation_callback"] = self._handle_runtime_elicitation
-
-        # Forward sandbox settings only when sandbox execution was explicitly enabled.
-        if self.sandbox:
-            client_kwargs["sandbox"] = True
-            if self.sandbox_options:
-                client_kwargs["sandbox_options"] = {
-                    "api_key": self.sandbox_options.get("api_key", os.getenv("E2B_API_KEY")),
-                    "sandbox_template_id": self.sandbox_options.get("sandbox_template_id", "base"),
-                    "supergateway_command": self.sandbox_options.get(
-                        "supergateway_command",
-                        "npx -y supergateway",
-                    ),
-                }
-
-        # Wrap the raw MCP client so every tool call flows through wrapper policy and guardrail hooks.
-        base_client = self.MCPClient(**client_kwargs)
-        self._client = _GuardedMCPClient(base_client, self)
-
-        # Build the agent on top of the guarded client while preserving existing mcp-use options.
-        agent_kwargs = {
-            "llm": llm,
-            "client": self._client,
-            "max_steps": self.max_steps,
-            "use_server_manager": self.use_server_manager,
-            "verbose": self.verbose,
-        }
-        if self.disallowed_tools:
-            agent_kwargs["disallowed_tools"] = self.disallowed_tools
-
-        self._agent = self.MCPAgent(**agent_kwargs)
+        self._llm = self._create_llm()
+        self._base_client, self._client, self._agent = self._create_runtime_handles()
 
     async def run_query(
         self,
@@ -1103,29 +1181,63 @@ class MCPWrapper:
 
             # Track the active server so policy and audit logic can attribute tool calls correctly.
             self._active_server_name = server_name
+            self._last_server_used = None
             logger.debug("Executing query: %s...", query[:100])
+
+            if server_name and server_name not in self.mcp_servers:
+                raise ConfigurationError(f"Server '{server_name}' not configured")
 
             # Build the agent run payload and optionally scope it to a specific configured server.
             run_kwargs: Dict[str, Any] = {"query": query}
             if max_steps is not None:
                 run_kwargs["max_steps"] = max_steps
             if server_name:
-                if server_name not in self.mcp_servers:
-                    raise ConfigurationError(f"Server '{server_name}' not configured")
-                run_kwargs["server_name"] = server_name
                 self._last_server_used = server_name
 
-            async def execute_agent_run() -> Any:
-                # Keep the actual agent call isolated so retry logic can wrap only the fragile step.
-                return await self._agent.run(**run_kwargs)
+            agent = self._agent
+            if agent is None:
+                raise MCPWrapperError("MCP agent not initialized")
 
-            # Retry transient runtime failures without re-running initialization.
-            result = await retry_async(execute_agent_run, max_retries=2, delay=0.5)
-            self._steps_used = getattr(self._agent, "steps_used", 0)
+            supports_server_name = self._agent_run_supports_server_name(agent)
+
+            async def execute_agent_run(target_agent: Any) -> Any:
+                # Keep the actual agent call isolated so retry logic can wrap only the fragile step.
+                agent_run_kwargs = dict(run_kwargs)
+                if server_name and self._agent_run_supports_server_name(target_agent):
+                    agent_run_kwargs["server_name"] = server_name
+                return await target_agent.run(**agent_run_kwargs)
+
+            if server_name and len(self.mcp_servers) > 1 and not supports_server_name:
+                logger.debug(
+                    "Agent runtime does not support server_name; using scoped runtime for server '%s'",
+                    server_name,
+                )
+                async with self._temporary_query_agent(server_name=server_name) as scoped_agent:
+                    async def execute_scoped_agent_run() -> Any:
+                        return await execute_agent_run(scoped_agent)
+
+                    result = await retry_async(
+                        execute_scoped_agent_run,
+                        max_retries=2,
+                        delay=0.5,
+                    )
+                    agent = scoped_agent
+            else:
+                # Retry transient runtime failures without re-running initialization.
+                async def execute_default_agent_run() -> Any:
+                    return await execute_agent_run(agent)
+
+                result = await retry_async(
+                    execute_default_agent_run,
+                    max_retries=2,
+                    delay=0.5,
+                )
+
+            self._steps_used = getattr(agent, "steps_used", 0)
 
             # Fall back to the agent-reported server when no explicit server was pinned for the query.
-            if not self._last_server_used and hasattr(self._agent, "last_server_used"):
-                self._last_server_used = self._agent.last_server_used
+            if not self._last_server_used and hasattr(agent, "last_server_used"):
+                self._last_server_used = agent.last_server_used
 
             # Apply output guardrails and strip internal traces before returning the final answer.
             output = await self._run_after_model_guardrails(ctx, str(result))
@@ -1179,30 +1291,16 @@ class MCPWrapper:
 
         agent = self._agent
         client = self._client
-        client_closed = False
-
-        # Prefer the higher-level mcp-use runtime close if available because it owns
-        # the full MCP session lifecycle, including stdio-backed transports.
-        if agent and hasattr(agent, "close"):
-            try:
-                maybe_awaitable = agent.close()
-                if inspect.isawaitable(maybe_awaitable):
-                    await maybe_awaitable
-                client_closed = True
-                logger.debug("MCP agent closed successfully")
-            except Exception as exc:
-                logger.warning("Error closing MCP agent: %s", exc)
-
-        # Fall back to the client-level session cleanup for older or partial runtimes.
-        if client and not client_closed:
-            try:
-                await client.close_all_sessions()
-                logger.debug("MCP client closed successfully")
-            except Exception as exc:
-                logger.warning("Error closing MCP client: %s", exc)
+        await self._close_runtime_handles(agent=agent, client=client)
+        if agent:
+            logger.debug("MCP agent closed successfully")
+        elif client:
+            logger.debug("MCP client closed successfully")
 
         self._agent = None
         self._client = None
+        self._base_client = None
+        self._llm = None
         self._initialized = False
         logger.debug("MCPWrapper closed")
 
