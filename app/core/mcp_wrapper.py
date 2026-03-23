@@ -19,6 +19,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 from pydantic import BaseModel, ConfigDict
 
 from app.core.bias_detector_client import BiasDetectorClient
+from app.core import mcp_wrapper_capabilities
 from app.core.exceptions import (
     ConfigurationError,
     MCPCapabilityNotSupportedError,
@@ -583,57 +584,6 @@ class MCPWrapper:
                 reason=decision.reason,
             )
 
-    async def _await_if_needed(self, value: Any) -> Any:
-        if inspect.isawaitable(value):
-            return await value
-        return value
-
-    @staticmethod
-    def _is_signature_compatible(
-        method: Any,
-        args: tuple[Any, ...],
-        kwargs: Dict[str, Any],
-    ) -> Optional[bool]:
-        try:
-            signature = inspect.signature(method)
-        except (TypeError, ValueError):
-            return None
-
-        try:
-            signature.bind(*args, **kwargs)
-        except TypeError:
-            return False
-        return True
-
-    @staticmethod
-    def _type_error_entered_callable(method: Any, exc: TypeError) -> bool:
-        target = getattr(method, "__func__", method)
-        target_code = getattr(target, "__code__", None)
-        if target_code is None:
-            return False
-
-        tb = exc.__traceback__
-        while tb is not None:
-            if tb.tb_frame.f_code is target_code:
-                return True
-            tb = tb.tb_next
-        return False
-
-    @staticmethod
-    def _resolve_invocation_target(container: Any, method_name: str, fallback: Any) -> Any:
-        saw_wrapped_target = False
-        for attr_name in ("_session", "_client"):
-            inner = getattr(container, attr_name, None)
-            if inner is None:
-                continue
-            saw_wrapped_target = True
-            target = getattr(inner, method_name, None)
-            if target is not None:
-                return target
-        if saw_wrapped_target:
-            return None
-        return fallback
-
     def _resolve_capability_server_name(self, server_name: Optional[str]) -> str:
         configured_servers = list(self.mcp_servers.keys())
         if server_name:
@@ -651,22 +601,6 @@ class MCPWrapper:
             "server_name is required when multiple MCP servers are configured"
         )
 
-    @staticmethod
-    def _wrap_capability_session(session: Any, wrapper: "MCPWrapper") -> Any:
-        if isinstance(session, _GuardedMCPSession):
-            return session
-        return _GuardedMCPSession(session, wrapper)
-
-    @staticmethod
-    def _is_missing_session_error(exc: Exception, server_name: str) -> bool:
-        message = str(exc).strip().lower()
-        server_token = server_name.strip().lower()
-        return (
-            "no session exists" in message
-            or "no active session" in message
-            or ("session" in message and "not found" in message and server_token in message)
-        ) and server_token in message
-
     async def _invoke_optional_client_method(
         self,
         client: Any,
@@ -674,31 +608,12 @@ class MCPWrapper:
         method_name: str,
         call_variants: List[tuple[tuple[Any, ...], Dict[str, Any]]],
     ) -> Any:
-        method = getattr(client, method_name, None)
-        if method is None:
-            return None
-
-        target_method = self._resolve_invocation_target(client, method_name, method)
-        if target_method is None:
-            return None
-
-        signature_mismatch = False
-        for args, kwargs in call_variants:
-            compatibility = self._is_signature_compatible(target_method, args, kwargs)
-            if compatibility is False:
-                signature_mismatch = True
-                continue
-            try:
-                return await self._await_if_needed(method(*args, **kwargs))
-            except TypeError as exc:
-                if compatibility is None and not self._type_error_entered_callable(target_method, exc):
-                    signature_mismatch = True
-                    continue
-                raise
-
-        if signature_mismatch:
-            logger.debug("Skipping %s due to incompatible runtime signature", method_name)
-        return None
+        return await mcp_wrapper_capabilities.invoke_optional_client_method(
+            self,
+            client,
+            method_name=method_name,
+            call_variants=call_variants,
+        )
 
     async def _lookup_capability_session(
         self,
@@ -707,141 +622,22 @@ class MCPWrapper:
         server_name: str,
         allow_missing: bool,
     ) -> Any:
-        get_session = getattr(client, "get_session", None)
-        if get_session is None:
-            return client
-
-        signature_mismatch = False
-        attempts: List[tuple[tuple[Any, ...], Dict[str, Any]]] = [
-            ((), {"server_name": server_name}),
-            ((server_name,), {}),
-            ((), {"name": server_name}),
-        ]
-        if len(self.mcp_servers) == 1:
-            attempts.append(((), {}))
-
-        target_get_session = self._resolve_invocation_target(client, "get_session", get_session)
-        for args, kwargs in attempts:
-            compatibility = self._is_signature_compatible(target_get_session, args, kwargs)
-            if compatibility is False:
-                signature_mismatch = True
-                continue
-            try:
-                session = await self._await_if_needed(get_session(*args, **kwargs))
-                return self._wrap_capability_session(session, self)
-            except MCPCapabilityNotSupportedError as exc:
-                raise MCPCapabilityNotSupportedError(
-                    "session_transport",
-                    str(exc),
-                    server_name=server_name,
-                ) from exc
-            except TypeError as exc:
-                if compatibility is None and not self._type_error_entered_callable(target_get_session, exc):
-                    signature_mismatch = True
-                    continue
-                raise MCPCapabilityUpstreamError(
-                    "session_transport",
-                    f"Unable to obtain MCP session for server '{server_name}': {exc}",
-                    server_name=server_name,
-                ) from exc
-            except Exception as exc:
-                if allow_missing and self._is_missing_session_error(exc, server_name):
-                    return None
-                raise MCPCapabilityUpstreamError(
-                    "session_transport",
-                    f"Unable to obtain MCP session for server '{server_name}': {exc}",
-                    server_name=server_name,
-                ) from exc
-
-        if signature_mismatch:
-            raise MCPCapabilityNotSupportedError(
-                "session_transport",
-                (
-                    f"Unable to obtain MCP session for server '{server_name}': "
-                    "the MCP runtime exposes an incompatible get_session signature"
-                ),
-                server_name=server_name,
-            )
-
-        if allow_missing:
-            return None
-
-        raise MCPCapabilityUpstreamError(
-            "session_transport",
-            f"Unable to obtain MCP session for server '{server_name}'",
+        return await mcp_wrapper_capabilities.lookup_capability_session(
+            self,
+            client,
             server_name=server_name,
+            allow_missing=allow_missing,
         )
 
     async def _create_capability_session(self, client: Any, *, server_name: str) -> Any:
-        created_session = await self._invoke_optional_client_method(
-            client,
-            method_name="create_session",
-            call_variants=[
-                ((), {"server_name": server_name, "auto_initialize": True}),
-                ((server_name,), {"auto_initialize": True}),
-                ((), {"server_name": server_name}),
-                ((server_name,), {}),
-                ((), {"name": server_name, "auto_initialize": True}),
-                ((), {"name": server_name}),
-            ],
-        )
-        if created_session is not None:
-            return self._wrap_capability_session(created_session, self)
-
-        await self._invoke_optional_client_method(
-            client,
-            method_name="create_all_sessions",
-            call_variants=[
-                ((), {"auto_initialize": True}),
-                ((), {}),
-            ],
-        )
-        return await self._lookup_capability_session(
+        return await mcp_wrapper_capabilities.create_capability_session(
+            self,
             client,
             server_name=server_name,
-            allow_missing=False,
         )
 
     async def _get_capability_session(self, server_name: str) -> Any:
-        if not self._initialized:
-            await self.initialize()
-
-        client = self._client
-        if client is None:
-            raise MCPWrapperError("MCP client not initialized")
-
-        get_session = getattr(client, "get_session", None)
-        if get_session is None:
-            return client
-
-        active_sessions = await self._invoke_optional_client_method(
-            client,
-            method_name="get_all_active_sessions",
-            call_variants=[((), {})],
-        )
-        if isinstance(active_sessions, dict) and server_name in active_sessions:
-            return self._wrap_capability_session(active_sessions[server_name], self)
-
-        session = await self._lookup_capability_session(
-            client,
-            server_name=server_name,
-            allow_missing=True,
-        )
-        if session is not None:
-            return session
-
-        try:
-            return await self._create_capability_session(client, server_name=server_name)
-        except MCPCapabilityNotSupportedError:
-            raise
-        except MCPCapabilityUpstreamError:
-            raise
-        except Exception as exc:
-            raise MCPCapabilityUpstreamError(
-                "session_transport",
-                f"Unable to initialize MCP session for server '{server_name}': {exc}",
-                server_name=server_name,
-            ) from exc
+        return await mcp_wrapper_capabilities.get_capability_session(self, server_name)
 
     async def _invoke_capability_method(
         self,
@@ -852,80 +648,12 @@ class MCPWrapper:
         call_variants: List[tuple[tuple[Any, ...], Dict[str, Any]]],
         server_name: str,
     ) -> Any:
-        found_method = False
-        signature_mismatch = False
-
-        for method_name in method_names:
-            method = getattr(session, method_name, None)
-            if method is None:
-                continue
-
-            target_method = self._resolve_invocation_target(session, method_name, method)
-            if target_method is None:
-                continue
-
-            found_method = True
-            for args, kwargs in call_variants:
-                compatibility = self._is_signature_compatible(target_method, args, kwargs)
-                if compatibility is False:
-                    signature_mismatch = True
-                    continue
-                try:
-                    return await self._await_if_needed(method(*args, **kwargs))
-                except MCPCapabilityNotSupportedError:
-                    break
-                except QueryOperationElicitationDeclinedError:
-                    raise
-                except TypeError as exc:
-                    if compatibility is None and not self._type_error_entered_callable(target_method, exc):
-                        signature_mismatch = True
-                        continue
-                    logger.exception(
-                        "MCP capability invocation failed",
-                        extra={
-                            "operation": operation,
-                            "server_name": server_name,
-                            "method_name": method_name,
-                        },
-                    )
-                    raise MCPCapabilityUpstreamError(
-                        operation,
-                        f"{operation} failed: {exc}",
-                        server_name=server_name,
-                    ) from exc
-                except Exception as exc:
-                    logger.exception(
-                        "MCP capability invocation failed",
-                        extra={
-                            "operation": operation,
-                            "server_name": server_name,
-                            "method_name": method_name,
-                        },
-                    )
-                    raise MCPCapabilityUpstreamError(
-                        operation,
-                        f"{operation} failed: {exc}",
-                        server_name=server_name,
-                    ) from exc
-
-        if not found_method:
-            supported = ", ".join(method_names)
-            raise MCPCapabilityNotSupportedError(
-                operation,
-                f"MCP runtime does not support {operation} (expected one of: {supported})",
-                server_name=server_name,
-            )
-
-        if signature_mismatch:
-            raise MCPCapabilityNotSupportedError(
-                operation,
-                f"MCP runtime does not support {operation} with a compatible method signature",
-                server_name=server_name,
-            )
-
-        raise MCPCapabilityUpstreamError(
-            operation,
-            f"{operation} failed",
+        return await mcp_wrapper_capabilities.invoke_capability_method(
+            self,
+            session,
+            operation=operation,
+            method_names=method_names,
+            call_variants=call_variants,
             server_name=server_name,
         )
 
@@ -937,29 +665,17 @@ class MCPWrapper:
         call_variants: List[tuple[tuple[Any, ...], Dict[str, Any]]],
         server_name: Optional[str],
     ) -> Any:
-        resolved_server_name = self._resolve_capability_server_name(server_name)
-        previous_active_server_name = getattr(self, "_active_server_name", None)
-        self._active_server_name = resolved_server_name
-
-        try:
-            session = await self._get_capability_session(resolved_server_name)
-            result = await self._invoke_capability_method(
-                session,
-                operation=operation,
-                method_names=method_names,
-                call_variants=call_variants,
-                server_name=resolved_server_name,
-            )
-            self._last_server_used = resolved_server_name
-            return result
-        finally:
-            self._active_server_name = previous_active_server_name
+        return await mcp_wrapper_capabilities.run_capability_operation(
+            self,
+            operation=operation,
+            method_names=method_names,
+            call_variants=call_variants,
+            server_name=server_name,
+        )
 
     async def list_prompts(self, server_name: Optional[str] = None) -> Any:
-        return await self._run_capability_operation(
-            operation="list_prompts",
-            method_names=["list_prompts"],
-            call_variants=[((), {})],
+        return await mcp_wrapper_capabilities.list_prompts(
+            self,
             server_name=server_name,
         )
 
@@ -970,16 +686,10 @@ class MCPWrapper:
         arguments: Optional[Dict[str, Any]] = None,
         server_name: Optional[str] = None,
     ) -> Any:
-        prompt_arguments = dict(arguments or {})
-        return await self._run_capability_operation(
-            operation="get_prompt",
-            method_names=["get_prompt", "render_prompt"],
-            call_variants=[
-                ((prompt_name,), {"arguments": prompt_arguments}),
-                ((prompt_name, prompt_arguments), {}),
-                ((), {"name": prompt_name, "arguments": prompt_arguments}),
-                ((), {"prompt_name": prompt_name, "arguments": prompt_arguments}),
-            ],
+        return await mcp_wrapper_capabilities.get_prompt(
+            self,
+            prompt_name,
+            arguments=arguments,
             server_name=server_name,
         )
 
@@ -990,17 +700,16 @@ class MCPWrapper:
         arguments: Optional[Dict[str, Any]] = None,
         server_name: Optional[str] = None,
     ) -> Any:
-        return await self.get_prompt(
+        return await mcp_wrapper_capabilities.render_prompt(
+            self,
             prompt_name,
             arguments=arguments,
             server_name=server_name,
         )
 
     async def list_resources(self, server_name: Optional[str] = None) -> Any:
-        return await self._run_capability_operation(
-            operation="list_resources",
-            method_names=["list_resources"],
-            call_variants=[((), {})],
+        return await mcp_wrapper_capabilities.list_resources(
+            self,
             server_name=server_name,
         )
 
@@ -1010,14 +719,9 @@ class MCPWrapper:
         *,
         server_name: Optional[str] = None,
     ) -> Any:
-        return await self._run_capability_operation(
-            operation="read_resource",
-            method_names=["read_resource"],
-            call_variants=[
-                ((uri,), {}),
-                ((), {"uri": uri}),
-                ((), {"resource_uri": uri}),
-            ],
+        return await mcp_wrapper_capabilities.read_resource(
+            self,
+            uri,
             server_name=server_name,
         )
 
