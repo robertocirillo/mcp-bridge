@@ -16,14 +16,10 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
-
 from app.core.bias_detector_client import BiasDetectorClient
-from app.core import mcp_wrapper_capabilities
+from app.core import mcp_wrapper_capabilities, mcp_wrapper_guardrails, mcp_wrapper_tools
 from app.core.exceptions import (
     ConfigurationError,
-    MCPCapabilityNotSupportedError,
-    MCPCapabilityUpstreamError,
     MCPWrapperError,
     QueryOperationElicitationDeclinedError,
 )
@@ -46,8 +42,6 @@ from app.core.mcp_wrapper_guardrails_bias import (
 )
 from app.core.mcp_wrapper_guardrails_pii import (
     _detect_pii,
-    _detect_pii_in_obj,
-    _redact_pii_in_obj,
     make_pii_after_model_guardrail,
     make_pii_before_model_guardrail,
     redact_pii,
@@ -60,20 +54,6 @@ from app.utils.logging import get_logger
 logger = get_logger(__name__)
 
 GuardrailContext = GuardrailExecutionContext
-
-
-class _RawMCPRequest(BaseModel):
-    """Minimal JSON-RPC request envelope for MCP methods not modeled by the Python SDK."""
-
-    method: str
-    params: Optional[Dict[str, Any]] = None
-    model_config = ConfigDict(extra="allow")
-
-
-class _RawMCPResult(BaseModel):
-    """Generic response model for raw MCP requests with task payloads."""
-
-    model_config = ConfigDict(extra="allow")
 
 
 class MCPWrapper:
@@ -256,8 +236,7 @@ class MCPWrapper:
     @staticmethod
     def _normalize_mode(mode: Optional[str], *, default: str, allowed: set[str]) -> str:
         # Normalize user-provided mode values and fall back to a safe default on invalid input.
-        normalized = (mode or default).strip().lower()
-        return normalized if normalized in allowed else default
+        return mcp_wrapper_guardrails.normalize_mode(mode, default=default, allowed=allowed)
 
     def _replace_guardrail(
         self,
@@ -267,60 +246,24 @@ class MCPWrapper:
         new_guardrail: Any,
     ) -> None:
         # Replace the currently installed guardrail instance without disturbing the rest of the pipeline.
-        pipeline = list(getattr(self, pipeline_attr, []) or [])
-        current = getattr(self, slot_attr, None)
-        replaced = False
-
-        if current is not None:
-            for idx, guardrail in enumerate(pipeline):
-                if guardrail is current:
-                    replaced = True
-                    if new_guardrail is None:
-                        del pipeline[idx]
-                    else:
-                        pipeline[idx] = new_guardrail
-                    break
-            if not replaced:
-                pipeline = [guardrail for guardrail in pipeline if guardrail is not current]
-
-        if not replaced and new_guardrail is not None:
-            pipeline.append(new_guardrail)
-
-        setattr(self, pipeline_attr, pipeline)
-        setattr(self, slot_attr, new_guardrail)
+        mcp_wrapper_guardrails.replace_guardrail(
+            self,
+            pipeline_attr=pipeline_attr,
+            slot_attr=slot_attr,
+            new_guardrail=new_guardrail,
+        )
 
     def set_pii_mode(self, mode: Optional[str]) -> None:
         # Configure how model output and tool results should handle detected PII.
-        normalized = self._normalize_mode(mode, default="redact", allowed={"off", "redact", "block"})
-        self.pii_mode = normalized
-        new_guardrail = None if normalized == "off" else make_pii_after_model_guardrail(mode=normalized)
-        self._replace_guardrail(
-            pipeline_attr="after_model_guardrails",
-            slot_attr="_pii_after_model_guardrail",
-            new_guardrail=new_guardrail,
-        )
+        mcp_wrapper_guardrails.set_pii_mode(self, mode)
 
     def set_pii_input_mode(self, mode: Optional[str]) -> None:
         # Configure how user input should be handled before the model is invoked.
-        normalized = self._normalize_mode(mode, default="block", allowed={"off", "redact", "block"})
-        self.pii_input_mode = normalized
-        new_guardrail = None if normalized == "off" else make_pii_before_model_guardrail(mode=normalized)
-        self._replace_guardrail(
-            pipeline_attr="before_model_guardrails",
-            slot_attr="_pii_before_model_guardrail",
-            new_guardrail=new_guardrail,
-        )
+        mcp_wrapper_guardrails.set_pii_input_mode(self, mode)
 
     def set_bias_mode(self, mode: Optional[str]) -> None:
         # Configure the local after-model bias guardrail when no external detector is in use.
-        normalized = self._normalize_mode(mode, default="off", allowed={"off", "block"})
-        self.bias_mode = normalized
-        new_guardrail = None if normalized == "off" else make_bias_after_model_guardrail(mode=normalized)
-        self._replace_guardrail(
-            pipeline_attr="after_model_guardrails",
-            slot_attr="_bias_after_model_guardrail",
-            new_guardrail=new_guardrail,
-        )
+        mcp_wrapper_guardrails.set_bias_mode(self, mode)
 
     def set_bias_settings(
         self,
@@ -340,51 +283,21 @@ class MCPWrapper:
         fail_closed: bool = True,
     ) -> None:
         # Configure either local or service-backed bias checks and install the resulting guardrail.
-        normalized = self._normalize_mode(mode, default="off", allowed={"off", "block"})
-        self.bias_mode = normalized
-
-        # Remove the bias guardrail entirely when the feature is disabled.
-        if normalized == "off":
-            self._replace_guardrail(
-                pipeline_attr="after_model_guardrails",
-                slot_attr="_bias_after_model_guardrail",
-                new_guardrail=None,
-            )
-            return
-
-        # Fall back to the local rule-based guardrail when no detector service is configured.
-        if not base_url:
-            self.set_bias_mode(normalized)
-            return
-
-        try:
-            # Build the HTTP client once and reuse it across queries for the current wrapper instance.
-            self._bias_detector_service = BiasDetectorClient(
-                base_url=base_url,
-                timeout_seconds=float(timeout_seconds),
-            )
-        except Exception as exc:
-            raise ConfigurationError(f"Invalid bias-detector-service configuration: {exc}")
-
-        # Install the service-backed after-model guardrail with the configured thresholds and checks.
-        new_guardrail = make_bias_after_model_guardrail_service(
-            client=self._bias_detector_service,
-            mode=normalized,
-            threshold=float(threshold),
-            top_k=int(top_k),
+        mcp_wrapper_guardrails.set_bias_settings(
+            self,
+            mode=mode,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+            threshold=threshold,
+            top_k=top_k,
             active_categories=active_categories,
             unsafe_labels=unsafe_labels,
             model_id=model_id,
             revision=revision,
-            return_all_scores=bool(return_all_scores),
-            return_char_spans=bool(return_char_spans),
+            return_all_scores=return_all_scores,
+            return_char_spans=return_char_spans,
             checks=checks,
-            fail_closed=bool(fail_closed),
-        )
-        self._replace_guardrail(
-            pipeline_attr="after_model_guardrails",
-            slot_attr="_bias_after_model_guardrail",
-            new_guardrail=new_guardrail,
+            fail_closed=fail_closed,
         )
 
     def set_tool_policy_engine(self, engine: ToolPolicyEngine) -> None:
@@ -447,20 +360,7 @@ class MCPWrapper:
 
     def _get_guardrail_runner(self) -> GuardrailRunner:
         # Keep the runner bound to the current recorder so guardrail events remain observable.
-        runner = getattr(self, "guardrail_runner", None)
-        recorder = getattr(self, "audit_recorder", None)
-        if recorder is None:
-            recorder = InMemoryAuditRecorder()
-            self.audit_recorder = recorder
-
-        if runner is None or getattr(runner, "audit_recorder", None) is not recorder:
-            # Rebuild the runner when internal state was reset or a new recorder was injected.
-            runner = GuardrailRunner(
-                audit_recorder=recorder,
-                violation_error_cls=GuardrailViolationError,
-            )
-            self.guardrail_runner = runner
-        return runner
+        return mcp_wrapper_guardrails.get_guardrail_runner(self)
 
     def _extract_tool_arguments(self, args: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
         # Normalize positional and keyword tool call arguments into a single audit-friendly mapping.
@@ -480,44 +380,20 @@ class MCPWrapper:
         arguments: Optional[Dict[str, Any]] = None,
     ) -> Any:
         # Run per-tool-result guardrails through the shared runner before results are returned to the agent.
-        ctx = GuardrailContext(
-            tenant_id=self.tenant_id,
-            run_id=self.run_id,
-            session_id=self.session_id,
-            server_name=getattr(self, "_active_server_name", None),
-            tool_name=tool_name,
-            arguments=arguments or {},
-        )
-        outcome = self._get_guardrail_runner().tool_result(
-            ctx,
+        return mcp_wrapper_guardrails.wrap_tool_result(
+            self,
+            tool_name,
             result,
-            enabled=getattr(self, "guardrails_enabled", True),
-            pii_mode=getattr(self, "pii_mode", "redact"),
-            redact_result=_redact_pii_in_obj,
-            detect_result_pii=_detect_pii_in_obj,
+            arguments=arguments,
         )
-        return outcome.value
 
     async def _run_before_model_guardrails(self, ctx: GuardrailContext) -> GuardrailContext:
         # Execute input guardrails through the shared runner so timeouts and audit behavior stay consistent.
-        outcome = await self._get_guardrail_runner().before_model(
-            ctx,
-            getattr(self, "before_model_guardrails", []),
-            enabled=getattr(self, "guardrails_enabled", True),
-            timeout_seconds=getattr(self, "guardrail_timeout_seconds", None),
-        )
-        return outcome.value
+        return await mcp_wrapper_guardrails.run_before_model_guardrails(self, ctx)
 
     async def _run_after_model_guardrails(self, ctx: GuardrailContext, output: Any) -> Any:
         # Execute output guardrails through the shared runner so blocking and redaction are centralized.
-        outcome = await self._get_guardrail_runner().after_model(
-            ctx,
-            output,
-            getattr(self, "after_model_guardrails", []),
-            enabled=getattr(self, "guardrails_enabled", True),
-            timeout_seconds=getattr(self, "guardrail_timeout_seconds", None),
-        )
-        return outcome.value
+        return await mcp_wrapper_guardrails.run_after_model_guardrails(self, ctx, output)
 
     def _evaluate_tool_invocation_policy(
         self,
@@ -763,11 +639,6 @@ class MCPWrapper:
             current = dumped.get(key)
         return current
 
-    @classmethod
-    def _extract_tool_input_schema(cls, tool: Any) -> Optional[Dict[str, Any]]:
-        schema = cls._extract_nested_value(tool, "inputSchema")
-        return schema if isinstance(schema, dict) else None
-
     @staticmethod
     def _truncate_log_value(value: Any, *, limit: int = 2000) -> str:
         try:
@@ -786,56 +657,20 @@ class MCPWrapper:
         tool_definition: Any,
         arguments: Dict[str, Any],
     ) -> None:
-        input_schema = cls._extract_tool_input_schema(tool_definition)
-        if input_schema is None:
-            return
-
-        try:
-            from jsonschema import SchemaError, ValidationError, validate
-
-            validate(instance=arguments or {}, schema=input_schema)
-        except ValidationError as exc:
-            raise ValueError(f"Invalid tool arguments for '{tool_name}': {exc.message}") from exc
-        except SchemaError:
-            logger.warning(
-                "Skipping local inputSchema validation for tool '%s' due to invalid upstream schema",
-                tool_name,
-            )
+        return mcp_wrapper_tools.validate_task_tool_arguments(
+            cls,
+            tool_name=tool_name,
+            tool_definition=tool_definition,
+            arguments=arguments,
+        )
 
     @classmethod
     def _extract_tool_task_support(cls, tool: Any) -> Optional[str]:
-        execution = cls._extract_nested_value(tool, "execution")
-        if execution is None:
-            meta = cls._extract_nested_value(tool, "_meta")
-            execution = cls._extract_nested_value(meta, "execution")
-        task_support = cls._extract_nested_value(execution, "taskSupport")
-        if task_support is None:
-            task_support = cls._extract_nested_value(execution, "task_support")
-        return str(task_support).strip().lower() if task_support is not None else None
+        return mcp_wrapper_tools.extract_tool_task_support(cls, tool)
 
     @classmethod
     def _extract_task_request_capability(cls, capabilities: Any) -> Optional[bool]:
-        task_call_support = cls._extract_nested_value(
-            capabilities,
-            "tasks",
-            "requests",
-            "tools",
-            "call",
-        )
-        if task_call_support is None:
-            return None
-        if isinstance(task_call_support, bool):
-            return task_call_support
-        if isinstance(task_call_support, dict):
-            return True
-        dumped = cls._coerce_mapping(task_call_support)
-        if dumped is not None:
-            return True
-        return bool(task_call_support)
-
-    @staticmethod
-    def _unwrap_capability_session(session: Any) -> Any:
-        return getattr(session, "_session", session)
+        return mcp_wrapper_tools.extract_task_request_capability(cls, capabilities)
 
     def _get_operation_context_snapshot(self) -> Optional[Dict[str, Optional[str]]]:
         operation_context = self._query_operation_context.get()
@@ -866,17 +701,24 @@ class MCPWrapper:
             cls._extract_nested_value(params, "meta"),
             cls._extract_nested_value(params, "_meta"),
             cls._extract_nested_value(context, "meta"),
+            cls._extract_nested_value(context, "_meta"),
+            cls._extract_nested_value(context, "request_meta"),
         ):
             if source is None:
                 continue
-            related_task = cls._extract_nested_value(source, "io.modelcontextprotocol/related-task")
-            if related_task is None:
-                related_task = cls._extract_nested_value(source, "relatedTask")
-            task_id = cls._extract_nested_value(related_task, "taskId")
-            if task_id is None:
-                task_id = cls._extract_nested_value(related_task, "task_id")
-            if task_id is not None:
-                return str(task_id)
+            for related_task_key in (
+                "io.modelcontextprotocol/related-task",
+                "relatedTask",
+                "related-task",
+                "related_task",
+            ):
+                related_task = cls._extract_nested_value(source, related_task_key)
+                if related_task is None:
+                    continue
+                for task_id_key in ("taskId", "task_id", "id"):
+                    task_id = cls._extract_nested_value(related_task, task_id_key)
+                    if task_id is not None:
+                        return str(task_id)
         return None
 
     def _resolve_elicitation_operation_context(
@@ -894,23 +736,11 @@ class MCPWrapper:
 
     @classmethod
     def _get_protocol_client_session(cls, session: Any) -> Any:
-        raw_session = cls._unwrap_capability_session(session)
-        connector = getattr(raw_session, "connector", None)
-        if connector is None:
-            return None
-        return getattr(connector, "client_session", None)
+        return mcp_wrapper_tools.get_protocol_client_session(cls, session)
 
     @classmethod
     def _get_server_capabilities(cls, session: Any) -> Any:
-        raw_session = cls._unwrap_capability_session(session)
-        connector = getattr(raw_session, "connector", None)
-        capabilities = getattr(connector, "capabilities", None)
-        if capabilities is not None:
-            return capabilities
-        session_info = getattr(raw_session, "session_info", None)
-        if isinstance(session_info, dict):
-            return session_info.get("capabilities")
-        return cls._extract_nested_value(session_info, "capabilities")
+        return mcp_wrapper_tools.get_server_capabilities(cls, session)
 
     async def _get_tool_definition(
         self,
@@ -919,54 +749,12 @@ class MCPWrapper:
         server_name: str,
         tool_name: str,
     ) -> Any:
-        try:
-            tools_result = await self._invoke_capability_method(
-                session,
-                operation="list_tools",
-                method_names=["list_tools"],
-                call_variants=[((), {})],
-                server_name=server_name,
-            )
-        except MCPCapabilityError:
-            logger.info(
-                "mcp_task_support_detection server=%s tool=%s list_tools=unavailable",
-                server_name,
-                tool_name,
-            )
-            return None
-
-        tools: Any = tools_result if isinstance(tools_result, list) else self._extract_nested_value(tools_result, "tools")
-        if not isinstance(tools, list):
-            logger.info(
-                "mcp_task_support_detection server=%s tool=%s list_tools_type=%s extracted_tools_type=%s",
-                server_name,
-                tool_name,
-                type(tools_result).__name__,
-                type(tools).__name__ if tools is not None else "None",
-            )
-            return None
-        logger.info(
-            "mcp_task_support_detection server=%s tool=%s list_tools_type=%s tools_count=%s",
-            server_name,
-            tool_name,
-            type(tools_result).__name__,
-            len(tools),
+        return await mcp_wrapper_tools.get_tool_definition(
+            self,
+            session=session,
+            server_name=server_name,
+            tool_name=tool_name,
         )
-        for tool in tools:
-            if self._extract_nested_value(tool, "name") == tool_name:
-                logger.info(
-                    "mcp_task_support_detection server=%s tool=%s matched=true task_support=%s",
-                    server_name,
-                    tool_name,
-                    self._extract_tool_task_support(tool),
-                )
-                return tool
-        logger.info(
-            "mcp_task_support_detection server=%s tool=%s matched=false",
-            server_name,
-            tool_name,
-        )
-        return None
 
     async def _send_raw_mcp_request(
         self,
@@ -975,56 +763,15 @@ class MCPWrapper:
         method: str,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        if client_session is None or not hasattr(client_session, "send_request"):
-            raise MCPCapabilityNotSupportedError(
-                "task_transport",
-                "MCP runtime does not expose a raw client session for task-based tool execution",
-                server_name=self._active_server_name,
-            )
-
-        logger.info(
-            "mcp_task_transport_request server=%s method=%s params_keys=%s",
-            self._active_server_name,
-            method,
-            sorted((params or {}).keys()),
+        return await mcp_wrapper_tools.send_raw_mcp_request(
+            self,
+            client_session=client_session,
+            method=method,
+            params=params,
         )
-        request = _RawMCPRequest(method=method, params=params)
-        try:
-            result = await client_session.send_request(request, _RawMCPResult)
-        except Exception as exc:
-            error_payload = getattr(exc, "error", None)
-            logger.warning(
-                "mcp_task_transport_error server=%s method=%s code=%s message=%s data=%s",
-                self._active_server_name,
-                method,
-                getattr(error_payload, "code", None),
-                getattr(error_payload, "message", str(exc)),
-                self._truncate_log_value(getattr(error_payload, "data", None)),
-            )
-            raise
-        dumped = result.model_dump(by_alias=True, exclude_none=False)
-        logger.info(
-            "mcp_task_transport_response server=%s method=%s has_task=%s result_keys=%s",
-            self._active_server_name,
-            method,
-            isinstance(dumped.get("task"), dict) if isinstance(dumped, dict) else False,
-            sorted(dumped.keys()) if isinstance(dumped, dict) else [],
-        )
-        logger.debug(
-            "mcp_task_transport_payload server=%s method=%s payload=%s",
-            self._active_server_name,
-            method,
-            self._truncate_log_value(dumped),
-        )
-        return dumped if isinstance(dumped, dict) else {}
 
     def _coerce_call_tool_result(self, result: Dict[str, Any]) -> Any:
-        try:
-            from mcp.types import CallToolResult
-
-            return CallToolResult.model_validate(result)
-        except Exception:
-            return result
+        return mcp_wrapper_tools.coerce_call_tool_result(result)
 
     async def _call_tool_with_task_support(
         self,
@@ -1035,95 +782,14 @@ class MCPWrapper:
         arguments: Dict[str, Any],
         server_name: str,
     ) -> Any:
-        self._enforce_tool_allowed(tool_name, arguments)
-        self._validate_task_tool_arguments(
-            tool_name=tool_name,
+        return await mcp_wrapper_tools.call_tool_with_task_support(
+            self,
+            session=session,
             tool_definition=tool_definition,
+            tool_name=tool_name,
             arguments=arguments,
+            server_name=server_name,
         )
-
-        client_session = self._get_protocol_client_session(session)
-        capabilities = self._get_server_capabilities(session)
-        task_capability = self._extract_task_request_capability(capabilities)
-        if task_capability is False:
-            raise MCPCapabilityNotSupportedError(
-                "task_transport",
-                (
-                    f"Tool '{tool_name}' requires task augmentation, but server '{server_name}' "
-                    "did not advertise tasks.requests.tools.call support"
-                ),
-                server_name=server_name,
-            )
-        logger.info(
-            "mcp_task_transport_selected server=%s tool=%s task_capability=%s",
-            server_name,
-            tool_name,
-            task_capability,
-        )
-
-        create_result = await self._send_raw_mcp_request(
-            client_session=client_session,
-            method="tools/call",
-            params={
-                "name": tool_name,
-                "arguments": arguments or {},
-                "task": {},
-            },
-        )
-        task_payload = self._extract_nested_value(create_result, "task")
-        if not isinstance(task_payload, dict):
-            logger.info(
-                "mcp_task_transport_fallback server=%s tool=%s reason=missing_task_payload",
-                server_name,
-                tool_name,
-            )
-            direct_result = self._coerce_call_tool_result(create_result)
-            return self._wrap_tool_result(tool_name, direct_result, arguments=arguments)
-
-        task_id = self._extract_nested_value(task_payload, "taskId")
-        if task_id is None:
-            raise MCPWrapperError(
-                f"Task-aware tool '{tool_name}' did not return a taskId in the create-task response"
-            )
-        logger.info(
-            "mcp_task_transport_created server=%s tool=%s task_id=%s",
-            server_name,
-            tool_name,
-            task_id,
-        )
-
-        task_context = self._get_operation_context_snapshot()
-        if task_context is not None:
-            self._task_operation_contexts[str(task_id)] = task_context
-
-        try:
-            result_payload = await self._send_raw_mcp_request(
-                client_session=client_session,
-                method="tasks/result",
-                params={"taskId": str(task_id)},
-            )
-        except Exception:
-            last_action = self._task_operation_contexts.get(str(task_id), {}).get("last_elicitation_action")
-            if last_action == "cancel":
-                raise asyncio.CancelledError()
-            if last_action == "decline":
-                raise QueryOperationElicitationDeclinedError(
-                    f"Elicitation declined for task-aware tool '{tool_name}'"
-                )
-            raise
-        else:
-            last_action = self._task_operation_contexts.get(str(task_id), {}).get("last_elicitation_action")
-            if last_action == "cancel":
-                raise asyncio.CancelledError()
-            if last_action == "decline":
-                raise QueryOperationElicitationDeclinedError(
-                    f"Elicitation declined for task-aware tool '{tool_name}'"
-                )
-
-            tool_result = self._coerce_call_tool_result(result_payload)
-            return self._wrap_tool_result(tool_name, tool_result, arguments=arguments)
-        finally:
-            self._task_operation_contexts.pop(str(task_id), None)
 
     async def call_tool(
         self,
@@ -1132,86 +798,12 @@ class MCPWrapper:
         arguments: Optional[Dict[str, Any]] = None,
         server_name: Optional[str] = None,
     ) -> Any:
-        if not self._initialized:
-            await self.initialize()
-
-        tool_arguments = dict(arguments or {})
-        resolved_server_name = self._resolve_capability_server_name(server_name)
-        previous_active_server_name = getattr(self, "_active_server_name", None)
-        self._active_server_name = resolved_server_name
-
-        try:
-            task_session = await self._get_capability_session(resolved_server_name)
-            tool_definition = await self._get_tool_definition(
-                session=task_session,
-                server_name=resolved_server_name,
-                tool_name=tool_name,
-            )
-            task_support = self._extract_tool_task_support(tool_definition)
-            logger.info(
-                "mcp_tool_execution_path server=%s tool=%s task_support=%s branch=%s",
-                resolved_server_name,
-                tool_name,
-                task_support,
-                "task-aware" if task_support == "required" else "standard",
-            )
-
-            if task_support == "required":
-                result = await self._call_tool_with_task_support(
-                    session=task_session,
-                    tool_definition=tool_definition,
-                    tool_name=tool_name,
-                    arguments=tool_arguments,
-                    server_name=resolved_server_name,
-                )
-            else:
-                result = await self._invoke_capability_method(
-                    task_session,
-                    operation="call_tool",
-                    method_names=["call_tool"],
-                    call_variants=[
-                        ((tool_name,), {"arguments": tool_arguments}),
-                        ((tool_name, tool_arguments), {}),
-                        ((), {"name": tool_name, "arguments": tool_arguments}),
-                        ((), {"tool_name": tool_name, "arguments": tool_arguments}),
-                    ],
-                    server_name=resolved_server_name,
-                )
-            self._steps_used = 0
-            self._last_server_used = resolved_server_name
-            self._record_audit_event(
-                event_type="tool_execution",
-                outcome="completed",
-                tool_name=tool_name,
-                details={
-                    "server_name": resolved_server_name,
-                    "arguments_present": bool(tool_arguments),
-                },
-            )
-            return result
-        except MCPToolNotAllowedError:
-            self._record_audit_event(
-                event_type="tool_execution",
-                outcome="blocked",
-                tool_name=tool_name,
-                details={"reason": "tool_policy", "server_name": resolved_server_name},
-            )
-            raise
-        except GuardrailViolationError:
-            self._record_audit_event(
-                event_type="tool_execution",
-                outcome="blocked",
-                tool_name=tool_name,
-                details={"reason": "guardrail", "server_name": resolved_server_name},
-            )
-            raise
-        except (ConfigurationError, MCPWrapperError, QueryOperationElicitationDeclinedError, ValueError):
-            raise
-        except Exception as exc:
-            logger.error("Tool execution error: %s", exc)
-            raise MCPWrapperError(f"Tool execution failed: {exc}")
-        finally:
-            self._active_server_name = previous_active_server_name
+        return await mcp_wrapper_tools.call_tool(
+            self,
+            tool_name,
+            arguments=arguments,
+            server_name=server_name,
+        )
 
     @staticmethod
     def _serialize_request_context(context: Any) -> Dict[str, Any]:
@@ -1238,6 +830,9 @@ class MCPWrapper:
             method = message.method
             params = message.params
         else:
+            message_root = getattr(message, "root", None)
+            if message_root is not None:
+                message = message_root
             method = getattr(message, "method", None)
             params = getattr(message, "params", None)
             if method is None and isinstance(message, dict):
