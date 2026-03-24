@@ -145,6 +145,119 @@ class BridgeAwareClientSession(BaseClientSession):
 _RUNTIME_PATCHED = False
 
 
+async def _populate_http_connector_capabilities(connector: Any, initialize_result: Any) -> None:
+    connector.capabilities = initialize_result.capabilities
+    connector._initialized = True
+
+    server_capabilities = initialize_result.capabilities
+
+    if server_capabilities.tools:
+        tools_result = await connector.client_session.list_tools()
+        connector._tools = tools_result.tools if tools_result else []
+    else:
+        connector._tools = []
+
+    if server_capabilities.resources:
+        resources_result = await connector.client_session.list_resources()
+        connector._resources = resources_result.resources if resources_result else []
+    else:
+        connector._resources = []
+
+    if server_capabilities.prompts:
+        prompts_result = await connector.client_session.list_prompts()
+        connector._prompts = prompts_result.prompts if prompts_result else []
+    else:
+        connector._prompts = []
+
+
+async def _cleanup_failed_http_connection(connection_manager: Any, client_session: Any = None) -> None:
+    if client_session is not None:
+        try:
+            await client_session.__aexit__(None, None, None)
+        except Exception:
+            pass
+
+    if connection_manager is None:
+        return
+
+    try:
+        await connection_manager.stop()
+    except Exception:
+        pass
+
+
+def _normalize_http_transport(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    normalized = str(value).strip().lower()
+    if normalized in {"streamable-http", "streamable_http"}:
+        return "streamable-http"
+    if normalized == "sse":
+        return "sse"
+    return None
+
+
+async def _connect_streamable_http_only(connector: Any, http_module: Any) -> Any:
+    connection_manager = http_module.StreamableHttpConnectionManager(
+        connector.base_url,
+        connector.headers,
+        connector.timeout,
+        connector.sse_read_timeout,
+    )
+    client_session = None
+
+    try:
+        read_stream, write_stream = await connection_manager.start()
+        client_session = http_module.ClientSession(
+            read_stream,
+            write_stream,
+            sampling_callback=connector.sampling_callback,
+            elicitation_callback=connector.elicitation_callback,
+            message_handler=connector._internal_message_handler,
+            logging_callback=connector.logging_callback,
+            client_info=connector.client_info,
+        )
+        await client_session.__aenter__()
+        initialize_result = await client_session.initialize()
+        connector.client_session = client_session
+        connector.transport_type = "streamable HTTP"
+        await _populate_http_connector_capabilities(connector, initialize_result)
+        return connection_manager
+    except Exception:
+        await _cleanup_failed_http_connection(connection_manager, client_session)
+        raise
+
+
+async def _connect_sse_only(connector: Any, http_module: Any) -> Any:
+    connection_manager = http_module.SseConnectionManager(
+        connector.base_url,
+        connector.headers,
+        connector.timeout,
+        connector.sse_read_timeout,
+    )
+    client_session = None
+
+    try:
+        read_stream, write_stream = await connection_manager.start()
+        client_session = http_module.ClientSession(
+            read_stream,
+            write_stream,
+            sampling_callback=connector.sampling_callback,
+            elicitation_callback=connector.elicitation_callback,
+            message_handler=connector._internal_message_handler,
+            logging_callback=connector.logging_callback,
+            client_info=connector.client_info,
+        )
+        await client_session.__aenter__()
+        connector.client_session = client_session
+        connector.transport_type = "SSE"
+        return connection_manager
+    except Exception:
+        await _cleanup_failed_http_connection(connection_manager, client_session)
+        raise
+
+
 def install_task_notification_runtime_patch() -> None:
     """Patch mcp-use connectors to use the bridge-aware ClientSession."""
 
@@ -153,15 +266,66 @@ def install_task_notification_runtime_patch() -> None:
         return
 
     import mcp
+    import mcp_use.client as client_module
+    import mcp_use.config as config_module
     import mcp_use.connectors.base as connectors_base
+    import mcp_use.connectors.http as connectors_http
     import mcp_use.connectors.stdio as connectors_stdio
 
     mcp.ClientSession = BridgeAwareClientSession
     connectors_base.ClientSession = BridgeAwareClientSession
     connectors_stdio.ClientSession = BridgeAwareClientSession
+    connectors_http.ClientSession = BridgeAwareClientSession
+
+    original_http_connect = getattr(connectors_http.HttpConnector, "_bridge_original_connect", None)
+    if original_http_connect is None:
+        original_http_connect = connectors_http.HttpConnector.connect
+        connectors_http.HttpConnector._bridge_original_connect = original_http_connect
+
+    async def _bridge_http_connect(self: Any) -> None:
+        transport_hint = _normalize_http_transport(getattr(self, "_bridge_transport", None))
+        if transport_hint is None:
+            await original_http_connect(self)
+            return
+
+        if self._connected:
+            connectors_http.logger.debug("Already connected to MCP implementation")
+            return
+
+        if transport_hint == "streamable-http":
+            connection_manager = await _connect_streamable_http_only(self, connectors_http)
+        else:
+            connection_manager = await _connect_sse_only(self, connectors_http)
+
+        self._connection_manager = connection_manager
+        self._connected = True
+        connectors_http.logger.debug(
+            "Successfully connected to MCP implementation via %s: %s",
+            self.transport_type,
+            self.base_url,
+        )
+
+    connectors_http.HttpConnector.connect = _bridge_http_connect
+
+    original_create_connector = getattr(config_module, "_bridge_original_create_connector_from_config", None)
+    if original_create_connector is None:
+        original_create_connector = config_module.create_connector_from_config
+        config_module._bridge_original_create_connector_from_config = original_create_connector
+
+    def _bridge_create_connector_from_config(*args: Any, **kwargs: Any) -> Any:
+        connector = original_create_connector(*args, **kwargs)
+        server_config = args[0] if args else kwargs.get("server_config")
+        transport_hint = None
+        if isinstance(server_config, dict):
+            transport_hint = _normalize_http_transport(server_config.get("transport"))
+        if transport_hint is not None and isinstance(connector, connectors_http.HttpConnector):
+            connector._bridge_transport = transport_hint
+        return connector
+
+    config_module.create_connector_from_config = _bridge_create_connector_from_config
+    client_module.create_connector_from_config = _bridge_create_connector_from_config
 
     for module_name in (
-        "mcp_use.connectors.http",
         "mcp_use.connectors.websocket",
         "mcp_use.connectors.sandbox",
     ):

@@ -15,6 +15,13 @@ The visual builder/consumer is responsible for orchestrating multi-step flows su
 
 mcp-bridge itself is deliberately kept as a **thin bridge**.
 
+For the MCP/session side, the public FastAPI routers are now intentionally thin:
+
+- `app/api/routes/sessions.py` and `app/api/routes/queries.py` define the public HTTP endpoints
+- `app/api/services/session_service.py` and `app/api/services/query_service.py` contain route-facing orchestration
+- `app/api/session_context.py` centralizes tenant/session lookup and wrapper context binding
+- `app/api/error_mapping.py` centralizes HTTP error translation
+
 ---
 
 ## 2. MCP Flow: Client → MCP-Bridge → MCP-Use → LLM + MCP Servers
@@ -70,24 +77,26 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
      - `run_id`: correlation id (optional)
 
 2. Route `create_session`:
-   - Treats `request` as `SessionConfig` (`SessionCreateRequest` inherits from it).
+   - Delegates to `session_service.create_session(...)`.
+   - `session_service.create_session(...)` treats `request` as `SessionConfig` (`SessionCreateRequest` inherits from it).
    - Calls `session_id = await session_manager.create_session(config=request, tenant_id=tenant_ctx.tenant_id, run_id=tenant_ctx.run_id)`.
 
 3. `SessionManager.create_session(...)`:
    - Acquires `self._lock`.
-   - Checks `len(self._sessions) < settings.MAX_ACTIVE_SESSIONS`, otherwise raises `MaxSessionsExceededError`.
+   - Checks `self._session_store.count() < settings.MAX_ACTIVE_SESSIONS`, otherwise raises `MaxSessionsExceededError`.
    - Generates a new `session_id = uuid4()`.
    - Instantiates `MCPWrapper` with LLM and MCP config.
    - Calls `await wrapper.initialize()`:
-     - `MCPWrapper` wires its internal boundary helpers (`mcp_wrapper_llm`, `mcp_wrapper_transport`, guardrail modules).
+     - `MCPWrapper` wires its internal boundary helpers (`mcp_wrapper_capabilities`, `mcp_wrapper_tools`, `mcp_wrapper_guardrails`, `mcp_wrapper_llm`, `mcp_wrapper_transport`, specialized guardrail modules).
      - `mcp-use` initializes client, sessions, and tools.
      - If `mcp_servers` empty, `mcp-use` logs warnings but continues.
-   - Creates `SessionData`:
+   - Creates `SessionData` (defined in `app/core/session_store.py`):
      - `session_id`, `config`, `wrapper`
      - `created_at = now()`, `last_used = now()`
+     - `status = "active"`
      - `query_count = 0`
      - `tenant_id = tenant_id`, `last_run_id = run_id`
-   - Stores in `self._sessions[session_id]`.
+   - Stores it through `SessionStore.add(...)`.
    - Releases lock and returns `session_id`.
 
 4. Route builds a `SessionResponse`:
@@ -105,7 +114,8 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
 
 - Validation errors on `SessionCreateRequest` → HTTP 400.
 - `MaxSessionsExceededError` → HTTP 429.
-- `ConfigurationError` / `MCPWrapperError` → HTTP 502.
+- `ConfigurationError` → HTTP 400.
+- `MCPWrapperError` → HTTP 502.
 - Any other unexpected error → HTTP 500.
 
 ---
@@ -115,11 +125,10 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
 **Flow:**
 
 1. FastAPI resolves `tenant_ctx = get_tenant_context(...)`.
-2. Route calls `sessions_data = await session_manager.list_sessions(tenant_id=tenant_ctx.tenant_id)`.
+2. Route delegates to `session_service.list_sessions(...)`.
 3. `SessionManager.list_sessions(tenant_id)`:
-   - Iterates over `self._sessions.values()`.
-   - If `tenant_id` is not `None`, filters to matching sessions.
-   - Returns a list of dictionaries, e.g.:
+   - Delegates to `SessionStore.list_sessions(tenant_id=tenant_id)`.
+   - `SessionStore` iterates over active `SessionData` entries, filters by tenant when provided, and returns dictionaries such as:
 
 ```json
 [
@@ -131,8 +140,7 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
     "query_count": 3,
     "servers": ["filesystem"],
     "llm_provider": "openai",
-    "llm_model": "gpt-4.1-mini",
-    "tenant_id": "tenant-123"
+    "llm_model": "gpt-4.1-mini"
   }
 ]
 ```
@@ -148,13 +156,15 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
 **Flow:**
 
 1. `tenant_ctx = get_tenant_context(...)`.
-2. Route calls `session_data = await session_manager.get_session_for_tenant(session_id, tenant_ctx.tenant_id)` (or equivalent logic inside `get_session`).
-3. `SessionManager`:
+2. Route delegates to `session_service.get_session_info(...)`.
+3. `session_service.get_session_info(...)` uses `session_context.get_tenant_session(...)`.
+4. `SessionManager.get_session(session_id, tenant_id=...)`:
+   - Delegates lookup to `SessionStore.get(...)`.
    - Validates that `session_id` exists.
-   - If multi-tenancy is enabled and `session_data.tenant_id != tenant_id`, raises `SessionNotFoundError`.
+   - If `tenant_id` is provided and `session_data.tenant_id != tenant_id`, raises `SessionNotFoundError`.
    - Updates `last_used`.
    - Returns `SessionData`.
-4. Route maps `SessionData` to `SessionInfo` and returns.
+5. Service maps `SessionData` to `SessionInfo` and returns.
 
 **Failure modes:**
 
@@ -178,8 +188,10 @@ mcp-bridge itself is deliberately kept as a **thin bridge**.
 **Flow:**
 
 1. `tenant_ctx = get_tenant_context(...)` (even if not explicitly used right now, session has tenant id bound).
-2. Route:
-   - Retrieves session via `await session_manager.get_session(session_id)` (which already enforces tenant ownership in newer versions).
+2. Route delegates to `query_service.execute_query(...)`.
+3. `query_service.execute_query(...)`:
+   - Retrieves session via `await session_manager.get_session(session_id)`.
+   - Binds tenant/run/session context onto the wrapper through `session_context.bind_wrapper_context(...)`.
    - Extracts `wrapper = session_data.wrapper`.
    - `start_time = loop.time()`.
    - Calls:
@@ -193,11 +205,11 @@ result = await wrapper.run_query(
 ```
 
    - `end_time = loop.time()`.
-   - `session_data.register_query()` (increments `query_count`).
    - Reads `steps_used = wrapper.steps_used`.
    - Reads `server_used = getattr(wrapper, "last_server_used", None)`.
+   - Returns `QueryResponse` (including `has_mcp_servers` when available from the wrapper).
 
-3. Builds `QueryResponse`:
+4. Builds `QueryResponse`:
 
 ```json
 {
@@ -206,7 +218,8 @@ result = await wrapper.run_query(
   "execution_time": 8.9248,
   "steps_used": 1,
   "timestamp": "2025-12-11T...",
-  "server_used": "filesystem"
+  "server_used": "filesystem",
+  "has_mcp_servers": true
 }
 ```
 
@@ -239,10 +252,14 @@ Currently used guardrails include:
 Implementation note:
 
 - `MCPWrapper` remains the public boundary used by the rest of the application.
-- Guardrail logic is split into internal modules:
+- Internal MCP boundary concerns are split into focused helper modules:
+  - `mcp_wrapper_capabilities.py`
+  - `mcp_wrapper_tools.py`
+  - `mcp_wrapper_guardrails.py`
   - `mcp_wrapper_guardrails_pii.py`
   - `mcp_wrapper_guardrails_bias.py`
-- The transport boundary to `mcp-use` is isolated in `mcp_wrapper_transport.py`.
+  - `mcp_wrapper_transport.py`
+  - `mcp_wrapper_llm.py`
 
 **Failure modes:**
 
@@ -258,24 +275,25 @@ Implementation note:
 **Flow:**
 
 1. `tenant_ctx = get_tenant_context(...)`.
-2. Route:
-   - Schedules background deletion:
+2. Route delegates to `session_service.delete_session(...)`.
+3. `session_service.delete_session(...)`:
+   - First resolves tenant ownership through `session_context.get_tenant_session(...)`.
+   - Then schedules background deletion:
 
 ```python
 background_tasks.add_task(
-    session_manager.delete_session_for_tenant,
+    session_manager.delete_session,
     session_id,
     tenant_ctx.tenant_id,
 )
 ```
 
-   or an equivalent method that checks the tenant id.
-
-3. `SessionManager.delete_session_for_tenant(session_id, tenant_id)`:
+4. `SessionManager.delete_session(session_id, tenant_id)`:
    - Ensures session exists and belongs to the tenant.
-   - Closes the `MCPWrapper` (if close logic exists) and removes it from `_sessions`.
+   - Clears pending elicitation state and background query-operation tasks.
+   - Closes the `MCPWrapper` and removes the session through `SessionStore.remove(...)`.
 
-4. Route returns:
+5. Route returns:
 
 ```json
 {
@@ -488,11 +506,10 @@ Therefore:
 ## 8. Summary of Flows
 
 1. **MCP session lifecycle**:
-   - `POST /sessions` → `SessionManager.create_session` → `MCPWrapper.initialize` → `SessionData` stored.
-   - `POST /sessions/{id}/query` → `MCPWrapper.run_query` → LLM + MCP tools → `QueryResponse`.
-   - `GET /sessions` → tenant-filtered sessions list.
-   - `GET /sessions/{id}` → tenant-checked session info.
-   - `DELETE /sessions/{id}` → tenant-checked cleanup.
+   - `POST /sessions` → `routes/sessions.py` → `session_service.create_session` → `SessionManager.create_session` → `MCPWrapper.initialize` → `SessionData` stored in `SessionStore`.
+   - `POST /sessions/{id}/query` → `routes/queries.py` → `query_service.execute_query` → `MCPWrapper.run_query` → LLM + MCP tools → `QueryResponse`.
+   - `GET /sessions` / `GET /sessions/{id}` → thin route → `session_service` → tenant-aware `SessionStore` lookup/list.
+   - `DELETE /sessions/{id}` → thin route → `session_service.delete_session` → tenant-checked cleanup in `SessionManager`.
 
 2. **A2A agent usage (current)**:
    - `GET /a2a/agents` → static config listing (UI-friendly).

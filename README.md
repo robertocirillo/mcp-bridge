@@ -38,21 +38,31 @@ mcp-bridge/
 │   └── app.log                 # Application log file
 └── app/
     ├── api/
-    │   ├── routes/             # REST endpoints (sessions, queries, a2a, health, etc.)
-    │   └── dependencies.py     # Dependency injection helpers (SessionManager, A2A, TenantContext)
+    │   ├── routes/             # Public REST routers (sessions, queries, a2a, health, guardrails)
+    │   ├── services/           # Route-level application services for sessions and queries
+    │   ├── dependencies.py     # Dependency injection helpers (SessionManager, A2A, TenantContext)
+    │   ├── session_context.py  # Tenant/session wrapper binding helpers for API services
+    │   ├── error_mapping.py    # HTTP error mapping for session/query/capability flows
+    │   └── mcp_capabilities.py # Normalization helpers for MCP prompts/resources payloads
     ├── core/
-    │   ├── mcp_wrapper.py      # Public MCP boundary / façade around mcp-use
-    │   ├── mcp_wrapper_llm.py  # Internal LLM/runtime bootstrap for the MCP boundary
-    │   ├── mcp_wrapper_transport.py       # Internal guarded MCP client/session proxies
-    │   ├── mcp_wrapper_guardrails_pii.py  # Internal PII guardrail logic
-    │   ├── mcp_wrapper_guardrails_bias.py # Internal bias guardrail logic
-    │   ├── mcp_wrapper_errors.py          # Internal MCP boundary errors
-    │   ├── guardrail_runner.py # Guardrail execution pipeline
-    │   ├── mcp_policy_engine.py# Tool policy evaluation
-    │   ├── mcp_audit.py        # Audit event primitives/recorder
-    │   ├── session_manager.py  # Session management (now tenant-aware)
-    │   ├── a2a_client.py       # A2A HTTP client for remote agents
-    │   └── exceptions.py       # Custom exceptions
+    │   ├── mcp_wrapper.py                  # Public MCP boundary / façade around mcp-use
+    │   ├── mcp_wrapper_capabilities.py     # Internal MCP capability invocation helpers
+    │   ├── mcp_wrapper_tools.py            # Internal tool/task execution helpers
+    │   ├── mcp_wrapper_guardrails.py       # Internal guardrail pipeline orchestration helpers
+    │   ├── mcp_wrapper_llm.py              # Internal LLM/runtime bootstrap for the MCP boundary
+    │   ├── mcp_wrapper_transport.py        # Internal guarded MCP client/session proxies
+    │   ├── mcp_wrapper_guardrails_pii.py   # Internal PII guardrail logic
+    │   ├── mcp_wrapper_guardrails_bias.py  # Internal bias guardrail logic
+    │   ├── mcp_wrapper_errors.py           # Internal MCP boundary errors
+    │   ├── guardrail_runner.py             # Guardrail execution pipeline
+    │   ├── mcp_policy_engine.py            # Tool policy evaluation
+    │   ├── mcp_audit.py                    # Audit event primitives/recorder
+    │   ├── session_manager.py              # Public session/query-operation orchestrator
+    │   ├── session_store.py                # In-memory SessionData and SessionStore primitives
+    │   ├── query_operation_store.py        # Async query-operation state/task storage
+    │   ├── session_manager_interactions.py # Pending elicitation/task-status helpers
+    │   ├── a2a_client.py                   # A2A HTTP client for remote agents
+    │   └── exceptions.py                   # Custom exceptions
     ├── models/
     │   ├── config.py           # Configuration models (MCP, A2A, LLM, multi-tenancy)
     │   ├── requests.py         # Request models
@@ -169,6 +179,9 @@ Guardrails are configured **per session** via the `guardrails` object in `POST /
 Internally, the MCP boundary is now split into focused modules:
 
 - `mcp_wrapper.py`: public façade, session lifecycle, query orchestration
+- `mcp_wrapper_capabilities.py`: capability lookup/invocation helpers for prompts, resources, and other optional MCP features
+- `mcp_wrapper_tools.py`: direct tool invocation helpers, task-support detection, raw MCP task transport
+- `mcp_wrapper_guardrails.py`: shared guardrail pipeline wiring and tool-result wrapping helpers
 - `mcp_wrapper_llm.py`: provider imports, sandbox normalization, LLM construction
 - `mcp_wrapper_transport.py`: guarded MCP client/session proxies
 - `mcp_wrapper_guardrails_pii.py`: PII detection, redaction, before/after-model factories
@@ -181,6 +194,23 @@ Internally, the MCP boundary is now split into focused modules:
 - `GuardrailRunner` for guardrail execution
 - the audit/event layer for structured observability
 - the underlying `mcp-use` client/agent runtime
+
+### Session and API orchestration internals
+
+`SessionManager` remains the public session façade/orchestrator used by the API layer, but its in-memory responsibilities are now split across focused helpers:
+
+- `session_store.py`: owns `SessionData` and `SessionStore` for active sessions
+- `query_operation_store.py`: tracks async query-operation state, results, and background tasks
+- `session_manager_interactions.py`: tracks pending elicitation and task-status interactions
+
+`SessionData` now lives in `app/core/session_store.py`, not in `session_manager.py`.
+
+The FastAPI route layer is intentionally thin:
+
+- `app/api/routes/sessions.py` and `app/api/routes/queries.py` remain the public routers
+- `app/api/services/session_service.py` and `app/api/services/query_service.py` contain the route-facing orchestration
+- `app/api/session_context.py` centralizes tenant/session lookup and wrapper context binding
+- `app/api/error_mapping.py` centralizes HTTP error translation for session/query/capability flows
 
 #### Global enable/disable
 

@@ -51,7 +51,7 @@ Project: **mcp-bridge – MCP + A2A integration**
     * LLM provider keys and URLs
     * E2B sandbox configuration
     * **Multi-tenancy** (`MultiTenancySettings`)
-    * **A2A config** (`A2ASettings`, `A2AgentConfig`)
+    * **A2A config** (`A2ASettings`, `A2AAgentConfig`)
 
 * **Core layer (`app/core/`)**
 
@@ -70,6 +70,9 @@ Project: **mcp-bridge – MCP + A2A integration**
   * `mcp_wrapper_*` internal modules:
 
     * This focused internal split is the intended current architecture for the MCP boundary
+    * `mcp_wrapper_capabilities`: capability lookup/invocation helpers for prompts, resources, and other optional MCP features
+    * `mcp_wrapper_tools`: direct tool invocation helpers, task-support detection, raw MCP task transport
+    * `mcp_wrapper_guardrails`: shared guardrail pipeline wiring and tool-result wrapping helpers
     * `mcp_wrapper_llm`: provider imports, sandbox normalization, LLM creation
     * `mcp_wrapper_transport`: guarded MCP client/session proxies
     * `mcp_wrapper_guardrails_pii`: PII detection/redaction and related guardrail factories
@@ -91,8 +94,12 @@ Project: **mcp-bridge – MCP + A2A integration**
     * Provides the in-memory audit recorder used by wrapper and guardrail runner
   * `SessionManager`:
 
-    * Manages in-memory `SessionData` objects
+    * Remains the public session/query-operation façade used by the API layer
+    * Delegates active session persistence to `SessionStore`
+    * Delegates async query-operation state/tasks to `QueryOperationStore`
+    * Delegates pending elicitation/task-status bookkeeping to `PendingInteractionStore`
     * Responsible for creating, storing, retrieving, listing, and deleting sessions
+    * Responsible for scheduling and resuming asynchronous query operations
     * Enforces `MAX_ACTIVE_SESSIONS`
     * Uses an `asyncio.Lock` for concurrency safety
 
@@ -137,11 +144,23 @@ Project: **mcp-bridge – MCP + A2A integration**
 
   * `routes/sessions.py`:
 
-    * CRUD operations on sessions
-    * Execution of MCP queries
+    * Public router for session CRUD plus MCP prompt/resource capability endpoints
   * `routes/queries.py`:
 
-    * Query-related endpoints (if separated)
+    * Public router for synchronous queries, async query operations, and query history
+  * `services/session_service.py`:
+
+    * Route-facing session orchestration
+    * Maps session/prompt/resource flows onto `SessionManager` and `MCPWrapper`
+  * `services/query_service.py`:
+
+    * Route-facing query and query-operation orchestration
+  * `session_context.py`:
+
+    * Tenant-scoped session lookup and wrapper context binding helpers
+  * `error_mapping.py`:
+
+    * Shared HTTP error translation for session/query/capability flows
   * `routes/health.py`:
 
     * Health check endpoints
@@ -171,7 +190,7 @@ Project: **mcp-bridge – MCP + A2A integration**
 
     * `SessionResponse`, `SessionInfo`
     * `QueryResponse`
-    * `A2AgentSummary`, `A2AMessageResponse`, `A2ATaskStatusResponse`
+    * `A2AAgentSummary`, `A2AMessageResponse`, `A2ATaskStatusResponse`
 
 * **Utilities (`app/utils/`)**
 
@@ -246,7 +265,7 @@ Project: **mcp-bridge – MCP + A2A integration**
 
   * `async initialize()`:
 
-    * Wires boundary-specific helper modules (`mcp_wrapper_llm`, `mcp_wrapper_transport`, guardrail modules)
+    * Wires boundary-specific helper modules (`mcp_wrapper_capabilities`, `mcp_wrapper_tools`, `mcp_wrapper_guardrails`, `mcp_wrapper_llm`, `mcp_wrapper_transport`, specialized guardrail modules)
     * Creates `mcp-use` client(s)
     * Connects to configured MCP servers
     * Prepares tools and sessions
@@ -265,16 +284,20 @@ Project: **mcp-bridge – MCP + A2A integration**
 
 * Internal state:
 
-  * `self._sessions: Dict[str, SessionData]`
+  * `self._session_store: SessionStore`
+  * `self._sessions: Dict[str, SessionData]` (owned by `SessionStore`)
+  * `self._query_operation_store: QueryOperationStore`
+  * `self._interaction_store: PendingInteractionStore`
   * `self._lock: asyncio.Lock`
 
-* `SessionData` structure (from `session_manager.py`):
+* `SessionData` structure (from `session_store.py`):
 
   * `session_id: str`
   * `config: SessionConfig`
   * `wrapper: MCPWrapper`
   * `created_at: datetime`
   * `last_used: datetime`
+  * `status: str` (currently `"active"`)
   * `query_count: int`
   * `tenant_id: Optional[str]` (for multi-tenancy)
   * `last_run_id: Optional[str]` (for correlation)
@@ -282,7 +305,7 @@ Project: **mcp-bridge – MCP + A2A integration**
   Methods:
 
   * `update_last_used()`: sets `last_used = now()`
-  * `register_query()`: increments `query_count`
+  * `register_query()`: increments `query_count` and refreshes `last_used`
 
 * Methods:
 
@@ -291,37 +314,42 @@ Project: **mcp-bridge – MCP + A2A integration**
     * Enforces `MAX_ACTIVE_SESSIONS`
     * Creates `MCPWrapper`, calls `await wrapper.initialize()`
     * Creates `SessionData` with the given tenant/run IDs
-    * Stores in `self._sessions[session_id]`
+    * Stores it through `SessionStore.add(...)`
     * Returns `session_id`
 
-  * `async get_session(session_id: str) -> SessionData`:
+  * `async get_session(session_id: str, tenant_id: Optional[str] = None) -> SessionData`:
 
     * Protects with `async with self._lock`
-    * Looks up `session_data` in `self._sessions`
+    * Delegates lookup to `SessionStore.get(...)`
     * If not found → `SessionNotFoundError`
+    * If `tenant_id` is provided and does not match → `SessionNotFoundError`
     * Updates `last_used`
     * Returns `session_data`
 
   * `async list_sessions(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]`:
 
-    * Iterates over `self._sessions.values()`
-    * If `tenant_id` is provided, filters sessions whose `session_data.tenant_id == tenant_id`
+    * Delegates to `SessionStore.list_sessions(...)`
     * Returns a list of dictionaries containing:
 
       * `session_id`
-      * `status` (derived, e.g. `"active"`)
+      * `status`
       * `created_at`, `last_used`
       * `query_count`
       * `servers` = list of keys in `config.mcp_servers`
       * `llm_provider` = `config.llm_provider.provider`
       * `llm_model` = `config.llm_provider.model`
-      * `tenant_id` (optional, for debugging/introspection)
 
   * `async delete_session(session_id: str, tenant_id: Optional[str] = None)`:
 
     * Checks that the session belongs to `tenant_id` (if provided)
-    * Removes it from `self._sessions`
-    * Handles cleanup (closing wrappers, etc.) as needed
+    * Clears pending elicitation state and async query-operation tasks
+    * Closes the wrapper
+    * Removes the session via `SessionStore.remove(...)`
+
+  * `async create_query_operation(...)`, `get_query_operation(...)`, `resume_query_operation(...)`:
+
+    * Use `QueryOperationStore` for queued/running/completed/failed operation state
+    * Use `PendingInteractionStore` for elicitation pauses and resumes
 
 ---
 
@@ -568,20 +596,20 @@ Common `code` values:
 2. FastAPI route `create_session`:
 
    * `tenant_ctx = get_tenant_context(...)` resolves `tenant_id`, `run_id`.
-   * Treats `request` as `SessionConfig`.
+   * Delegates to `session_service.create_session(...)`.
+   * `session_service` treats `request` as `SessionConfig`.
    * Calls `SessionManager.create_session(config, tenant_id, run_id)`.
    * Returns `SessionResponse` with `session_id`, `status="created"`, list of configured MCP servers.
 3. **Client** calls `POST /sessions/{session_id}/query` with `QueryRequest`:
 
-   * Route `execute_query`:
+   * Route `execute_query` delegates to `query_service.execute_query(...)`:
 
      * `session_data = await session_manager.get_session(session_id)`
-     * `wrapper = session_data.wrapper`
+     * `wrapper = bind_wrapper_context(session_data.wrapper, tenant_ctx=tenant_ctx, session_id=session_id)`
      * Measures execution time via `event_loop.time()`
      * Calls `await wrapper.run_query(query=request.query, max_steps=request.max_steps, server_name=request.server_name)`
-     * `session_data.register_query()`
      * Uses `wrapper.steps_used` and `wrapper.last_server_used`
-     * Returns `QueryResponse` (session_id, result, execution_time, steps_used, timestamp, server_used)
+     * Returns `QueryResponse` (session_id, result, execution_time, steps_used, timestamp, server_used, `has_mcp_servers`)
 
 ### A2A Flow (SDK-based implementation)
 
