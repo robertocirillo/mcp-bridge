@@ -23,10 +23,16 @@ class LLMProvider(BaseModel):
 class MCPServerConfig(BaseModel):
     """Configuration of an MCP Server"""
 
+    model_config = ConfigDict(extra="allow")
+
     command: Optional[str] = Field(None, description="Command to start the server")
     args: Optional[List[str]] = Field(None, description="Command arguments")
     env: Optional[Dict[str, str]] = Field(None, description="Environment variables")
     url: Optional[str] = Field(None, description="URL for HTTP connections")
+    transport: Optional[Literal["streamable-http", "sse"]] = Field(
+        None,
+        description="Optional explicit HTTP transport override for remote MCP servers",
+    )
 
     def model_post_init(self, __context):
         """Post-initialization validation"""

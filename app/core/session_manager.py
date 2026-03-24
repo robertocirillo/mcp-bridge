@@ -625,17 +625,12 @@ class SessionManager:
         mcp_servers = {}
 
         for name, config in servers.items():
-            server_config = {}
-
-            if config.url:
-                server_config["url"] = config.url
+            if hasattr(config, "model_dump"):
+                server_config = config.model_dump(exclude_none=True)
+            elif isinstance(config, dict):
+                server_config = {key: value for key, value in config.items() if value is not None}
             else:
-                if config.command:
-                    server_config["command"] = config.command
-                if config.args:
-                    server_config["args"] = config.args
-                if config.env:
-                    server_config["env"] = config.env
+                server_config = {}
 
             mcp_servers[name] = server_config
 
