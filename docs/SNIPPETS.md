@@ -228,315 +228,265 @@ def get_tenant_context(
 
 ## 3. Session Manager & Session Data
 
-### 3.1 SessionData (`app/core/session_manager.py`)
+### 3.1 Session Primitives (`app/core/session_store.py`)
 
 ```python
-from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from app.models.config import SessionConfig
 from app.core.mcp_wrapper import MCPWrapper
+from app.models.config import SessionConfig
 
 
-@dataclass
 class SessionData:
-    session_id: str
-    config: SessionConfig
-    wrapper: MCPWrapper
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    last_used: datetime = field(default_factory=datetime.utcnow)
-    query_count: int = 0
+    """Active session state stored in memory."""
 
-    tenant_id: Optional[str] = None
-    last_run_id: Optional[str] = None
+    def __init__(
+        self,
+        session_id: str,
+        config: SessionConfig,
+        wrapper: MCPWrapper,
+        tenant_id: Optional[str] = None,
+        last_run_id: Optional[str] = None,
+    ):
+        self.session_id = session_id
+        self.config = config
+        self.wrapper = wrapper
+        self.created_at = datetime.now()
+        self.last_used = datetime.now()
+        self.status = "active"
+        self.query_count = 0
+        self.tenant_id = tenant_id
+        self.last_run_id = last_run_id
 
     def update_last_used(self) -> None:
-        self.last_used = datetime.utcnow()
+        self.last_used = datetime.now()
 
     def register_query(self) -> None:
         self.query_count += 1
+        self.update_last_used()
+```
+
+### 3.2 SessionManager Composition (`app/core/session_manager.py`)
+
+> NOTE: This is intentionally high-level. `SessionManager` remains the public facade, but session state, async query-operation state, and pending interactions now live in dedicated modules.
+
+```python
+import asyncio
+
+from app.core.query_operation_store import QueryOperationStore
+from app.core.session_manager_interactions import PendingInteractionStore
+from app.core.session_store import SessionStore
+
+
+class SessionManager:
+    def __init__(self):
+        self._session_store = SessionStore()
+        self._sessions = self._session_store.sessions
+        self._query_operation_store = QueryOperationStore()
+        self._interaction_store = PendingInteractionStore()
+        self._lock = asyncio.Lock()
+
+    async def create_session(self, config, tenant_id=None, run_id=None) -> str:
+        ...
+
+    async def get_session(self, session_id: str, tenant_id=None):
+        ...
+
+    async def list_sessions(self, tenant_id=None):
+        return self._session_store.list_sessions(tenant_id=tenant_id)
+
+    async def delete_session(self, session_id: str, tenant_id=None):
+        ...
+
+    async def create_query_operation(self, session_id: str, request, tenant_id=None, run_id=None):
+        ...
+
+    async def resume_query_operation(self, session_id: str, operation_id: str, request, tenant_id=None):
+        ...
 ```
 
 ---
 
 ## 4. MCPWrapper – High-Level Shape
 
-> NOTE: This is conceptual; exact implementation is centered on `app/core/mcp_wrapper.py` and its internal `app/core/mcp_wrapper_*.py` helper modules, all within the same MCP boundary around `mcp-use`.
+> NOTE: This is conceptual; the public entry point is still `app/core/mcp_wrapper.py`, while the MCP boundary is now split across focused internal modules.
 
 ```python
-from typing import Any, Dict, Optional
-
-from app.utils.logging import get_logger
-
-logger = get_logger(__name__)
+from app.core import (
+    mcp_wrapper_capabilities,
+    mcp_wrapper_guardrails,
+    mcp_wrapper_tools,
+)
 
 
 class MCPWrapper:
-    def __init__(
-        self,
-        llm_provider: str,
-        model: str,
-        api_key: Optional[str],
-        base_url: Optional[str],
-        temperature: float,
-        max_tokens: Optional[int],
-        mcp_servers: Dict[str, Any],
-        max_steps: int,
-        verbose: bool,
-        sandbox: bool,
-        sandbox_options: Optional[Dict[str, Any]],
-        disallowed_tools: Optional[list[str]],
-        use_server_manager: bool,
-    ) -> None:
-        self.llm_provider = llm_provider
-        self.model = model
-        self.api_key = api_key
-        self.base_url = base_url
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.mcp_servers = mcp_servers
-        self.max_steps = max_steps
-        self.verbose = verbose
-        self.sandbox = sandbox
-        self.sandbox_options = sandbox_options or {}
-        self.disallowed_tools = disallowed_tools or []
-        self.use_server_manager = use_server_manager
+    """Public facade around mcp-use and bridge-side runtime policies."""
 
-        self.steps_used: int = 0
-        self.last_server_used: Optional[str] = None
+    def __init__(self, ..., mcp_servers, ..., disallowed_tools=None, ...):
+        self.mcp_servers = mcp_servers or {}
+        self.has_mcp_servers = bool(self.mcp_servers)
 
-        # Internal mcp-use client / agent will be set in initialize()
-        self._agent = None
+        self.tool_policy_engine = ...
+        self.guardrail_runner = ...
+        self.audit_recorder = ...
+
+        self.steps_used = 0
+        self.last_server_used = None
 
     async def initialize(self) -> None:
-        """Initialize the mcp-use agent and connect to MCP servers.
+        # Provider/runtime bootstrap stays in mcp_wrapper_llm.py
+        # Transport/session guards stay in mcp_wrapper_transport.py
+        # Capability helpers live in mcp_wrapper_capabilities.py
+        # Direct tool/task helpers live in mcp_wrapper_tools.py
+        ...
 
-        Must handle the case where mcp_servers is empty (LLM-only mode).
-        """
-        logger.info("Initializing MCPWrapper with provider %s and model %s", self.llm_provider, self.model)
+    async def run_query(self, query: str, max_steps=None, server_name=None):
+        ...
 
-    async def run_query(
-        self,
-        query: str,
-        max_steps: Optional[int] = None,
-        server_name: Optional[str] = None,
-    ) -> Any:
-        """Execute a query using mcp-use agent."""
-        logger.debug("Executing query: %s", query[:100])
-        effective_max_steps = max_steps if max_steps and max_steps > 0 else self.max_steps
-        raise NotImplementedError
+    async def list_prompts(self, server_name=None):
+        ...
+
+    async def render_prompt(self, prompt_name: str, arguments=None, server_name=None):
+        ...
+
+    async def list_resources(self, server_name=None):
+        ...
+
+    async def read_resource(self, uri: str, server_name=None):
+        ...
+
+    async def call_tool(self, tool_name: str, arguments=None, server_name=None):
+        ...
 ```
+
+Internal split reflected by the current codebase:
+
+- `mcp_wrapper_capabilities.py`: prompt/resource capability lookup and invocation helpers
+- `mcp_wrapper_tools.py`: direct tool execution, task-support detection, raw MCP task transport
+- `mcp_wrapper_guardrails.py`: shared guardrail pipeline wiring and tool-result wrapping helpers
+- `mcp_wrapper_llm.py`: provider/runtime bootstrap and sandbox normalization
+- `mcp_wrapper_transport.py`: guarded MCP client/session proxies
+- `mcp_wrapper_guardrails_pii.py`: PII guardrails
+- `mcp_wrapper_guardrails_bias.py`: bias guardrails and detector integration
+- `mcp_wrapper_errors.py`: boundary-specific exceptions
 
 ---
 
-## 5. FastAPI Routes – MCP Sessions & Queries
+## 5. FastAPI Route Layer – Thin Routers, Dedicated Services
 
-### 5.1 Create Session (`POST /sessions`)
+> NOTE: The older pattern where routes directly orchestrated sessions and mapped exceptions is obsolete. The current structure keeps routers thin and delegates to `app/api/services/*`, `app/api/session_context.py`, and `app/api/error_mapping.py`.
+
+### 5.1 Public Routers (`app/api/routes/sessions.py`, `app/api/routes/queries.py`)
 
 ```python
-from typing import List
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
-from app.api.dependencies import get_session_manager, get_tenant_context, TenantContext
-from app.core.session_manager import SessionManager
-from app.core.exceptions import (
-    MaxSessionsExceededError,
-    SessionNotFoundError,
-    ConfigurationError,
-    MCPWrapperError,
-)
-from app.models.requests import SessionCreateRequest
-from app.models.responses import SessionResponse
-from app.utils.logging import get_logger
+from app.api.dependencies import TenantContext, get_session_manager, get_tenant_context
+from app.api.services import query_service, session_service
+from app.models.requests import QueryRequest, SessionCreateRequest
+from app.models.responses import QueryResponse, SessionResponse
 
+TenantDep = Annotated[TenantContext, Depends(get_tenant_context)]
 router = APIRouter()
-logger = get_logger(__name__)
 
 
 @router.post("", response_model=SessionResponse)
-async def create_session(
-    request: SessionCreateRequest,
-    tenant_ctx: TenantContext = Depends(get_tenant_context),
-    session_manager: SessionManager = Depends(get_session_manager),
-):
-    """Create new MCP session."""
-    try:
-        # request already is a SessionConfig (inherits from SessionConfig)
-        config = request
+async def create_session(request: SessionCreateRequest, tenant_ctx: TenantDep, session_manager=Depends(get_session_manager)):
+    return await session_service.create_session(
+        request=request,
+        tenant_ctx=tenant_ctx,
+        session_manager=session_manager,
+    )
 
+
+@router.post("/{session_id}/query", response_model=QueryResponse)
+async def execute_query(session_id: str, request: QueryRequest, tenant_ctx: TenantDep, session_manager=Depends(get_session_manager)):
+    return await query_service.execute_query(
+        session_id=session_id,
+        request=request,
+        tenant_ctx=tenant_ctx,
+        session_manager=session_manager,
+    )
+```
+
+### 5.2 Session/Wrapper Context Helpers (`app/api/session_context.py`)
+
+```python
+async def get_tenant_session(*, session_id: str, tenant_ctx: TenantContext, session_manager: SessionManager):
+    return await session_manager.get_session(
+        session_id=session_id,
+        tenant_id=tenant_ctx.tenant_id,
+    )
+
+
+def bind_wrapper_context(wrapper, *, tenant_ctx: TenantContext, session_id: str):
+    wrapper.set_context(
+        tenant_id=tenant_ctx.tenant_id,
+        run_id=tenant_ctx.run_id,
+        session_id=session_id,
+    )
+    return wrapper
+```
+
+### 5.3 Session Route Services (`app/api/services/session_service.py`)
+
+```python
+async def create_session(*, request: SessionCreateRequest, tenant_ctx: TenantContext, session_manager: SessionManager):
+    try:
         session_id = await session_manager.create_session(
-            config,
+            config=request,
             tenant_id=tenant_ctx.tenant_id,
             run_id=tenant_ctx.run_id,
         )
-
         return SessionResponse(
             session_id=session_id,
             status="created",
             message="Session created successfully",
-            servers=list(config.mcp_servers.keys()),
+            servers=list(request.mcp_servers.keys()),
         )
+    except Exception as exc:
+        raise map_basic_session_error(exc) from exc
 
-    except MaxSessionsExceededError as e:
-        logger.warning("Limit exceeded %s", e)
-        raise HTTPException(status_code=429, detail=str(e))
-    except ConfigurationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except MCPWrapperError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    except Exception:
-        raise HTTPException(status_code=500, detail="Internal Error")
+
+async def list_resources(*, session_id: str, tenant_ctx: TenantContext, server_name: str | None, session_manager: SessionManager):
+    wrapper = await get_owned_wrapper(
+        session_id=session_id,
+        tenant_ctx=tenant_ctx,
+        session_manager=session_manager,
+    )
+    result = await wrapper.list_resources(server_name=server_name)
+    ...
 ```
 
-### 5.2 List Sessions (`GET /sessions`)
+### 5.4 Query Route Services (`app/api/services/query_service.py`)
 
 ```python
-from typing import List
+async def execute_query(*, session_id: str, request: QueryRequest, tenant_ctx: TenantContext, session_manager: SessionManager):
+    session_data = await session_manager.get_session(session_id)
+    wrapper = bind_wrapper_context(
+        session_data.wrapper,
+        tenant_ctx=tenant_ctx,
+        session_id=session_id,
+    )
 
-from fastapi import APIRouter, Depends, HTTPException
+    result = await wrapper.run_query(
+        query=request.query,
+        max_steps=request.max_steps,
+        server_name=request.server_name,
+    )
 
-from app.api.dependencies import get_session_manager, get_tenant_context, TenantContext
-from app.core.session_manager import SessionManager
-from app.core.exceptions import SessionNotFoundError, ConfigurationError, MCPWrapperError
-from app.models.responses import SessionInfo
-from app.utils.logging import get_logger
-
-router = APIRouter()
-logger = get_logger(__name__)
-
-
-@router.get("", response_model=List[SessionInfo])
-async def list_sessions(
-    tenant_ctx: TenantContext = Depends(get_tenant_context),
-    session_manager: SessionManager = Depends(get_session_manager),
-):
-    """Active sessions list (tenant-scoped)."""
-    try:
-        sessions_data = await session_manager.list_sessions(tenant_id=tenant_ctx.tenant_id)
-        return [SessionInfo(**data) for data in sessions_data]
-
-    except SessionNotFoundError as e:
-        logger.warning("Session not found %s", e)
-        raise HTTPException(status_code=429, detail=str(e))
-    except ConfigurationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except MCPWrapperError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    except Exception:
-        raise HTTPException(status_code=500, detail="Internal Error")
-```
-
-### 5.3 Execute Query (`POST /sessions/{session_id}/query`)
-
-```python
-from datetime import datetime
-import asyncio
-
-from fastapi import APIRouter, Depends, HTTPException
-
-from app.api.dependencies import get_session_manager, get_tenant_context, TenantContext
-from app.core.session_manager import SessionManager
-from app.core.exceptions import SessionNotFoundError, ConfigurationError, MCPWrapperError
-from app.models.requests import QueryRequest
-from app.models.responses import QueryResponse
-from app.utils.logging import get_logger
-
-router = APIRouter()
-logger = get_logger(__name__)
-
-
-@router.post("/{session_id}/query", response_model=QueryResponse)
-async def execute_query(
-    session_id: str,
-    request: QueryRequest,
-    tenant_ctx: TenantContext = Depends(get_tenant_context),
-    session_manager: SessionManager = Depends(get_session_manager),
-):
-    """Execute a query on an existing session."""
-    try:
-        session_data = await session_manager.get_session_for_tenant(
-            session_id, tenant_ctx.tenant_id
-        )
-        wrapper = session_data.wrapper
-
-        start_time = asyncio.get_event_loop().time()
-
-        result = await wrapper.run_query(
-            query=request.query,
-            max_steps=request.max_steps,
-            server_name=request.server_name,
-        )
-
-        end_time = asyncio.get_event_loop().time()
-        execution_time = end_time - start_time
-
-        session_data.register_query()
-
-        steps_used = wrapper.steps_used
-        server_used = getattr(wrapper, "last_server_used", None)
-
-        return QueryResponse(
-            session_id=session_id,
-            result=result,
-            execution_time=execution_time,
-            steps_used=steps_used,
-            timestamp=datetime.now(),
-            server_used=server_used,
-        )
-
-    except SessionNotFoundError as e:
-        logger.warning("Session not found: %s", e)
-        raise HTTPException(status_code=404, detail=str(e))
-    except ConfigurationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except MCPWrapperError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    except Exception:
-        raise HTTPException(status_code=500, detail="Internal Error")
-```
-
-### 5.4 Delete Session (`DELETE /sessions/{session_id}`)
-
-```python
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-
-from app.api.dependencies import get_session_manager, get_tenant_context, TenantContext
-from app.core.session_manager import SessionManager
-from app.core.exceptions import SessionNotFoundError, ConfigurationError, MCPWrapperError
-from app.utils.logging import get_logger
-
-router = APIRouter()
-logger = get_logger(__name__)
-
-
-@router.delete("/{session_id}")
-async def delete_session(
-    session_id: str,
-    background_tasks: BackgroundTasks,
-    tenant_ctx: TenantContext = Depends(get_tenant_context),
-    session_manager: SessionManager = Depends(get_session_manager),
-):
-    """Delete a session by ID (tenant-scoped)."""
-    try:
-        background_tasks.add_task(
-            session_manager.delete_session_for_tenant,
-            session_id,
-            tenant_ctx.tenant_id,
-        )
-
-        return {"message": f"Session {session_id} deleted successfully"}
-
-    except SessionNotFoundError as e:
-        logger.warning("Deleting not found session: %s", e)
-        raise HTTPException(status_code=404, detail=str(e))
-    except ConfigurationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except MCPWrapperError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    except Exception:
-        raise HTTPException(status_code=500, detail="Internal Error")
+    return QueryResponse(
+        session_id=session_id,
+        result=result,
+        execution_time=...,
+        steps_used=wrapper.steps_used,
+        timestamp=...,
+        server_used=wrapper.last_server_used,
+        has_mcp_servers=wrapper.has_mcp_servers,
+    )
 ```
 
 ---
