@@ -185,6 +185,50 @@ For the MCP/session side, the public FastAPI routers are now intentionally thin:
 }
 ```
 
+Backward compatibility:
+
+- Legacy text-only requests still use `query: string`.
+- Structured multimodal requests use `input`.
+
+Structured multimodal shape:
+
+```json
+{
+  "input": {
+    "text": "Describe this image",
+    "images": [
+      {
+        "source_type": "url",
+        "url": "https://example.com/cat.png"
+      },
+      {
+        "source_type": "base64",
+        "mime_type": "image/png",
+        "data": "iVBORw0KGgoAAAANSUhEUgAA..."
+      }
+    ]
+  },
+  "max_steps": 10,
+  "server_name": "filesystem"
+}
+```
+
+Supported V1 query shapes:
+
+- text only via `query`
+- text only via `input.text`
+- image only via `input.images`
+- text + image
+- image sources via remote URL or inline base64
+
+Validation / runtime notes:
+
+- If both `query` and `input` are provided, `input` wins.
+- Base64 image data is capped at `MAX_BASE64_IMAGE_DATA_LENGTH = 5_000_000` characters per image.
+- Before-model guardrails apply only to the textual portion (`query` or `input.text`).
+- The bridge does not moderate, inspect, or OCR image content in V1.
+- Effective image support depends on the configured provider/model; unsupported models may fail at runtime.
+
 **Flow:**
 
 1. `tenant_ctx = get_tenant_context(...)` (even if not explicitly used right now, session has tenant id bound).
@@ -198,7 +242,7 @@ For the MCP/session side, the public FastAPI routers are now intentionally thin:
 
 ```python
 result = await wrapper.run_query(
-    query=request.query,
+    query=resolve_request_query(query=request.query, input_payload=request.input),
     max_steps=request.max_steps,
     server_name=request.server_name,
 )
@@ -238,6 +282,9 @@ mcp-bridge runs guardrails through a LangChain-style pipeline inside `MCPWrapper
 - **before_model**: runs on the user query (input) before calling the LLM.
 - **after_model**: runs on the LLM output before returning it to the client.
 
+For multimodal requests, `before_model` guardrails receive only the text associated with the request.
+Image content is forwarded untouched to the provider/model runtime.
+
 **Enablement rule (auto-enable):**
 
 - If the session creation request omits the `guardrails` field entirely, guardrails are **disabled** by default.
@@ -260,6 +307,12 @@ Implementation note:
   - `mcp_wrapper_guardrails_bias.py`
   - `mcp_wrapper_transport.py`
   - `mcp_wrapper_llm.py`
+
+**Async query operations (`POST /sessions/{session_id}/query-operations`)**
+
+- Accept the same legacy `query` or structured multimodal `input` payloads.
+- Public operation metadata stores only a safe multimodal summary.
+- Raw base64 image data is not exposed through public async metadata.
 
 **Failure modes:**
 

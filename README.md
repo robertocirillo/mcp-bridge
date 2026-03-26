@@ -421,6 +421,19 @@ curl -X POST "http://localhost:8000/sessions/d0c02f31-06f0-4e8c-9e80-3f7eaf606e5
 
 V1 also supports a structured `input` payload for multimodal model queries. Images are sent in JSON only, never as multipart uploads.
 
+`QueryRequest` / `QueryOperationCreateRequest` now accept:
+
+- `query: string` for the legacy text-only shape
+- `input.text: string | null`
+- `input.images: []`
+
+Each image entry supports:
+
+- `source_type: "url" | "base64"`
+- `url`: required when `source_type="url"`
+- `mime_type`: required when `source_type="base64"`
+- `data`: required when `source_type="base64"`
+
 ```json
 {
   "input": {
@@ -445,9 +458,22 @@ Structured input supports:
 
 Examples:
 
+Legacy text-only:
+
+```json
+{
+  "query": "Use the filesystem tools to list the files in the current directory.",
+  "max_steps": 10
+}
+```
+
+Text-only via `input.text`:
+
 ```json
 { "input": { "text": "Summarize this request" } }
 ```
+
+Image-only via URL:
 
 ```json
 {
@@ -462,6 +488,8 @@ Examples:
 }
 ```
 
+Text + image via URL:
+
 ```json
 {
   "input": {
@@ -475,6 +503,8 @@ Examples:
   }
 }
 ```
+
+Text + image via base64:
 
 ```json
 {
@@ -495,9 +525,10 @@ Notes:
 
 - If both `query` and `input` are provided, `input` wins.
 - `POST /sessions/{session_id}/query-operations` accepts the same query payload shapes.
+- Base64 images are limited to `MAX_BASE64_IMAGE_DATA_LENGTH = 5_000_000` characters per image to keep request size and memory usage bounded in V1.
 - Async query-operation metadata stores a safe multimodal summary and never echoes raw base64 blobs.
-- Before-model guardrails still apply only to the textual portion (`query` or `input.text`), not to image content.
-- Effective multimodal support depends on the underlying provider/model used by the session.
+- In V1, before-model guardrails still apply only to the textual portion (`query` or `input.text`). Image content is not moderated, inspected, or OCR-processed by the bridge.
+- Effective multimodal support depends on the configured provider/model. If the selected model does not support image input, the request can fail at runtime.
 
 If the `session_id` does not belong to tenant-A, the API will respond with **404** (even if the session exists for another tenant).
 
@@ -513,6 +544,45 @@ If the `session_id` does not belong to tenant-A, the API will respond with **404
   "server_used": "filesystem"
 }
 ```
+
+### 2.1 Create an Async Query Operation
+
+**Endpoint**
+
+```
+POST /sessions/{session_id}/query-operations
+```
+
+This endpoint accepts the same legacy `query` or structured `input` payload used by `POST /sessions/{session_id}/query`.
+
+For multimodal requests, public operation metadata exposes only a safe summary:
+
+```json
+{
+  "metadata": {
+    "request": {
+      "input": {
+        "text_present": true,
+        "text_length": 23,
+        "image_count": 2,
+        "images": [
+          {
+            "source_type": "url",
+            "url": "https://example.com/..."
+          },
+          {
+            "source_type": "base64",
+            "mime_type": "image/png",
+            "data_size_bytes": 123456
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+The raw base64 blob is kept out of public async metadata.
 
 ---
 
@@ -747,6 +817,10 @@ List active sessions for the current tenant.
 #### POST /sessions/{session_id}/query
 Execute a query in the given MCP session (tenant must match).
 Supports legacy `query` and structured multimodal `input`.
+
+#### POST /sessions/{session_id}/query-operations
+Create an asynchronous query execution using the same legacy or multimodal payload.
+Public operation metadata exposes only a safe multimodal summary.
 
 ---
 
