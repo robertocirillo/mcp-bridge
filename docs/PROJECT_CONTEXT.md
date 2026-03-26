@@ -6,6 +6,12 @@ Project: **mcp-bridge – MCP + A2A integration**
 
 ## 1. Project Goal
 
+Important baseline for the current branch:
+
+* The project has been upgraded from **`mcp-use 1.3.x`** to **`mcp-use 1.7.0`**.
+* This is a foundational runtime change, not a minor dependency bump.
+* The current multimodal implementation depends on that upgrade because the `HumanMessage` execution path is expected to work correctly only on the newer `mcp-use` runtime.
+
 **mcp-bridge** is a FastAPI-based REST service that:
 
 1. Exposes a **REST API** for:

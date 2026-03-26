@@ -8,6 +8,7 @@ It is ready to work with a Docker MCP gateway in either **DIND** or **DOD** mode
 
 ## 🚀 Features
 
+- **Important baseline upgrade** – This branch also upgrades `mcp-use` from `1.3.x` to `1.7.0`; this is a prerequisite for the current multimodal flow because the `HumanMessage` path works correctly only after that runtime upgrade
 - **Modular architecture** – Code organized into well-separated modules (`core`, `api`, `models`, `utils`)
 - **Advanced session management** – Persistent MCP sessions with automatic cleanup
 - **Multi-provider LLM** – Support for OpenAI, Anthropic, Ollama (via `mcp-use`)
@@ -423,6 +424,11 @@ curl -X POST "http://localhost:8000/sessions/d0c02f31-06f0-4e8c-9e80-3f7eaf606e5
 ```
 
 V1.5 also supports a structured `input` payload for multimodal model queries. Images are sent in JSON only, never as multipart uploads.
+
+Important runtime note:
+
+- This V1.5 work assumes the project is already on `mcp-use==1.7.0`.
+- The upgrade from `mcp-use 1.3.x` to `1.7.0` is not incidental: it is a required baseline because the multimodal `HumanMessage` path is known to work correctly only after that upgrade.
 
 `QueryRequest` / `QueryOperationCreateRequest` now accept:
 
