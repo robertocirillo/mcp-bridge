@@ -410,6 +410,95 @@ curl -X POST "http://localhost:8000/sessions/d0c02f31-06f0-4e8c-9e80-3f7eaf606e5
   }'
 ```
 
+`mcp-bridge` still supports the legacy text-only shape:
+
+```json
+{
+  "query": "Use the filesystem tools to list the files in the current directory.",
+  "max_steps": 10
+}
+```
+
+V1 also supports a structured `input` payload for multimodal model queries. Images are sent in JSON only, never as multipart uploads.
+
+```json
+{
+  "input": {
+    "text": "Describe the attached image",
+    "images": [
+      {
+        "source_type": "url",
+        "url": "https://example.com/cat.png"
+      }
+    ]
+  }
+}
+```
+
+Structured input supports:
+
+- text only via `input.text`
+- image only via `input.images`
+- text + image
+- image sources via remote `url` or inline `base64`
+- base64 MIME types: `image/png`, `image/jpeg`, `image/webp`
+
+Examples:
+
+```json
+{ "input": { "text": "Summarize this request" } }
+```
+
+```json
+{
+  "input": {
+    "images": [
+      {
+        "source_type": "url",
+        "url": "https://example.com/diagram.webp"
+      }
+    ]
+  }
+}
+```
+
+```json
+{
+  "input": {
+    "text": "What is in this image?",
+    "images": [
+      {
+        "source_type": "url",
+        "url": "https://example.com/photo.jpg"
+      }
+    ]
+  }
+}
+```
+
+```json
+{
+  "input": {
+    "text": "Read the chart and summarize it",
+    "images": [
+      {
+        "source_type": "base64",
+        "mime_type": "image/png",
+        "data": "iVBORw0KGgoAAAANSUhEUgAA..."
+      }
+    ]
+  }
+}
+```
+
+Notes:
+
+- If both `query` and `input` are provided, `input` wins.
+- `POST /sessions/{session_id}/query-operations` accepts the same query payload shapes.
+- Async query-operation metadata stores a safe multimodal summary and never echoes raw base64 blobs.
+- Before-model guardrails still apply only to the textual portion (`query` or `input.text`), not to image content.
+- Effective multimodal support depends on the underlying provider/model used by the session.
+
 If the `session_id` does not belong to tenant-A, the API will respond with **404** (even if the session exists for another tenant).
 
 **Example response**
@@ -657,6 +746,7 @@ List active sessions for the current tenant.
 
 #### POST /sessions/{session_id}/query
 Execute a query in the given MCP session (tenant must match).
+Supports legacy `query` and structured multimodal `input`.
 
 ---
 

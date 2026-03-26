@@ -14,11 +14,13 @@ from app.core.exceptions import (
     QueryOperationNotFoundError,
     SessionNotFoundError,
 )
+from app.core.model_query import sanitize_multimodal_error, summarize_query_input
 from app.core.mcp_wrapper import GuardrailViolationError, MCPToolNotAllowedError
 from app.models.requests import QueryOperationCreateRequest
 from app.models.responses import (
     QueryOperationError,
     QueryOperationInput,
+    QueryOperationMultimodalInput,
     QueryOperationResponse,
     QueryOperationResult,
     QueryOperationStatus,
@@ -28,12 +30,19 @@ from app.models.responses import (
 
 def build_query_operation_input(
     request: QueryOperationCreateRequest,
-) -> QueryOperationInput | QueryOperationToolInput:
+) -> QueryOperationInput | QueryOperationMultimodalInput | QueryOperationToolInput:
     if request.tool_name is not None:
         return QueryOperationToolInput(
             server_name=request.server_name,
             tool_name=request.tool_name,
             arguments=dict(request.arguments),
+        )
+
+    if request.input is not None:
+        return QueryOperationMultimodalInput(
+            input=summarize_query_input(request.input),
+            max_steps=request.max_steps,
+            server_name=request.server_name,
         )
 
     return QueryOperationInput(
@@ -55,7 +64,7 @@ def serialize_query_operation_error(exc: Exception) -> QueryOperationError:
             details["tool_name"] = tool_name
         return QueryOperationError(
             code="MCP_TOOL_NOT_ALLOWED",
-            message=str(exc),
+            message=sanitize_multimodal_error(exc),
             details=details,
         )
     if isinstance(exc, GuardrailViolationError):
@@ -69,23 +78,23 @@ def serialize_query_operation_error(exc: Exception) -> QueryOperationError:
             details["details"] = extra_details
         return QueryOperationError(
             code=getattr(exc, "code", "GUARDRAIL_VIOLATION"),
-            message=getattr(exc, "message", str(exc)),
+            message=sanitize_multimodal_error(getattr(exc, "message", str(exc))),
             details=details,
         )
     if isinstance(exc, QueryOperationElicitationDeclinedError):
         return QueryOperationError(
             code="MCP_ELICITATION_DECLINED",
-            message=str(exc),
+            message=sanitize_multimodal_error(exc),
         )
     if isinstance(exc, ConfigurationError):
-        return QueryOperationError(code="MCP_CONFIGURATION_ERROR", message=str(exc))
+        return QueryOperationError(code="MCP_CONFIGURATION_ERROR", message=sanitize_multimodal_error(exc))
     if isinstance(exc, SessionNotFoundError):
-        return QueryOperationError(code="MCP_SESSION_NOT_FOUND", message=str(exc))
+        return QueryOperationError(code="MCP_SESSION_NOT_FOUND", message=sanitize_multimodal_error(exc))
     if isinstance(exc, QueryOperationNotFoundError):
-        return QueryOperationError(code="MCP_QUERY_OPERATION_NOT_FOUND", message=str(exc))
+        return QueryOperationError(code="MCP_QUERY_OPERATION_NOT_FOUND", message=sanitize_multimodal_error(exc))
     if isinstance(exc, ValueError):
-        return QueryOperationError(code="MCP_SCHEMA_ERROR", message=str(exc))
-    message = str(exc) if str(exc) else "Internal Error"
+        return QueryOperationError(code="MCP_SCHEMA_ERROR", message=sanitize_multimodal_error(exc))
+    message = sanitize_multimodal_error(exc) if str(exc) else "Internal Error"
     return QueryOperationError(code="MCP_UPSTREAM_ERROR", message=message)
 
 
@@ -95,9 +104,18 @@ class QueryOperationStore:
     def __init__(self):
         self.operations: Dict[str, Dict[str, QueryOperationResponse]] = {}
         self.tasks: Dict[str, Dict[str, asyncio.Task]] = {}
+        self.execution_requests: Dict[str, Dict[str, QueryOperationCreateRequest]] = {}
 
-    def add(self, session_id: str, operation: QueryOperationResponse) -> None:
+    def add(
+        self,
+        session_id: str,
+        operation: QueryOperationResponse,
+        execution_request: QueryOperationCreateRequest,
+    ) -> None:
         self.operations.setdefault(session_id, {})[operation.operation_id] = operation
+        self.execution_requests.setdefault(session_id, {})[operation.operation_id] = execution_request.model_copy(
+            deep=True
+        )
 
     def get(self, session_id: str, operation_id: str) -> Optional[QueryOperationResponse]:
         return self.operations.get(session_id, {}).get(operation_id)
@@ -113,6 +131,7 @@ class QueryOperationStore:
 
     def remove_session(self, session_id: str) -> None:
         self.operations.pop(session_id, None)
+        self.execution_requests.pop(session_id, None)
 
     def pop_session_tasks(self, session_id: str) -> list[asyncio.Task]:
         return list(self.tasks.pop(session_id, {}).values())
@@ -137,13 +156,14 @@ class QueryOperationStore:
         session_id: str,
         operation_id: str,
         status: QueryOperationStatus,
-    ) -> Optional[QueryOperationInput | QueryOperationToolInput]:
+    ) -> Optional[QueryOperationCreateRequest]:
         operation = self.get(session_id, operation_id)
         if operation is None:
             return None
         operation.status = status
         operation.metadata.updated_at = datetime.now()
-        return operation.metadata.request.model_copy(deep=True)
+        request = self.execution_requests.get(session_id, {}).get(operation_id)
+        return request.model_copy(deep=True) if request is not None else None
 
     def complete(
         self,
@@ -161,6 +181,7 @@ class QueryOperationStore:
         operation.requires_input = False
         operation.pending_interaction = None
         operation.metadata.updated_at = datetime.now()
+        self.execution_requests.get(session_id, {}).pop(operation_id, None)
 
     def fail(
         self,
@@ -178,6 +199,7 @@ class QueryOperationStore:
         operation.requires_input = False
         operation.pending_interaction = None
         operation.metadata.updated_at = datetime.now()
+        self.execution_requests.get(session_id, {}).pop(operation_id, None)
 
     def cancel(
         self,
@@ -201,3 +223,4 @@ class QueryOperationStore:
         operation.requires_input = False
         operation.pending_interaction = None
         operation.metadata.updated_at = datetime.now()
+        self.execution_requests.get(session_id, {}).pop(operation_id, None)

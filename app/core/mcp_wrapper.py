@@ -24,6 +24,15 @@ from app.core.exceptions import (
     QueryOperationElicitationDeclinedError,
 )
 from app.core.guardrail_runner import GuardrailExecutionContext, GuardrailRunner
+from app.core.model_query import (
+    ModelQueryInput,
+    build_model_query,
+    describe_query_input,
+    extract_query_text,
+    has_query_visual_input,
+    replace_query_text,
+    sanitize_multimodal_error,
+)
 from app.core.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
 from app.core.mcp_policy_engine import ToolInvocationContext, ToolInvocationDecision, ToolPolicy, ToolPolicyEngine
 from app.core.mcp_task_runtime import BridgeTaskStatusNotification, install_task_notification_runtime_patch
@@ -1068,7 +1077,7 @@ class MCPWrapper:
 
     async def run_query(
         self,
-        query: str,
+        query: ModelQueryInput,
         max_steps: Optional[int] = None,
         server_name: Optional[str] = None,
     ) -> str:
@@ -1078,31 +1087,32 @@ class MCPWrapper:
 
         # Preserve the previous server context because nested or sequential runs may reuse the wrapper.
         previous_active_server_name = getattr(self, "_active_server_name", None)
+        query_input = query
         ctx = GuardrailContext(
             tenant_id=self.tenant_id,
             run_id=self.run_id,
             session_id=self.session_id,
-            query=query,
+            query=extract_query_text(query_input),
             server_name=server_name,
         )
 
         try:
             # Run input guardrails before the query reaches the model or any MCP tool.
             ctx = await self._run_before_model_guardrails(ctx)
-            query = ctx.query or ""
-            if not query.strip():
+            guarded_query_input = replace_query_text(query_input, text=ctx.query)
+            if not (ctx.query or "").strip() and not has_query_visual_input(guarded_query_input):
                 raise ValueError("Empty query not allowed")
 
             # Track the active server so policy and audit logic can attribute tool calls correctly.
             self._active_server_name = server_name
             self._last_server_used = None
-            logger.debug("Executing query: %s...", query[:100])
+            logger.debug("Executing query: %s", describe_query_input(guarded_query_input))
 
             if server_name and server_name not in self.mcp_servers:
                 raise ConfigurationError(f"Server '{server_name}' not configured")
 
             # Build the agent run payload and optionally scope it to a specific configured server.
-            run_kwargs: Dict[str, Any] = {"query": query}
+            run_kwargs: Dict[str, Any] = {"query": build_model_query(guarded_query_input)}
             if max_steps is not None:
                 run_kwargs["max_steps"] = max_steps
             if server_name:
@@ -1188,8 +1198,9 @@ class MCPWrapper:
             raise
         except Exception as exc:
             # Collapse unexpected runtime failures into the public wrapper error type.
-            logger.error("Query execution error: %s", exc)
-            raise MCPWrapperError(f"Query execution failed: {exc}")
+            sanitized_error = sanitize_multimodal_error(exc)
+            logger.error("Query execution error: %s", sanitized_error)
+            raise MCPWrapperError(f"Query execution failed: {sanitized_error}")
         finally:
             # Always restore the previous server context to avoid leaking state across calls.
             self._active_server_name = previous_active_server_name

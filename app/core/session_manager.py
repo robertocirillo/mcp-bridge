@@ -15,6 +15,7 @@ from app.core.exceptions import (
     QueryOperationNotFoundError,
     SessionNotFoundError,
 )
+from app.core.model_query import resolve_request_query
 from app.core.mcp_wrapper import MCPWrapper
 from app.core.query_operation_store import (
     QueryOperationStore,
@@ -30,12 +31,10 @@ from app.core.session_store import SessionData, SessionStore
 from app.models.config import SessionConfig
 from app.models.requests import QueryOperationCreateRequest, QueryOperationResumeRequest
 from app.models.responses import (
-    QueryOperationInput,
     QueryOperationMetadata,
     QueryOperationResponse,
     QueryOperationResult,
     QueryOperationStatus,
-    QueryOperationToolInput,
 )
 from config import settings
 
@@ -314,7 +313,7 @@ class SessionManager:
         )
 
         async with self._lock:
-            self._query_operation_store.add(session_id, operation)
+            self._query_operation_store.add(session_id, operation, request)
 
         initial_response = operation.model_copy(deep=True)
 
@@ -481,7 +480,7 @@ class SessionManager:
         tenant_id: Optional[str],
         run_id: Optional[str],
     ) -> None:
-        request: QueryOperationInput | QueryOperationToolInput | None = None
+        request: QueryOperationCreateRequest | None = None
 
         try:
             async with self._lock:
@@ -508,7 +507,7 @@ class SessionManager:
                 run_id=run_id,
                 session_id=session_id,
             ):
-                if isinstance(request, QueryOperationToolInput):
+                if request.tool_name is not None:
                     result = await wrapper.call_tool(
                         tool_name=request.tool_name,
                         arguments=request.arguments,
@@ -518,7 +517,10 @@ class SessionManager:
                     steps_used = 0
                 else:
                     result = await wrapper.run_query(
-                        query=request.query,
+                        query=resolve_request_query(
+                            query=request.query,
+                            input_payload=request.input,
+                        ),
                         max_steps=request.max_steps,
                         server_name=request.server_name,
                     )
