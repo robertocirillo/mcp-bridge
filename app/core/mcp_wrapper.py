@@ -33,6 +33,8 @@ from app.core.model_query import (
     replace_query_text,
     sanitize_multimodal_error,
 )
+from app.core.multimodal_image_fetch import RemoteImageFetchError
+from app.core.multimodal_image_resolver import QueryImageResolver
 from app.core.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
 from app.core.mcp_policy_engine import ToolInvocationContext, ToolInvocationDecision, ToolPolicy, ToolPolicyEngine
 from app.core.mcp_task_runtime import BridgeTaskStatusNotification, install_task_notification_runtime_patch
@@ -128,6 +130,7 @@ class MCPWrapper:
             contextvars.ContextVar("mcp_wrapper_query_operation_context", default=None)
         )
         self._task_operation_contexts: Dict[str, Dict[str, Optional[str]]] = {}
+        self._query_image_resolver = QueryImageResolver()
 
         # Maintain independent guardrail pipelines for input and output phases.
         self.before_model_guardrails: List[Callable[[GuardrailContext], Union[GuardrailContext, Awaitable[GuardrailContext]]]] = []
@@ -1111,8 +1114,10 @@ class MCPWrapper:
             if server_name and server_name not in self.mcp_servers:
                 raise ConfigurationError(f"Server '{server_name}' not configured")
 
+            prepared_query_input = await self._query_image_resolver.resolve(guarded_query_input)
+
             # Build the agent run payload and optionally scope it to a specific configured server.
-            run_kwargs: Dict[str, Any] = {"query": build_model_query(guarded_query_input)}
+            run_kwargs: Dict[str, Any] = {"query": build_model_query(prepared_query_input)}
             if max_steps is not None:
                 run_kwargs["max_steps"] = max_steps
             if server_name:
@@ -1195,6 +1200,9 @@ class MCPWrapper:
                 outcome="blocked",
                 details={"reason": "guardrail", "server_name": server_name},
             )
+            raise
+        except RemoteImageFetchError as exc:
+            logger.warning("Remote image resolution failed: %s", sanitize_multimodal_error(exc))
             raise
         except Exception as exc:
             # Collapse unexpected runtime failures into the public wrapper error type.

@@ -3,10 +3,13 @@ import json
 from contextlib import asynccontextmanager
 from dataclasses import replace
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
 from app.core.model_query import build_model_query
+from app.core.multimodal_image_fetch import RemoteImageFetcher
+from app.core.multimodal_image_resolver import QueryImageResolver
 from app.core.query_operation_store import serialize_query_operation_error
 from app.models.requests import (
     MAX_BASE64_IMAGE_DATA_LENGTH,
@@ -16,6 +19,25 @@ from app.models.requests import (
     QueryRequest,
     SessionCreateRequest,
 )
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+PNG_BASE64 = "iVBORw0KGgoAAAAAAAAAAAAAAAAAAAAA"
+
+
+def _build_remote_image_fetcher(handler, monkeypatch: pytest.MonkeyPatch) -> RemoteImageFetcher:
+    transport = httpx.MockTransport(handler)
+    fetcher = RemoteImageFetcher(
+        client_factory=lambda: httpx.AsyncClient(
+            transport=transport,
+            timeout=httpx.Timeout(5.0),
+        )
+    )
+
+    async def _resolve_host_ips(_hostname: str) -> set[str]:
+        return {"93.184.216.34"}
+
+    monkeypatch.setattr(fetcher, "_resolve_host_ips", _resolve_host_ips)
+    return fetcher
 
 
 def test_query_request_validation_supports_legacy_and_structured_inputs():
@@ -129,7 +151,8 @@ def test_query_operation_create_request_whitespace_only_query_without_input_or_t
     assert "Exactly one of query/input or 'tool_name' must be provided" in str(exc_info.value)
 
 
-def test_build_model_query_converts_structured_payload_to_human_message():
+@pytest.mark.asyncio
+async def test_build_model_query_converts_structured_payload_to_human_message(monkeypatch):
     payload = QueryInputPayload.model_validate(
         {
             "text": "what is shown here?",
@@ -147,11 +170,21 @@ def test_build_model_query_converts_structured_payload_to_human_message():
         }
     )
 
-    message = build_model_query(payload)
+    async def _remote_png(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "image/png", "content-length": str(len(PNG_BYTES))},
+            content=PNG_BYTES,
+        )
+
+    resolver = QueryImageResolver(
+        remote_image_fetcher=_build_remote_image_fetcher(_remote_png, monkeypatch)
+    )
+    message = build_model_query(await resolver.resolve(payload))
     assert hasattr(message, "content")
     assert message.content == [
         {"type": "text", "text": "what is shown here?"},
-        {"type": "image_url", "image_url": {"url": "https://example.com/dog.png"}},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{PNG_BASE64}"}},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZV9pbWFnZQ=="}},
     ]
 
@@ -232,6 +265,16 @@ async def test_wrapper_run_query_allows_image_only_and_guardrails_only_see_text(
         return ctx
 
     wrapper.before_model_guardrails = [_record_guardrail]
+    wrapper._query_image_resolver = QueryImageResolver(
+        remote_image_fetcher=_build_remote_image_fetcher(
+            lambda _request: httpx.Response(
+                status_code=200,
+                headers={"content-type": "image/png", "content-length": str(len(PNG_BYTES))},
+                content=PNG_BYTES,
+            ),
+            monkeypatch,
+        )
+    )
 
     payload = QueryInputPayload.model_validate(
         {
@@ -251,7 +294,39 @@ async def test_wrapper_run_query_allows_image_only_and_guardrails_only_see_text(
     sent_query = wrapper._agent.calls[0]["query"]
     assert hasattr(sent_query, "content")
     assert sent_query.content == [
-        {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{PNG_BASE64}"}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_wrapper_run_query_fetches_text_plus_remote_image_before_agent_call(monkeypatch):
+    wrapper = _build_wrapper(monkeypatch)
+    wrapper._query_image_resolver = QueryImageResolver(
+        remote_image_fetcher=_build_remote_image_fetcher(
+            lambda _request: httpx.Response(
+                status_code=200,
+                headers={"content-type": "image/png", "content-length": str(len(PNG_BYTES))},
+                content=PNG_BYTES,
+            ),
+            monkeypatch,
+        )
+    )
+
+    payload = QueryInputPayload.model_validate(
+        {
+            "text": "describe this image",
+            "images": [{"source_type": "url", "url": "https://example.com/cat.png"}],
+        }
+    )
+
+    result = await wrapper.run_query(payload, server_name="alpha")
+
+    assert result == "MODEL_RESULT"
+    sent_query = wrapper._agent.calls[0]["query"]
+    assert hasattr(sent_query, "content")
+    assert sent_query.content == [
+        {"type": "text", "text": "describe this image"},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{PNG_BASE64}"}},
     ]
 
 
@@ -288,6 +363,38 @@ async def test_wrapper_run_query_redacts_only_text_for_multimodal_input(monkeypa
         {"type": "text", "text": "[REDACTED_TEXT]"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZV9pbWFnZQ=="}},
     ]
+
+
+@pytest.mark.asyncio
+async def test_wrapper_run_query_redacts_fetched_image_data_from_runtime_errors(monkeypatch):
+    from app.core.exceptions import MCPWrapperError
+
+    wrapper = _build_wrapper(monkeypatch)
+    wrapper._query_image_resolver = QueryImageResolver(
+        remote_image_fetcher=_build_remote_image_fetcher(
+            lambda _request: httpx.Response(
+                status_code=200,
+                headers={"content-type": "image/png", "content-length": str(len(PNG_BYTES))},
+                content=PNG_BYTES,
+            ),
+            monkeypatch,
+        )
+    )
+
+    async def _failing_run(*, query, max_steps=None, server_name=None):
+        raise RuntimeError(f"provider rejected {query.content[0]['image_url']['url']}")
+
+    wrapper._agent.run = _failing_run
+
+    payload = QueryInputPayload.model_validate(
+        {"images": [{"source_type": "url", "url": "https://example.com/cat.png"}]}
+    )
+
+    with pytest.raises(MCPWrapperError) as exc_info:
+        await wrapper.run_query(payload)
+
+    assert "[REDACTED]" in str(exc_info.value)
+    assert PNG_BASE64 not in str(exc_info.value)
 
 
 class _OperationWrapper:
@@ -404,7 +511,7 @@ async def test_session_manager_async_operation_stores_safe_multimodal_summary(mo
             ],
         },
     }
-    assert blob not in json.dumps(created.model_dump())
+    assert blob not in json.dumps(created.model_dump(mode="json"))
 
     final = None
     deadline = asyncio.get_running_loop().time() + 1.0
@@ -418,7 +525,7 @@ async def test_session_manager_async_operation_stores_safe_multimodal_summary(mo
     assert final.status.value == "completed"
     assert final.result is not None
     assert final.result.result == "ASYNC_MULTIMODAL_RESULT"
-    assert blob not in json.dumps(final.model_dump())
+    assert blob not in json.dumps(final.model_dump(mode="json"))
 
 
 def test_serialize_query_operation_error_redacts_data_urls():

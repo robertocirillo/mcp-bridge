@@ -57,6 +57,9 @@ mcp-bridge/
     │   ├── guardrail_runner.py             # Guardrail execution pipeline
     │   ├── mcp_policy_engine.py            # Tool policy evaluation
     │   ├── mcp_audit.py                    # Audit event primitives/recorder
+    │   ├── multimodal_image_fetch.py       # Remote image fetch/validation with SSRF-aware checks
+    │   ├── multimodal_image_resolver.py    # Multimodal image normalization to provider-ready payloads
+    │   ├── multimodal_image_data.py        # Internal resolved image/data-URL primitives
     │   ├── session_manager.py              # Public session/query-operation orchestrator
     │   ├── session_store.py                # In-memory SessionData and SessionStore primitives
     │   ├── query_operation_store.py        # Async query-operation state/task storage
@@ -419,7 +422,7 @@ curl -X POST "http://localhost:8000/sessions/d0c02f31-06f0-4e8c-9e80-3f7eaf606e5
 }
 ```
 
-V1 also supports a structured `input` payload for multimodal model queries. Images are sent in JSON only, never as multipart uploads.
+V1.5 also supports a structured `input` payload for multimodal model queries. Images are sent in JSON only, never as multipart uploads.
 
 `QueryRequest` / `QueryOperationCreateRequest` now accept:
 
@@ -454,7 +457,7 @@ Structured input supports:
 - image only via `input.images`
 - text + image
 - image sources via remote `url` or inline `base64`
-- base64 MIME types: `image/png`, `image/jpeg`, `image/webp`
+- supported image MIME types: `image/png`, `image/jpeg`, `image/webp`
 
 Examples:
 
@@ -526,8 +529,14 @@ Notes:
 - If both `query` and `input` are provided, `input` wins.
 - `POST /sessions/{session_id}/query-operations` accepts the same query payload shapes.
 - Base64 images are limited to `MAX_BASE64_IMAGE_DATA_LENGTH = 5_000_000` characters per image to keep request size and memory usage bounded in V1.
+- For `source_type="url"`, mcp-bridge downloads the image server-side, validates it, and converts it to an internal base64 data URL before calling the provider/runtime.
+- Remote image fetch accepts only `http`/`https`, uses a `5.0s` timeout, follows at most `3` redirects, and enforces `MAX_REMOTE_IMAGE_BYTES = 5_000_000` on both declared and actual downloaded bytes.
+- Remote image fetch rejects localhost, loopback, private, link-local, multicast, reserved, and unspecified IP targets. Redirects are revalidated with the same rules.
+- The bridge requires a supported response `Content-Type` and validates the downloaded bytes against PNG/JPEG/WEBP signatures before forwarding the image.
 - Async query-operation metadata stores a safe multimodal summary and never echoes raw base64 blobs.
-- In V1, before-model guardrails still apply only to the textual portion (`query` or `input.text`). Image content is not moderated, inspected, or OCR-processed by the bridge.
+- Before-model guardrails still apply only to the textual portion (`query` or `input.text`). Image content is not moderated, inspected, or OCR-processed by the bridge.
+- URL reachability depends on the network connectivity of the mcp-bridge server, not on the browser/client.
+- SSRF hardening is a baseline defense, not a perfect sandbox. In particular, it does not fully eliminate DNS rebinding or every proxy/network edge case.
 - Effective multimodal support depends on the configured provider/model. If the selected model does not support image input, the request can fail at runtime.
 
 If the `session_id` does not belong to tenant-A, the API will respond with **404** (even if the session exists for another tenant).
@@ -582,7 +591,7 @@ For multimodal requests, public operation metadata exposes only a safe summary:
 }
 ```
 
-The raw base64 blob is kept out of public async metadata.
+The raw base64 blob is kept out of public async metadata. Remote URL downloads are also kept internal; metadata still exposes only the redacted original URL summary.
 
 ---
 

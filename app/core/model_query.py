@@ -4,6 +4,7 @@ import re
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
+from app.core.multimodal_image_data import ResolvedQueryInputPayload
 from app.models.requests import QueryInputPayload
 from app.models.responses import QueryInputImageSummary, QueryInputPayloadSummary
 
@@ -18,8 +19,8 @@ except ImportError:
             block_count = len(self.content) if isinstance(self.content, list) else 1
             return f"HumanMessage(content=[{block_count} blocks])"
 
-
 ModelQueryInput = str | QueryInputPayload
+PreparedModelQueryInput = str | ResolvedQueryInputPayload
 BuiltModelQuery = str | LangChainHumanMessage
 
 _DATA_URL_RE = re.compile(
@@ -42,27 +43,29 @@ def resolve_request_query(
     return query or ""
 
 
-def extract_query_text(query_input: ModelQueryInput) -> Optional[str]:
+def extract_query_text(query_input: ModelQueryInput | PreparedModelQueryInput) -> Optional[str]:
     if isinstance(query_input, str):
         return query_input
     return query_input.text if _has_text_content(query_input.text) else None
 
 
 def replace_query_text(
-    query_input: ModelQueryInput,
+    query_input: ModelQueryInput | PreparedModelQueryInput,
     *,
     text: Optional[str],
-) -> ModelQueryInput:
+) -> ModelQueryInput | PreparedModelQueryInput:
     if isinstance(query_input, str):
         return text or ""
+    if isinstance(query_input, ResolvedQueryInputPayload):
+        return ResolvedQueryInputPayload(text=text, images=list(query_input.images))
     return query_input.model_copy(update={"text": text})
 
 
-def has_query_visual_input(query_input: ModelQueryInput) -> bool:
-    return isinstance(query_input, QueryInputPayload) and bool(query_input.images)
+def has_query_visual_input(query_input: ModelQueryInput | PreparedModelQueryInput) -> bool:
+    return not isinstance(query_input, str) and bool(query_input.images)
 
 
-def build_model_query(query_input: ModelQueryInput) -> BuiltModelQuery:
+def build_model_query(query_input: PreparedModelQueryInput) -> BuiltModelQuery:
     if isinstance(query_input, str):
         return query_input
 
@@ -71,11 +74,10 @@ def build_model_query(query_input: ModelQueryInput) -> BuiltModelQuery:
         blocks.append({"type": "text", "text": query_input.text})
 
     for image in query_input.images:
-        image_url = image.url if image.source_type == "url" else image.as_data_url()
         blocks.append(
             {
                 "type": "image_url",
-                "image_url": {"url": image_url},
+                "image_url": {"url": image.as_data_url()},
             }
         )
 
@@ -100,7 +102,7 @@ def summarize_query_input(input_payload: QueryInputPayload) -> QueryInputPayload
     )
 
 
-def describe_query_input(query_input: ModelQueryInput) -> str:
+def describe_query_input(query_input: ModelQueryInput | PreparedModelQueryInput) -> str:
     if isinstance(query_input, str):
         return f"text:{query_input[:100]}"
 

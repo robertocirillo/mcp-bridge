@@ -213,7 +213,7 @@ Structured multimodal shape:
 }
 ```
 
-Supported V1 query shapes:
+Supported V1.5 query shapes:
 
 - text only via `query`
 - text only via `input.text`
@@ -225,8 +225,14 @@ Validation / runtime notes:
 
 - If both `query` and `input` are provided, `input` wins.
 - Base64 image data is capped at `MAX_BASE64_IMAGE_DATA_LENGTH = 5_000_000` characters per image.
+- For `source_type="url"`, the bridge fetches the image server-side and converts it to a provider-ready base64 data URL before building the final `HumanMessage`.
+- Remote image fetch accepts only `http`/`https`, uses `IMAGE_FETCH_TIMEOUT_SECONDS = 5.0`, follows at most `MAX_REMOTE_IMAGE_REDIRECTS = 3`, and enforces `MAX_REMOTE_IMAGE_BYTES = 5_000_000`.
+- Remote image fetch requires a supported `Content-Type` (`image/png`, `image/jpeg`, `image/webp`) and validates the downloaded bytes against the declared MIME type.
+- Baseline SSRF hardening rejects localhost, loopback, private, link-local, multicast, reserved, and unspecified targets; redirect destinations are revalidated on every hop.
 - Before-model guardrails apply only to the textual portion (`query` or `input.text`).
-- The bridge does not moderate, inspect, or OCR image content in V1.
+- The bridge does not moderate, inspect, or OCR image content.
+- URL reachability depends on mcp-bridge server connectivity, not on the caller browser/client.
+- Residual limitation: the SSRF defenses are intentionally lightweight and do not fully prevent DNS rebinding or every environment-specific network bypass.
 - Effective image support depends on the configured provider/model; unsupported models may fail at runtime.
 
 **Flow:**
@@ -253,7 +259,14 @@ result = await wrapper.run_query(
    - Reads `server_used = getattr(wrapper, "last_server_used", None)`.
    - Returns `QueryResponse` (including `has_mcp_servers` when available from the wrapper).
 
-4. Builds `QueryResponse`:
+4. For structured multimodal input with images:
+   - `MCPWrapper.run_query(...)` keeps the public API shape unchanged.
+   - After `before_model` guardrails, `QueryImageResolver` normalizes each image.
+   - Inline base64 images pass through unchanged.
+   - Remote URL images are fetched by `RemoteImageFetcher`, validated, and converted to internal data URLs.
+   - `build_model_query(...)` receives only normalized provider-ready image inputs.
+
+5. Builds `QueryResponse`:
 
 ```json
 {
@@ -283,7 +296,7 @@ mcp-bridge runs guardrails through a LangChain-style pipeline inside `MCPWrapper
 - **after_model**: runs on the LLM output before returning it to the client.
 
 For multimodal requests, `before_model` guardrails receive only the text associated with the request.
-Image content is forwarded untouched to the provider/model runtime.
+Image content is normalized after guardrails and the provider/model runtime receives only internal data URLs, never the original remote URL.
 
 **Enablement rule (auto-enable):**
 
@@ -313,6 +326,7 @@ Implementation note:
 - Accept the same legacy `query` or structured multimodal `input` payloads.
 - Public operation metadata stores only a safe multimodal summary.
 - Raw base64 image data is not exposed through public async metadata.
+- Remote URL downloads stay internal to the bridge and are never exposed in operation metadata.
 
 **Failure modes:**
 
