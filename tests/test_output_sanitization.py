@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.mcp_wrapper import _extract_user_visible_answer
+from app.core.runtime.mcp_wrapper import _extract_user_visible_answer
 
 
 def test_extract_user_visible_answer_final_answer_marker():

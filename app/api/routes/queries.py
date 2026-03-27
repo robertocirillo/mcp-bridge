@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.dependencies import TenantContext, get_session_manager, get_tenant_context
 from app.api.services import query_service
-from app.core.session_manager import SessionManager
+from app.core.sessions.manager import SessionManager
 from app.models.requests import QueryOperationCreateRequest, QueryOperationResumeRequest, QueryRequest
 from app.models.responses import QueryOperationResponse, QueryResponse
 

@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.mcp_task_runtime import install_task_notification_runtime_patch
-from app.core.session_manager import SessionManager
+from app.core.runtime.task_runtime import install_task_notification_runtime_patch
+from app.core.sessions.manager import SessionManager
 from app.models.requests import SessionCreateRequest
 
 

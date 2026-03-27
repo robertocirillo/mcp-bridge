@@ -1,7 +1,7 @@
 """A2A REST routes.
 
 These endpoints expose a stable REST surface for UIs / visual builders.
-Internally we use the official `a2a-sdk` via `app.core.a2a_client.A2AClient`.
+Internally we use the official `a2a-sdk` via `app.core.clients.a2a_client.A2AClient`.
 
 IMPORTANT:
 - `blocking` is a REST convenience flag, not part of the A2A protocol.
@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.dependencies import get_a2a_client, get_settings
-from app.core.a2a_client import A2AClient, A2AClientError
+from app.core.clients.a2a_client import A2AClient, A2AClientError
 from app.models.requests import A2AMessageRequest
 from app.models.responses import A2AAgentSummary, A2AMessageResponse, A2ATaskStatusResponse, A2ATaskState
 from app.utils.logging import get_logger

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.mcp_wrapper import MCPWrapper
+from app.core.runtime.mcp_wrapper import MCPWrapper
 
 
 def _build_wrapper(monkeypatch: pytest.MonkeyPatch) -> MCPWrapper:

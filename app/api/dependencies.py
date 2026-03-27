@@ -5,9 +5,9 @@ FastAPI dependencies
 from functools import lru_cache
 from typing import Dict, Optional
 
-from app.core.session_manager import SessionManager
+from app.core.sessions.manager import SessionManager
 from config import Settings, settings
-from app.core.a2a_client import A2AClient
+from app.core.clients.a2a_client import A2AClient
 from app.models.config import A2AAgentConfig
 
 

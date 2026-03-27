@@ -87,10 +87,10 @@ For the MCP/session side, the public FastAPI routers are now intentionally thin:
    - Generates a new `session_id = uuid4()`.
    - Instantiates `MCPWrapper` with LLM and MCP config.
    - Calls `await wrapper.initialize()`:
-     - `MCPWrapper` wires its internal boundary helpers (`mcp_wrapper_capabilities`, `mcp_wrapper_tools`, `mcp_wrapper_guardrails`, `mcp_wrapper_llm`, `mcp_wrapper_transport`, specialized guardrail modules).
+     - `MCPWrapper` wires its internal boundary helpers (`runtime.capabilities`, `runtime.tools`, `guardrails.wrapper`, `runtime.llm`, `runtime.transport`, specialized guardrail modules).
      - `mcp-use` initializes client, sessions, and tools.
      - If `mcp_servers` empty, `mcp-use` logs warnings but continues.
-   - Creates `SessionData` (defined in `app/core/session_store.py`):
+   - Creates `SessionData` (defined in `app/core/sessions/store.py`):
      - `session_id`, `config`, `wrapper`
      - `created_at = now()`, `last_used = now()`
      - `status = "active"`
@@ -313,13 +313,13 @@ Implementation note:
 
 - `MCPWrapper` remains the public boundary used by the rest of the application.
 - Internal MCP boundary concerns are split into focused helper modules:
-  - `mcp_wrapper_capabilities.py`
-  - `mcp_wrapper_tools.py`
-  - `mcp_wrapper_guardrails.py`
-  - `mcp_wrapper_guardrails_pii.py`
-  - `mcp_wrapper_guardrails_bias.py`
-  - `mcp_wrapper_transport.py`
-  - `mcp_wrapper_llm.py`
+  - `runtime/capabilities.py`
+  - `runtime/tools.py`
+  - `guardrails/wrapper.py`
+  - `guardrails/pii.py`
+  - `guardrails/bias.py`
+  - `runtime/transport.py`
+  - `runtime/llm.py`
 
 **Async query operations (`POST /sessions/{session_id}/query-operations`)**
 

@@ -7,8 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
 
-from app.core.session_manager import SessionManager
-from app.core.mcp_wrapper import initialize_bias_detector_from_env
+from app.core.sessions.manager import SessionManager
+from app.core.runtime.mcp_wrapper import initialize_bias_detector_from_env
 from app.api.routes import sessions, queries, health, a2a, guardrails_bias
 from app.utils.logging import setup_logging, get_logger
 from config import settings

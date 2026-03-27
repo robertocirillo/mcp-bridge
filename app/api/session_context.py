@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.api.dependencies import TenantContext
-from app.core.session_manager import SessionManager
+from app.core.sessions.manager import SessionManager
 
 
 async def get_tenant_session(

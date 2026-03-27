@@ -13,14 +13,14 @@ def _build_test_app(monkeypatch):
     from fastapi.testclient import TestClient
 
     from app.api.dependencies import get_session_manager
-    from app.core.session_manager import SessionManager
+    from app.core.sessions.manager import SessionManager
 
     # Fresh in-memory session manager for each test
     mgr = SessionManager()
     monkeypatch.setattr("app.api.dependencies._session_manager", mgr, raising=False)
 
     # --- Dummy wrapper (guardrails + deterministic output) ---
-    from app.core.mcp_wrapper import (
+    from app.core.runtime.mcp_wrapper import (
         GuardrailContext,
         GuardrailViolationError,
         make_bias_after_model_guardrail,
@@ -194,7 +194,7 @@ def _build_test_app(monkeypatch):
             return await self._run_after(ctx, output)
 
     # Patch SessionManager to use DummyMCPWrapper instead of the real one.
-    monkeypatch.setattr("app.core.session_manager.MCPWrapper", DummyMCPWrapper)
+    monkeypatch.setattr("app.core.sessions.manager.MCPWrapper", DummyMCPWrapper)
 
     # Build the FastAPI app with the real routers
     from app.api.routes.sessions import router as sessions_router
@@ -323,13 +323,13 @@ def test_http_contract_bias_output_block_returns_structured_403(monkeypatch):
 
     class AlwaysDetect:
         def detect(self, text: str):
-            from app.core.mcp_wrapper import BiasDetectionResult
+            from app.core.runtime.mcp_wrapper import BiasDetectionResult
 
             if "BIAS_TEST" in text:
                 return BiasDetectionResult(detected=True, categories=["test"], findings=["synthetic"])
             return BiasDetectionResult(detected=False)
 
-    from app.core.mcp_wrapper import get_bias_detector, set_bias_detector
+    from app.core.runtime.mcp_wrapper import get_bias_detector, set_bias_detector
 
     previous = get_bias_detector()
     set_bias_detector(AlwaysDetect())
@@ -362,11 +362,11 @@ def test_http_contract_bias_global_off_bypasses_detector(monkeypatch):
 
     class AlwaysDetect:
         def detect(self, text: str):
-            from app.core.mcp_wrapper import BiasDetectionResult
+            from app.core.runtime.mcp_wrapper import BiasDetectionResult
 
             return BiasDetectionResult(detected=True, categories=["test"], findings=["synthetic"])
 
-    from app.core.mcp_wrapper import get_bias_detector, set_bias_detector
+    from app.core.runtime.mcp_wrapper import get_bias_detector, set_bias_detector
 
     previous = get_bias_detector()
     set_bias_detector(AlwaysDetect())
@@ -391,11 +391,11 @@ def test_http_contract_bias_off_does_not_block(monkeypatch):
 
     class AlwaysDetect:
         def detect(self, text: str):
-            from app.core.mcp_wrapper import BiasDetectionResult
+            from app.core.runtime.mcp_wrapper import BiasDetectionResult
 
             return BiasDetectionResult(detected=True, categories=["test"], findings=["synthetic"])
 
-    from app.core.mcp_wrapper import get_bias_detector, set_bias_detector
+    from app.core.runtime.mcp_wrapper import get_bias_detector, set_bias_detector
 
     previous = get_bias_detector()
     set_bias_detector(AlwaysDetect())

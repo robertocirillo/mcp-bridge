@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.session_manager import SessionManager
+from app.core.sessions.manager import SessionManager
 from app.models.config import SessionConfig
 
 
@@ -33,7 +33,7 @@ class DummyWrapper:
 
 @pytest.mark.asyncio
 async def test_session_manager_applies_global_guardrails_disable(monkeypatch):
-    import app.core.session_manager as sm
+    import app.core.sessions.manager as sm
 
     monkeypatch.setattr(sm, "MCPWrapper", DummyWrapper)
 
@@ -57,7 +57,7 @@ async def test_session_manager_applies_global_guardrails_disable(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_session_manager_strategy3_mode_applies_to_input_and_output(monkeypatch):
-    import app.core.session_manager as sm
+    import app.core.sessions.manager as sm
 
     monkeypatch.setattr(sm, "MCPWrapper", DummyWrapper)
 
@@ -79,7 +79,7 @@ async def test_session_manager_strategy3_mode_applies_to_input_and_output(monkey
 
 @pytest.mark.asyncio
 async def test_session_manager_strategy3_overrides_input_and_output(monkeypatch):
-    import app.core.session_manager as sm
+    import app.core.sessions.manager as sm
 
     monkeypatch.setattr(sm, "MCPWrapper", DummyWrapper)
 

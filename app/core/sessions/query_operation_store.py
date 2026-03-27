@@ -15,7 +15,7 @@ from app.core.exceptions import (
     SessionNotFoundError,
 )
 from app.core.model_query import sanitize_multimodal_error, summarize_query_input
-from app.core.mcp_wrapper import GuardrailViolationError, MCPToolNotAllowedError
+from app.core.runtime.mcp_wrapper import GuardrailViolationError, MCPToolNotAllowedError
 from app.models.requests import QueryOperationCreateRequest
 from app.models.responses import (
     QueryOperationError,

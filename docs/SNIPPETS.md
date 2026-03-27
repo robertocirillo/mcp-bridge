@@ -146,8 +146,8 @@ from typing import Dict, Optional, Annotated
 from fastapi import Depends, Header, HTTPException
 from pydantic import BaseModel
 
-from app.core.session_manager import SessionManager
-from app.core.a2a_client import A2AClient
+from app.core.sessions.manager import SessionManager
+from app.core.clients.a2a_client import A2AClient
 from app.models.config import A2AAgentConfig
 from config import Settings, settings
 
@@ -228,13 +228,13 @@ def get_tenant_context(
 
 ## 3. Session Manager & Session Data
 
-### 3.1 Session Primitives (`app/core/session_store.py`)
+### 3.1 Session Primitives (`app/core/sessions/store.py`)
 
 ```python
 from datetime import datetime
 from typing import Optional
 
-from app.core.mcp_wrapper import MCPWrapper
+from app.core.runtime.mcp_wrapper import MCPWrapper
 from app.models.config import SessionConfig
 
 
@@ -267,16 +267,16 @@ class SessionData:
         self.update_last_used()
 ```
 
-### 3.2 SessionManager Composition (`app/core/session_manager.py`)
+### 3.2 SessionManager Composition (`app/core/sessions/manager.py`)
 
 > NOTE: This is intentionally high-level. `SessionManager` remains the public facade, but session state, async query-operation state, and pending interactions now live in dedicated modules.
 
 ```python
 import asyncio
 
-from app.core.query_operation_store import QueryOperationStore
-from app.core.session_manager_interactions import PendingInteractionStore
-from app.core.session_store import SessionStore
+from app.core.sessions.query_operation_store import QueryOperationStore
+from app.core.sessions.interactions import PendingInteractionStore
+from app.core.sessions.store import SessionStore
 
 
 class SessionManager:
@@ -310,14 +310,12 @@ class SessionManager:
 
 ## 4. MCPWrapper – High-Level Shape
 
-> NOTE: This is conceptual; the public entry point is still `app/core/mcp_wrapper.py`, while the MCP boundary is now split across focused internal modules.
+> NOTE: This is conceptual; the public entry point is now `app/core/runtime/mcp_wrapper.py`, while the MCP boundary is split across focused internal modules.
 
 ```python
-from app.core import (
-    mcp_wrapper_capabilities,
-    mcp_wrapper_guardrails,
-    mcp_wrapper_tools,
-)
+from app.core.guardrails import wrapper as mcp_wrapper_guardrails
+from app.core.runtime import capabilities as mcp_wrapper_capabilities
+from app.core.runtime import tools as mcp_wrapper_tools
 
 
 class MCPWrapper:
@@ -335,10 +333,10 @@ class MCPWrapper:
         self.last_server_used = None
 
     async def initialize(self) -> None:
-        # Provider/runtime bootstrap stays in mcp_wrapper_llm.py
-        # Transport/session guards stay in mcp_wrapper_transport.py
-        # Capability helpers live in mcp_wrapper_capabilities.py
-        # Direct tool/task helpers live in mcp_wrapper_tools.py
+        # Provider/runtime bootstrap stays in runtime/llm.py
+        # Transport/session guards stay in runtime/transport.py
+        # Capability helpers live in runtime/capabilities.py
+        # Direct tool/task helpers live in runtime/tools.py
         ...
 
     async def run_query(self, query: str, max_steps=None, server_name=None):
@@ -362,14 +360,14 @@ class MCPWrapper:
 
 Internal split reflected by the current codebase:
 
-- `mcp_wrapper_capabilities.py`: prompt/resource capability lookup and invocation helpers
-- `mcp_wrapper_tools.py`: direct tool execution, task-support detection, raw MCP task transport
-- `mcp_wrapper_guardrails.py`: shared guardrail pipeline wiring and tool-result wrapping helpers
-- `mcp_wrapper_llm.py`: provider/runtime bootstrap and sandbox normalization
-- `mcp_wrapper_transport.py`: guarded MCP client/session proxies
-- `mcp_wrapper_guardrails_pii.py`: PII guardrails
-- `mcp_wrapper_guardrails_bias.py`: bias guardrails and detector integration
-- `mcp_wrapper_errors.py`: boundary-specific exceptions
+- `runtime/capabilities.py`: prompt/resource capability lookup and invocation helpers
+- `runtime/tools.py`: direct tool execution, task-support detection, raw MCP task transport
+- `guardrails/wrapper.py`: shared guardrail pipeline wiring and tool-result wrapping helpers
+- `runtime/llm.py`: provider/runtime bootstrap and sandbox normalization
+- `runtime/transport.py`: guarded MCP client/session proxies
+- `guardrails/pii.py`: PII guardrails
+- `guardrails/bias.py`: bias guardrails and detector integration
+- `runtime/errors.py`: boundary-specific exceptions
 
 ---
 

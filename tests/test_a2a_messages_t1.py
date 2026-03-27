@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from main import app
 from app.api.dependencies import get_settings, get_a2a_client
-from app.core.a2a_client import A2AClientError
+from app.core.clients.a2a_client import A2AClientError
 
 client = TestClient(app)
 

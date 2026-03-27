@@ -207,7 +207,7 @@ Internally, the MCP boundary is now split into focused modules:
 - `query_operation_store.py`: tracks async query-operation state, results, and background tasks
 - `session_manager_interactions.py`: tracks pending elicitation and task-status interactions
 
-`SessionData` now lives in `app/core/session_store.py`, not in `session_manager.py`.
+`SessionData` now lives in `app/core/sessions/store.py`, not in `app/core/sessions/manager.py`.
 
 The FastAPI route layer is intentionally thin:
 

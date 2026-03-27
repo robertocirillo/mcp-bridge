@@ -3,9 +3,9 @@ from __future__ import annotations
 import re
 from typing import Any, Dict
 
-from app.core.guardrail_runner import GuardrailExecutionContext
-from app.core.mcp_wrapper_errors import GuardrailViolationError
-from app.core.mcp_wrapper_guardrails_bias import _extract_final_answer
+from app.core.guardrails.runner import GuardrailExecutionContext
+from app.core.runtime.errors import GuardrailViolationError
+from app.core.guardrails.bias import _extract_final_answer
 
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 _PHONE_RE = re.compile(r"\b(?:\+?\d[\d\s().-]{6,}\d)\b")

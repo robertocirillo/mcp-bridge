@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from app.core.bias_detector_client import BiasDetectorClient
+from app.core.clients.bias_detector_client import BiasDetectorClient
 from app.core.exceptions import ConfigurationError
-from app.core.guardrail_runner import GuardrailExecutionContext, GuardrailRunner
-from app.core.mcp_audit import InMemoryAuditRecorder
-from app.core.mcp_wrapper_errors import GuardrailViolationError
-from app.core.mcp_wrapper_guardrails_bias import (
+from app.core.guardrails.runner import GuardrailExecutionContext, GuardrailRunner
+from app.core.audit.mcp_audit import InMemoryAuditRecorder
+from app.core.runtime.errors import GuardrailViolationError
+from app.core.guardrails.bias import (
     make_bias_after_model_guardrail,
     make_bias_after_model_guardrail_service,
 )
-from app.core.mcp_wrapper_guardrails_pii import (
+from app.core.guardrails.pii import (
     _detect_pii_in_obj,
     _redact_pii_in_obj,
     make_pii_after_model_guardrail,
@@ -19,7 +19,7 @@ from app.core.mcp_wrapper_guardrails_pii import (
 )
 
 if TYPE_CHECKING:
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
 
 GuardrailContext = GuardrailExecutionContext
 

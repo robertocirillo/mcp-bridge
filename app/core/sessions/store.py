@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.core.exceptions import SessionNotFoundError
-from app.core.mcp_wrapper import MCPWrapper
+from app.core.runtime.mcp_wrapper import MCPWrapper
 from app.models.config import SessionConfig
 from config import settings
 

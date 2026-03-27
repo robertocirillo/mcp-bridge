@@ -21,8 +21,8 @@ def _build_test_api(
     from fastapi import FastAPI
 
     from app.api.dependencies import get_session_manager
-    from app.core.mcp_wrapper import MCPWrapper, _GuardedMCPClient
-    from app.core.session_manager import SessionManager
+    from app.core.runtime.mcp_wrapper import MCPWrapper, _GuardedMCPClient
+    from app.core.sessions.manager import SessionManager
     from config import settings
 
     mgr = SessionManager()
@@ -841,7 +841,7 @@ def test_sync_query_route_supports_agent_runtime_without_server_name_kwarg(monke
 
 
 def test_query_operation_create_returns_queued_state(monkeypatch):
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
 
     async def _run_query(self, query: str, max_steps=None, server_name=None):
         await asyncio.sleep(0.05)
@@ -881,7 +881,7 @@ def test_query_operation_create_returns_queued_state(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_query_operation_polling_reaches_completed_with_result(monkeypatch):
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
     from httpx import ASGITransport, AsyncClient
 
     release_query = asyncio.Event()
@@ -988,7 +988,7 @@ async def test_query_operation_supports_agent_runtime_without_server_name_kwarg(
 
 @pytest.mark.asyncio
 async def test_run_query_uses_scoped_runtime_for_multi_server_target_when_agent_kwarg_is_unsupported(monkeypatch):
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
 
     monkeypatch.setattr(MCPWrapper, "_import_dependencies", lambda self: None)
 
@@ -1040,7 +1040,7 @@ async def test_run_query_uses_scoped_runtime_for_multi_server_target_when_agent_
 
 @pytest.mark.asyncio
 async def test_query_operation_failure_serializes_error(monkeypatch):
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
     from httpx import ASGITransport, AsyncClient
 
     release_query = asyncio.Event()
@@ -1649,7 +1649,7 @@ def test_direct_tool_invocation_routes_enforce_tenant_isolation(monkeypatch):
 
 
 def test_query_operation_query_payload_still_uses_legacy_request_shape(monkeypatch):
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
 
     async def _run_query(self, query: str, max_steps=None, server_name=None):
         self._steps_used = 2
@@ -1699,7 +1699,7 @@ def test_sync_query_route_still_works_after_direct_tool_support(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_query_operation_elicitation_reaches_input_required_and_resumes_to_completed(monkeypatch):
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
     from httpx import ASGITransport, AsyncClient
 
     requested_schema = {
@@ -1783,7 +1783,7 @@ async def test_query_operation_elicitation_reaches_input_required_and_resumes_to
 
 @pytest.mark.asyncio
 async def test_query_operation_elicitation_decline_fails_operation(monkeypatch):
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
     from httpx import ASGITransport, AsyncClient
 
     async def _run_query(self, query: str, max_steps=None, server_name=None):
@@ -1844,7 +1844,7 @@ async def test_query_operation_elicitation_decline_fails_operation(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_query_operation_elicitation_cancel_cancels_operation(monkeypatch):
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
     from httpx import ASGITransport, AsyncClient
 
     async def _run_query(self, query: str, max_steps=None, server_name=None):
@@ -1895,7 +1895,7 @@ async def test_query_operation_elicitation_cancel_cancels_operation(monkeypatch)
 
 
 def test_query_operation_routes_enforce_tenant_isolation(monkeypatch):
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
 
     async def _run_query(self, query: str, max_steps=None, server_name=None):
         await asyncio.sleep(0.02)
@@ -1938,7 +1938,7 @@ def test_query_operation_routes_enforce_tenant_isolation(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_query_operation_resume_route_enforces_tenant_isolation(monkeypatch):
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
     from httpx import ASGITransport, AsyncClient
 
     async def _run_query(self, query: str, max_steps=None, server_name=None):
@@ -1990,7 +1990,7 @@ async def test_query_operation_resume_route_enforces_tenant_isolation(monkeypatc
 
 @pytest.mark.asyncio
 async def test_query_operation_resume_rejects_invalid_payload_and_expired_elicitation(monkeypatch):
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
     from httpx import ASGITransport, AsyncClient
 
     async def _run_query(self, query: str, max_steps=None, server_name=None):
