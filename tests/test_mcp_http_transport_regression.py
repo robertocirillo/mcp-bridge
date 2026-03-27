@@ -36,8 +36,8 @@ def test_session_config_preserves_http_transport_metadata() -> None:
 
 @pytest.mark.asyncio
 async def test_explicit_streamable_http_transport_skips_sse_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    import mcp_use.client as client_module
-    import mcp_use.connectors.http as http_module
+    import mcp_use.client.config as config_module
+    import mcp_use.client.connectors.http as http_module
 
     install_task_notification_runtime_patch()
 
@@ -88,7 +88,7 @@ async def test_explicit_streamable_http_transport_skips_sse_fallback(monkeypatch
     monkeypatch.setattr(http_module, "SseConnectionManager", _SseConnectionManager)
     monkeypatch.setattr(http_module, "ClientSession", _ClientSession)
 
-    connector = client_module.create_connector_from_config(
+    connector = config_module.create_connector_from_config(
         {
             "transport": "streamable-http",
             "url": "http://127.0.0.1:8010/mcp",
@@ -104,8 +104,8 @@ async def test_explicit_streamable_http_transport_skips_sse_fallback(monkeypatch
 
 @pytest.mark.asyncio
 async def test_explicit_streamable_http_transport_propagates_streamable_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    import mcp_use.client as client_module
-    import mcp_use.connectors.http as http_module
+    import mcp_use.client.config as config_module
+    import mcp_use.client.connectors.http as http_module
 
     install_task_notification_runtime_patch()
 
@@ -136,7 +136,7 @@ async def test_explicit_streamable_http_transport_propagates_streamable_failure(
     monkeypatch.setattr(http_module, "StreamableHttpConnectionManager", _StreamableHttpConnectionManager)
     monkeypatch.setattr(http_module, "SseConnectionManager", _SseConnectionManager)
 
-    connector = client_module.create_connector_from_config(
+    connector = config_module.create_connector_from_config(
         {
             "transport": "streamable-http",
             "url": "http://127.0.0.1:8010/mcp",

@@ -266,21 +266,34 @@ def install_task_notification_runtime_patch() -> None:
         return
 
     import mcp
+    import sys
     import mcp_use.client as client_module
-    import mcp_use.config as config_module
-    import mcp_use.connectors.base as connectors_base
-    import mcp_use.connectors.http as connectors_http
-    import mcp_use.connectors.stdio as connectors_stdio
+    import mcp_use.client.config as client_config_module
+    import mcp_use.client.connectors.base as client_connectors_base
+    import mcp_use.client.connectors.http as client_connectors_http
+    import mcp_use.client.connectors.stdio as client_connectors_stdio
+
+    legacy_config_module = sys.modules.get("mcp_use.config")
+    legacy_connectors_base = sys.modules.get("mcp_use.connectors.base")
+    legacy_connectors_http = sys.modules.get("mcp_use.connectors.http")
+    legacy_connectors_stdio = sys.modules.get("mcp_use.connectors.stdio")
 
     mcp.ClientSession = BridgeAwareClientSession
-    connectors_base.ClientSession = BridgeAwareClientSession
-    connectors_stdio.ClientSession = BridgeAwareClientSession
-    connectors_http.ClientSession = BridgeAwareClientSession
+    client_connectors_base.ClientSession = BridgeAwareClientSession
+    client_connectors_stdio.ClientSession = BridgeAwareClientSession
+    client_connectors_http.ClientSession = BridgeAwareClientSession
 
-    original_http_connect = getattr(connectors_http.HttpConnector, "_bridge_original_connect", None)
+    if legacy_connectors_base is not None:
+        legacy_connectors_base.ClientSession = BridgeAwareClientSession
+    if legacy_connectors_stdio is not None:
+        legacy_connectors_stdio.ClientSession = BridgeAwareClientSession
+    if legacy_connectors_http is not None:
+        legacy_connectors_http.ClientSession = BridgeAwareClientSession
+
+    original_http_connect = getattr(client_connectors_http.HttpConnector, "_bridge_original_connect", None)
     if original_http_connect is None:
-        original_http_connect = connectors_http.HttpConnector.connect
-        connectors_http.HttpConnector._bridge_original_connect = original_http_connect
+        original_http_connect = client_connectors_http.HttpConnector.connect
+        client_connectors_http.HttpConnector._bridge_original_connect = original_http_connect
 
     async def _bridge_http_connect(self: Any) -> None:
         transport_hint = _normalize_http_transport(getattr(self, "_bridge_transport", None))
@@ -289,50 +302,79 @@ def install_task_notification_runtime_patch() -> None:
             return
 
         if self._connected:
-            connectors_http.logger.debug("Already connected to MCP implementation")
+            client_connectors_http.logger.debug("Already connected to MCP implementation")
             return
 
         if transport_hint == "streamable-http":
-            connection_manager = await _connect_streamable_http_only(self, connectors_http)
+            connection_manager = await _connect_streamable_http_only(self, client_connectors_http)
         else:
-            connection_manager = await _connect_sse_only(self, connectors_http)
+            connection_manager = await _connect_sse_only(self, client_connectors_http)
 
         self._connection_manager = connection_manager
         self._connected = True
-        connectors_http.logger.debug(
+        client_connectors_http.logger.debug(
             "Successfully connected to MCP implementation via %s: %s",
             self.transport_type,
             self.base_url,
         )
 
-    connectors_http.HttpConnector.connect = _bridge_http_connect
+    client_connectors_http.HttpConnector.connect = _bridge_http_connect
+    if legacy_connectors_http is not None:
+        legacy_connectors_http.HttpConnector.connect = _bridge_http_connect
 
-    original_create_connector = getattr(config_module, "_bridge_original_create_connector_from_config", None)
+    original_create_connector = getattr(
+        client_config_module,
+        "_bridge_original_create_connector_from_config",
+        None,
+    )
     if original_create_connector is None:
-        original_create_connector = config_module.create_connector_from_config
-        config_module._bridge_original_create_connector_from_config = original_create_connector
+        original_create_connector = client_config_module.create_connector_from_config
+        client_config_module._bridge_original_create_connector_from_config = original_create_connector
 
     def _bridge_create_connector_from_config(*args: Any, **kwargs: Any) -> Any:
-        connector = original_create_connector(*args, **kwargs)
         server_config = args[0] if args else kwargs.get("server_config")
+        call_args = args
+        call_kwargs = kwargs
+
+        if isinstance(server_config, dict) and "url" in server_config and not server_config.get("auth"):
+            normalized_server_config = dict(server_config)
+            normalized_server_config["auth"] = None
+            if args:
+                call_args = (normalized_server_config, *args[1:])
+            else:
+                call_kwargs = dict(kwargs)
+                call_kwargs["server_config"] = normalized_server_config
+            server_config = normalized_server_config
+
+        connector = original_create_connector(*call_args, **call_kwargs)
         transport_hint = None
         if isinstance(server_config, dict):
             transport_hint = _normalize_http_transport(server_config.get("transport"))
-        if transport_hint is not None and isinstance(connector, connectors_http.HttpConnector):
+        if transport_hint is not None and isinstance(connector, client_connectors_http.HttpConnector):
             connector._bridge_transport = transport_hint
         return connector
 
-    config_module.create_connector_from_config = _bridge_create_connector_from_config
+    client_config_module.create_connector_from_config = _bridge_create_connector_from_config
+    if legacy_config_module is not None:
+        legacy_config_module.create_connector_from_config = _bridge_create_connector_from_config
     client_module.create_connector_from_config = _bridge_create_connector_from_config
 
     for module_name in (
-        "mcp_use.connectors.websocket",
-        "mcp_use.connectors.sandbox",
+        "mcp_use.client.connectors.websocket",
+        "mcp_use.client.connectors.sandbox",
     ):
         try:
             module = __import__(module_name, fromlist=["ClientSession"])
             setattr(module, "ClientSession", BridgeAwareClientSession)
         except Exception:
             continue
+
+    for module_name in (
+        "mcp_use.connectors.websocket",
+        "mcp_use.connectors.sandbox",
+    ):
+        module = sys.modules.get(module_name)
+        if module is not None:
+            setattr(module, "ClientSession", BridgeAwareClientSession)
 
     _RUNTIME_PATCHED = True

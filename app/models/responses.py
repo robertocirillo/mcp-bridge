@@ -62,6 +62,32 @@ class QueryOperationInput(BaseModel):
     server_name: Optional[str] = Field(None, description="Specific server name to use")
 
 
+class QueryInputImageSummary(BaseModel):
+    """Safe summary of an image attached to a multimodal query."""
+
+    source_type: Literal["url", "base64"] = Field(..., description="How the image was provided")
+    mime_type: Optional[str] = Field(None, description="Declared MIME type when available")
+    url: Optional[str] = Field(None, description="Redacted URL summary for remote images")
+    data_size_bytes: Optional[int] = Field(None, description="Estimated decoded size for base64 images")
+
+
+class QueryInputPayloadSummary(BaseModel):
+    """Safe summary of structured multimodal input."""
+
+    text_present: bool = Field(..., description="True when textual input was provided")
+    text_length: Optional[int] = Field(None, description="Length of the text input when available")
+    image_count: int = Field(..., description="Number of images attached to the request")
+    images: List[QueryInputImageSummary] = Field(default_factory=list, description="Safe image summaries")
+
+
+class QueryOperationMultimodalInput(BaseModel):
+    """Snapshot of a structured query request associated with an operation."""
+
+    input: QueryInputPayloadSummary = Field(..., description="Safe summary of the structured input payload")
+    max_steps: Optional[int] = Field(None, description="Optional max steps override")
+    server_name: Optional[str] = Field(None, description="Specific server name to use")
+
+
 class QueryOperationToolInput(BaseModel):
     """Snapshot of a direct MCP tool invocation associated with an operation."""
 
@@ -75,7 +101,7 @@ class QueryOperationMetadata(BaseModel):
 
     created_at: datetime = Field(..., description="Operation creation timestamp")
     updated_at: datetime = Field(..., description="Last operation update timestamp")
-    request: QueryOperationInput | QueryOperationToolInput = Field(
+    request: QueryOperationInput | QueryOperationMultimodalInput | QueryOperationToolInput = Field(
         ...,
         description="Original request snapshot.",
     )
