@@ -2,7 +2,7 @@
 Facade around mcp-use.
 
 This module remains the single boundary used by the rest of the application,
-while the implementation details live in mcp_wrapper_* helper modules.
+while the implementation details live in the runtime and guardrails subpackages.
 """
 
 from __future__ import annotations
@@ -16,14 +16,16 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
-from app.core.bias_detector_client import BiasDetectorClient
-from app.core import mcp_wrapper_capabilities, mcp_wrapper_guardrails, mcp_wrapper_tools
+from app.core.clients.bias_detector_client import BiasDetectorClient
+from app.core.guardrails import wrapper as mcp_wrapper_guardrails
+from app.core.runtime import capabilities as mcp_wrapper_capabilities
+from app.core.runtime import tools as mcp_wrapper_tools
 from app.core.exceptions import (
     ConfigurationError,
     MCPWrapperError,
     QueryOperationElicitationDeclinedError,
 )
-from app.core.guardrail_runner import GuardrailExecutionContext, GuardrailRunner
+from app.core.guardrails.runner import GuardrailExecutionContext, GuardrailRunner
 from app.core.model_query import (
     ModelQueryInput,
     build_model_query,
@@ -35,11 +37,11 @@ from app.core.model_query import (
 )
 from app.core.multimodal_image_fetch import RemoteImageFetchError
 from app.core.multimodal_image_resolver import QueryImageResolver
-from app.core.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
-from app.core.mcp_policy_engine import ToolInvocationContext, ToolInvocationDecision, ToolPolicy, ToolPolicyEngine
-from app.core.mcp_task_runtime import BridgeTaskStatusNotification, install_task_notification_runtime_patch
-from app.core.mcp_wrapper_errors import GuardrailViolationError, MCPToolNotAllowedError
-from app.core.mcp_wrapper_guardrails_bias import (
+from app.core.audit.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
+from app.core.guardrails.policy_engine import ToolInvocationContext, ToolInvocationDecision, ToolPolicy, ToolPolicyEngine
+from app.core.runtime.task_runtime import BridgeTaskStatusNotification, install_task_notification_runtime_patch
+from app.core.runtime.errors import GuardrailViolationError, MCPToolNotAllowedError
+from app.core.guardrails.bias import (
     BiasDetectionResult,
     BiasDetector,
     NoOpBiasDetector,
@@ -51,14 +53,14 @@ from app.core.mcp_wrapper_guardrails_bias import (
     make_bias_after_model_guardrail_service,
     set_bias_detector,
 )
-from app.core.mcp_wrapper_guardrails_pii import (
+from app.core.guardrails.pii import (
     _detect_pii,
     make_pii_after_model_guardrail,
     make_pii_before_model_guardrail,
     redact_pii,
 )
-from app.core.mcp_wrapper_llm import create_llm, import_runtime_dependencies, normalize_sandbox_options
-from app.core.mcp_wrapper_transport import _GuardedMCPClient, _GuardedMCPSession
+from app.core.runtime.llm import create_llm, import_runtime_dependencies, normalize_sandbox_options
+from app.core.runtime.transport import _GuardedMCPClient, _GuardedMCPSession
 from app.utils.helpers import retry_async
 from app.utils.logging import get_logger
 

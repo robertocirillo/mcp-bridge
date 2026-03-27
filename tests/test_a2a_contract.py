@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.api.dependencies import get_a2a_client, get_settings
 from app.api.routes.a2a import router as a2a_router
-from app.core.a2a_client import A2AClientError, A2AResult
+from app.core.clients.a2a_client import A2AClientError, A2AResult
 
 
 @dataclass
@@ -255,7 +255,7 @@ def test_bias_detector_does_not_affect_a2a_endpoints(monkeypatch) -> None:
     /a2a endpoints must behave as before (no BIAS_DETECTED 403).
     """
 
-    from app.core.mcp_wrapper import (
+    from app.core.runtime.mcp_wrapper import (
         BiasDetectionResult,
         BiasDetector,
         get_bias_detector,

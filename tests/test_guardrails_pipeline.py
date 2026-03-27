@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.mcp_wrapper import (
+from app.core.runtime.mcp_wrapper import (
     MCPToolNotAllowedError,
     GuardrailViolationError,
     _GuardedMCPSession,

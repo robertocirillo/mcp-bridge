@@ -16,18 +16,18 @@ from app.core.exceptions import (
     SessionNotFoundError,
 )
 from app.core.model_query import resolve_request_query
-from app.core.mcp_wrapper import MCPWrapper
-from app.core.query_operation_store import (
+from app.core.runtime.mcp_wrapper import MCPWrapper
+from app.core.sessions.query_operation_store import (
     QueryOperationStore,
     build_query_operation_input,
     serialize_operation_result,
     serialize_query_operation_error,
 )
-from app.core.session_manager_interactions import (
+from app.core.sessions.interactions import (
     PendingElicitation,
     PendingInteractionStore,
 )
-from app.core.session_store import SessionData, SessionStore
+from app.core.sessions.store import SessionData, SessionStore
 from app.models.config import SessionConfig
 from app.models.requests import QueryOperationCreateRequest, QueryOperationResumeRequest
 from app.models.responses import (

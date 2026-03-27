@@ -24,14 +24,14 @@ def _build_test_app(monkeypatch):
     from fastapi.testclient import TestClient
 
     from app.api.dependencies import get_session_manager
-    from app.core.session_manager import SessionManager
+    from app.core.sessions.manager import SessionManager
 
     # Fresh in-memory session manager for each test.
     mgr = SessionManager()
     monkeypatch.setattr("app.api.dependencies._session_manager", mgr, raising=False)
 
     # Patch MCPWrapper internals to avoid importing heavy deps.
-    from app.core.mcp_wrapper import MCPWrapper, _GuardedMCPClient
+    from app.core.runtime.mcp_wrapper import MCPWrapper, _GuardedMCPClient
 
     monkeypatch.setattr(MCPWrapper, "_import_dependencies", lambda self: None)
 

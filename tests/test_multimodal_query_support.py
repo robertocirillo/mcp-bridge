@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from app.core.model_query import build_model_query
 from app.core.multimodal_image_fetch import RemoteImageFetcher
 from app.core.multimodal_image_resolver import QueryImageResolver
-from app.core.query_operation_store import serialize_query_operation_error
+from app.core.sessions.query_operation_store import serialize_query_operation_error
 from app.models.requests import (
     MAX_BASE64_IMAGE_DATA_LENGTH,
     ImageInput,
@@ -227,7 +227,7 @@ class _DummyAgent:
 
 
 def _build_wrapper(monkeypatch: pytest.MonkeyPatch):
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
 
     monkeypatch.setattr(MCPWrapper, "_import_dependencies", lambda self: None)
     wrapper = MCPWrapper(
@@ -255,7 +255,7 @@ async def test_wrapper_run_query_keeps_legacy_string_queries_unchanged(monkeypat
 
 @pytest.mark.asyncio
 async def test_wrapper_run_query_allows_image_only_and_guardrails_only_see_text(monkeypatch):
-    from app.core.mcp_wrapper import GuardrailContext
+    from app.core.runtime.mcp_wrapper import GuardrailContext
 
     wrapper = _build_wrapper(monkeypatch)
     seen_queries: list[str | None] = []
@@ -332,7 +332,7 @@ async def test_wrapper_run_query_fetches_text_plus_remote_image_before_agent_cal
 
 @pytest.mark.asyncio
 async def test_wrapper_run_query_redacts_only_text_for_multimodal_input(monkeypatch):
-    from app.core.mcp_wrapper import GuardrailContext
+    from app.core.runtime.mcp_wrapper import GuardrailContext
 
     wrapper = _build_wrapper(monkeypatch)
 
@@ -455,9 +455,9 @@ class _OperationWrapper:
 
 @pytest.mark.asyncio
 async def test_session_manager_async_operation_stores_safe_multimodal_summary(monkeypatch):
-    from app.core.session_manager import SessionManager
+    from app.core.sessions.manager import SessionManager
 
-    monkeypatch.setattr("app.core.session_manager.MCPWrapper", _OperationWrapper)
+    monkeypatch.setattr("app.core.sessions.manager.MCPWrapper", _OperationWrapper)
 
     manager = SessionManager()
     session_id = await manager.create_session(

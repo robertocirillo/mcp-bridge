@@ -20,7 +20,7 @@ from app.core.exceptions import (
     QueryOperationResumeInvalidError,
     SessionNotFoundError,
 )
-from app.core.mcp_wrapper import GuardrailViolationError, MCPToolNotAllowedError
+from app.core.runtime.mcp_wrapper import GuardrailViolationError, MCPToolNotAllowedError
 
 
 def tenant_http_error(

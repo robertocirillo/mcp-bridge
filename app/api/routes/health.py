@@ -7,7 +7,7 @@ from datetime import datetime
 import logging
 
 from app.models.responses import HealthResponse, SessionStatsResponse
-from app.core.session_manager import SessionManager
+from app.core.sessions.manager import SessionManager
 from app.api.dependencies import get_session_manager, get_settings
 from config import Settings
 

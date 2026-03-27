@@ -12,11 +12,11 @@ from app.core.exceptions import (
     MCPWrapperError,
     QueryOperationElicitationDeclinedError,
 )
-from app.core.mcp_wrapper_errors import GuardrailViolationError, MCPToolNotAllowedError
+from app.core.runtime.errors import GuardrailViolationError, MCPToolNotAllowedError
 from app.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from app.core.mcp_wrapper import MCPWrapper
+    from app.core.runtime.mcp_wrapper import MCPWrapper
 
 
 logger = get_logger(__name__)

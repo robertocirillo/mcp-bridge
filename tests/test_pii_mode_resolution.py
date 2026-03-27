@@ -5,7 +5,7 @@ import pytest
 async def test_pii_mode_shared_default_inherits_to_input_when_input_mode_omitted(monkeypatch):
     """If the user provides only `pii.mode`, input should inherit it (strategy 3)."""
 
-    import app.core.session_manager as sm
+    import app.core.sessions.manager as sm
     from app.models.config import GuardrailsSettings, LLMProvider, PiiSettings, SessionConfig
 
     class DummySettings:
@@ -59,7 +59,7 @@ async def test_pii_mode_shared_default_inherits_to_input_when_input_mode_omitted
 async def test_pii_output_mode_override_does_not_change_input_default(monkeypatch):
     """output_mode overrides only output; input still uses shared mode unless input_mode is provided."""
 
-    import app.core.session_manager as sm
+    import app.core.sessions.manager as sm
     from app.models.config import GuardrailsSettings, LLMProvider, PiiSettings, SessionConfig
 
     class DummySettings:
@@ -113,7 +113,7 @@ async def test_pii_output_mode_override_does_not_change_input_default(monkeypatc
 async def test_pii_input_mode_override_wins_over_shared_mode(monkeypatch):
     """input_mode overrides input even when a shared mode is set."""
 
-    import app.core.session_manager as sm
+    import app.core.sessions.manager as sm
     from app.models.config import GuardrailsSettings, LLMProvider, PiiSettings, SessionConfig
 
     class DummySettings:

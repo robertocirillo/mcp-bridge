@@ -6,7 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
 from app.api.dependencies import TenantContext, get_session_manager, get_tenant_context
 from app.api.services import session_service
-from app.core.session_manager import SessionManager
+from app.core.sessions.manager import SessionManager
 from app.models.requests import PromptRenderRequest, ResourceReadRequest, SessionCreateRequest
 from app.models.responses import (
     PromptListResponse,

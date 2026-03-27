@@ -5,7 +5,7 @@ import inspect
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional, Type, Union
 
-from app.core.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
+from app.core.audit.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)

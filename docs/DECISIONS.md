@@ -221,13 +221,13 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 - Audit/event recording uses the shared audit layer (`AuditEvent`, recorder).
 - The recent cleanup around guardrail execution, invocation-context handling, and audit-event recording is part of this same consolidation inside the existing `MCPWrapper` boundary.
 - Additional boundary concerns are delegated to focused internal modules:
-  - `mcp_wrapper_capabilities.py`
-  - `mcp_wrapper_tools.py`
-  - `mcp_wrapper_guardrails.py`
-  - `mcp_wrapper_llm.py`
-  - `mcp_wrapper_transport.py`
-  - `mcp_wrapper_guardrails_pii.py`
-  - `mcp_wrapper_guardrails_bias.py`
+  - `runtime/capabilities.py`
+  - `runtime/tools.py`
+  - `guardrails/wrapper.py`
+  - `runtime/llm.py`
+  - `runtime/transport.py`
+  - `guardrails/pii.py`
+  - `guardrails/bias.py`
   - `mcp_wrapper_errors.py`
 - `MCPRuntimeAdapter` is not introduced now.
 - `MCPRuntimeAdapter` should be reconsidered only if a concrete, reusable runtime seam emerges later.

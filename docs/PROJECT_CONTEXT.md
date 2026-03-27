@@ -76,13 +76,13 @@ Important baseline for the current branch:
   * `mcp_wrapper_*` internal modules:
 
     * This focused internal split is the intended current architecture for the MCP boundary
-    * `mcp_wrapper_capabilities`: capability lookup/invocation helpers for prompts, resources, and other optional MCP features
-    * `mcp_wrapper_tools`: direct tool invocation helpers, task-support detection, raw MCP task transport
-    * `mcp_wrapper_guardrails`: shared guardrail pipeline wiring and tool-result wrapping helpers
-    * `mcp_wrapper_llm`: provider imports, sandbox normalization, LLM creation
-    * `mcp_wrapper_transport`: guarded MCP client/session proxies
-    * `mcp_wrapper_guardrails_pii`: PII detection/redaction and related guardrail factories
-    * `mcp_wrapper_guardrails_bias`: bias detectors, bias guardrails, output sanitization helpers
+    * `runtime.capabilities`: capability lookup/invocation helpers for prompts, resources, and other optional MCP features
+    * `runtime.tools`: direct tool invocation helpers, task-support detection, raw MCP task transport
+    * `guardrails.wrapper`: shared guardrail pipeline wiring and tool-result wrapping helpers
+    * `runtime.llm`: provider imports, sandbox normalization, LLM creation
+    * `runtime.transport`: guarded MCP client/session proxies
+    * `guardrails.pii`: PII detection/redaction and related guardrail factories
+    * `guardrails.bias`: bias detectors, bias guardrails, output sanitization helpers
     * `mcp_wrapper_errors`: structured MCP boundary errors
     * `MCPRuntimeAdapter` is not part of the current design; it should be reconsidered only if a concrete reusable runtime seam emerges later
   * `ToolPolicyEngine`:
@@ -94,7 +94,7 @@ Important baseline for the current branch:
     * Executes query-level guardrails (`before_model`, `after_model`)
     * Executes per-tool-result guardrails inside the agent/tool loop
     * Emits structured guardrail audit events
-  * `mcp_audit`:
+  * `audit.mcp_audit`:
 
     * Defines `AuditEvent`
     * Provides the in-memory audit recorder used by wrapper and guardrail runner
@@ -140,7 +140,7 @@ Important baseline for the current branch:
   * `exceptions.py`:
 
     * `MaxSessionsExceededError`
-    * NOTE: `app/core/a2a_client.py` must not import `app/api/*` (to avoid circular imports); the API layer injects the client via `dependencies.py`.
+    * NOTE: `app/core/clients/a2a_client.py` must not import `app/api/*` (to avoid circular imports); the API layer injects the client via `dependencies.py`.
     * `SessionNotFoundError`
     * `ConfigurationError`
     * `MCPWrapperError`
@@ -271,7 +271,7 @@ Important baseline for the current branch:
 
   * `async initialize()`:
 
-    * Wires boundary-specific helper modules (`mcp_wrapper_capabilities`, `mcp_wrapper_tools`, `mcp_wrapper_guardrails`, `mcp_wrapper_llm`, `mcp_wrapper_transport`, specialized guardrail modules)
+    * Wires boundary-specific helper modules (`runtime.capabilities`, `runtime.tools`, `guardrails.wrapper`, `runtime.llm`, `runtime.transport`, specialized guardrail modules)
     * Creates `mcp-use` client(s)
     * Connects to configured MCP servers
     * Prepares tools and sessions

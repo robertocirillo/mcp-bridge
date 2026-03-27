@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 from app.api.dependencies import get_session_manager
 from app.api.routes.sessions import router as sessions_router
-from app.core.mcp_wrapper import MCPWrapper
-from app.core.session_manager import SessionData, SessionManager
+from app.core.runtime.mcp_wrapper import MCPWrapper
+from app.core.sessions.manager import SessionData, SessionManager
 from app.models.responses import (
     QueryOperationInput,
     QueryOperationInteraction,

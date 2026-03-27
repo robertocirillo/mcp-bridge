@@ -3,7 +3,7 @@ import json
 import pytest
 import httpx
 
-from app.core.bias_detector_client import BiasDetectorClient
+from app.core.clients.bias_detector_client import BiasDetectorClient
 
 
 @pytest.mark.asyncio

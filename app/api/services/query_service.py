@@ -9,7 +9,7 @@ from app.api.dependencies import TenantContext
 from app.api.error_mapping import map_query_error
 from app.api.session_context import bind_wrapper_context
 from app.core.model_query import resolve_request_query
-from app.core.session_manager import SessionManager
+from app.core.sessions.manager import SessionManager
 from app.models.requests import QueryOperationCreateRequest, QueryOperationResumeRequest, QueryRequest
 from app.models.responses import QueryOperationResponse, QueryResponse
 

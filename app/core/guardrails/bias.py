@@ -5,8 +5,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from app.core.bias_detector_client import BiasDetectorClient, BiasDetectorError
-from app.core.mcp_wrapper_errors import GuardrailViolationError
+from app.core.clients.bias_detector_client import BiasDetectorClient, BiasDetectorError
+from app.core.runtime.errors import GuardrailViolationError
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)

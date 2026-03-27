@@ -1,4 +1,4 @@
-from app.core.mcp_wrapper import RuleBasedBiasDetector
+from app.core.runtime.mcp_wrapper import RuleBasedBiasDetector
 
 
 def test_rules_detector_exclusion_or_violence_detects() -> None:

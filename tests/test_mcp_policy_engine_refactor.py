@@ -1,7 +1,7 @@
 import pytest
 
-from app.core.mcp_policy_engine import ToolPolicy, ToolPolicyEngine, ToolInvocationContext
-from app.core.mcp_wrapper import MCPToolNotAllowedError, MCPWrapper
+from app.core.guardrails.policy_engine import ToolPolicy, ToolPolicyEngine, ToolInvocationContext
+from app.core.runtime.mcp_wrapper import MCPToolNotAllowedError, MCPWrapper
 
 
 def _make_wrapper():

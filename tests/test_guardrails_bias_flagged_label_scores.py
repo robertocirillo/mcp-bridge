@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.mcp_wrapper import (
+from app.core.runtime.mcp_wrapper import (
     GuardrailContext,
     GuardrailViolationError,
     make_bias_after_model_guardrail_service,

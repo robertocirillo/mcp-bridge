@@ -330,7 +330,7 @@ def _ensure_test_stubs() -> None:
         pkg_a2a_client = types.ModuleType("a2a.client")
         pkg_a2a_types = types.ModuleType("a2a.types")
 
-        # Minimal stubs to satisfy imports in app.core.a2a_client
+        # Minimal stubs to satisfy imports in app.core.clients.a2a_client
         class Role:
             user = "user"
 

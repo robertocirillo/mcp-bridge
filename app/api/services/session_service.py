@@ -21,7 +21,7 @@ from app.api.mcp_capabilities import (
     normalize_resource_read,
 )
 from app.api.session_context import get_owned_wrapper, get_tenant_session
-from app.core.session_manager import SessionManager
+from app.core.sessions.manager import SessionManager
 from app.models.requests import PromptRenderRequest, ResourceReadRequest, SessionCreateRequest
 from app.models.responses import (
     PromptListResponse,
