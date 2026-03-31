@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     API_DESCRIPTION: str = (
         "A modular and scalable REST service to interact with MCP servers using the mcp-use library"
     )
-    API_VERSION: str = "0.1.0-beta"
+    API_VERSION: str = "0.2.0"
 
     # Server Settings
     HOST: str = "0.0.0.0"
