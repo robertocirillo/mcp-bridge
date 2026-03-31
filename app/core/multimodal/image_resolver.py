@@ -8,15 +8,14 @@ from app.core.multimodal.image_data import (
     encode_image_bytes_to_base64,
 )
 from app.core.multimodal.image_fetch import RemoteImageFetcher
+from app.core.multimodal.validation import (
+    calculate_remaining_image_budget,
+    estimate_base64_size,
+    validate_multimodal_request_precheck,
+    validate_resolved_image,
+    validate_total_image_bytes,
+)
 from app.models.requests import ImageInput, QueryInputPayload
-
-
-def _estimate_base64_size(data: str) -> int:
-    normalized = "".join(data.split())
-    if not normalized:
-        return 0
-    padding = len(normalized) - len(normalized.rstrip("="))
-    return max(0, (len(normalized) * 3) // 4 - padding)
 
 
 class QueryImageResolver:
@@ -29,25 +28,44 @@ class QueryImageResolver:
         if isinstance(query_input, str):
             return query_input
 
+        validate_multimodal_request_precheck(query_input.images)
+
         images: list[ResolvedImageInput] = []
-        for image in query_input.images:
-            images.append(await self._resolve_image(image))
+        total_image_bytes = 0
+        for index, image in enumerate(query_input.images):
+            images.append(
+                await self._resolve_image(
+                    image,
+                    remaining_request_image_bytes=calculate_remaining_image_budget(total_image_bytes),
+                )
+            )
+            total_image_bytes += validate_resolved_image(images[-1], index=index)
+            validate_total_image_bytes(total_image_bytes)
 
         return ResolvedQueryInputPayload(
             text=query_input.text,
             images=images,
         )
 
-    async def _resolve_image(self, image: ImageInput) -> ResolvedImageInput:
+    async def _resolve_image(
+        self,
+        image: ImageInput,
+        *,
+        remaining_request_image_bytes: int,
+    ) -> ResolvedImageInput:
         if image.source_type == "base64":
             return ResolvedImageInput(
                 source_type="base64",
                 mime_type=image.mime_type or "",
                 base64_data=image.data or "",
-                data_size_bytes=_estimate_base64_size(image.data or ""),
+                data_size_bytes=estimate_base64_size(image.data or ""),
             )
 
-        fetched_image = await self._remote_image_fetcher.fetch(image.url or "")
+        fetched_image = await self._remote_image_fetcher.fetch(
+            image.url or "",
+            max_bytes=remaining_request_image_bytes,
+            max_bytes_scope="request_budget",
+        )
         return ResolvedImageInput(
             source_type="url",
             mime_type=fetched_image.mime_type,

@@ -14,6 +14,7 @@ def _build_test_app(monkeypatch):
 
     from app.api.dependencies import get_session_manager
     from app.core.multimodal import (
+        QueryImageResolver,
         ensure_image_input_supported,
         extract_query_text,
         has_query_visual_input,
@@ -76,6 +77,7 @@ def _build_test_app(monkeypatch):
             self.last_processed_query = None
             self.steps_used = 1
             self.last_server_used = None
+            self._query_image_resolver = QueryImageResolver()
 
         def set_context(self, *, tenant_id=None, run_id=None, session_id=None):
             self.tenant_id = tenant_id
@@ -194,6 +196,7 @@ def _build_test_app(monkeypatch):
 
             if has_query_visual_input(query):
                 ensure_image_input_supported(provider=self.llm_provider, model=self.model)
+                query = await self._query_image_resolver.resolve(query)
 
             # Deterministic "model output" that includes some PII so output redaction can be tested.
             # It also echoes the processed query so the bias detector can be triggered deterministically.
@@ -482,3 +485,30 @@ def test_http_contract_multimodal_text_only_model_returns_structured_400(monkeyp
     assert detail["model"] == "llama3.1"
     assert detail["reason"] == "text_only"
     assert "does not support image inputs" in detail["message"]
+
+
+def test_http_contract_multimodal_too_many_images_returns_structured_400(monkeypatch):
+    client, _mgr = _build_test_app(monkeypatch)
+
+    session_id = _create_session(client, None, model="llava")
+    r = _execute_query(
+        client,
+        session_id,
+        {
+            "input": {
+                "images": [
+                    {
+                        "source_type": "base64",
+                        "mime_type": "image/png",
+                        "data": "ZmFrZV9pbWFnZQ==",
+                    }
+                    for _ in range(5)
+                ],
+            }
+        },
+    )
+
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail["code"] == "MCP_SCHEMA_ERROR"
+    assert "maximum of 4 images per request" in detail["message"]

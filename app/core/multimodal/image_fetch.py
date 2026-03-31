@@ -9,13 +9,16 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from app.models.requests import SUPPORTED_IMAGE_MIME_TYPES
+from app.core.multimodal.policy import MAX_REMOTE_IMAGE_BYTES
+from app.core.multimodal.validation import (
+    MultimodalInputValidationError,
+    validate_supported_image_mime_type,
+)
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 IMAGE_FETCH_TIMEOUT_SECONDS = 5.0
-MAX_REMOTE_IMAGE_BYTES = 5_000_000
 MAX_REMOTE_IMAGE_REDIRECTS = 3
 REMOTE_IMAGE_FETCH_USER_AGENT = "mcp-bridge/0.1 (+https://github.com/openai/codex)"
 
@@ -44,7 +47,13 @@ class RemoteImageFetcher:
     ) -> None:
         self._client_factory = client_factory or self._default_client_factory
 
-    async def fetch(self, url: str) -> FetchedRemoteImage:
+    async def fetch(
+        self,
+        url: str,
+        *,
+        max_bytes: Optional[int] = None,
+        max_bytes_scope: str = "single_image",
+    ) -> FetchedRemoteImage:
         current_url = url
         redirects_followed = 0
 
@@ -84,8 +93,18 @@ class RemoteImageFetcher:
                             )
 
                         mime_type = self._validate_content_type(response.headers.get("content-type"), current_url)
-                        content_length = self._validate_content_length(response.headers.get("content-length"), current_url)
-                        content = await self._read_bounded_body(response, current_url)
+                        content_length = self._validate_content_length(
+                            response.headers.get("content-length"),
+                            current_url,
+                            max_bytes=max_bytes,
+                            max_bytes_scope=max_bytes_scope,
+                        )
+                        content = await self._read_bounded_body(
+                            response,
+                            current_url,
+                            max_bytes=max_bytes,
+                            max_bytes_scope=max_bytes_scope,
+                        )
 
                 except httpx.TimeoutException as exc:
                     raise RemoteImageFetchError(
@@ -200,16 +219,22 @@ class RemoteImageFetcher:
                 f"Image response Content-Type is missing for {RemoteImageFetcher._redact_url(url)}"
             )
 
-        mime_type = content_type.split(";", 1)[0].strip().lower()
-        if mime_type not in SUPPORTED_IMAGE_MIME_TYPES:
-            raise RemoteImageFetchError(
-                "Image MIME type is not supported for "
-                f"{RemoteImageFetcher._redact_url(url)}: {mime_type}"
+        try:
+            return validate_supported_image_mime_type(
+                content_type,
+                context=RemoteImageFetcher._redact_url(url),
             )
-        return mime_type
+        except MultimodalInputValidationError as exc:
+            raise RemoteImageFetchError(str(exc)) from exc
 
     @staticmethod
-    def _validate_content_length(content_length: Optional[str], url: str) -> Optional[int]:
+    def _validate_content_length(
+        content_length: Optional[str],
+        url: str,
+        *,
+        max_bytes: Optional[int] = None,
+        max_bytes_scope: str = "single_image",
+    ) -> Optional[int]:
         if not content_length:
             return None
 
@@ -224,24 +249,64 @@ class RemoteImageFetcher:
             raise RemoteImageFetchError(
                 f"Image response Content-Length is invalid for {RemoteImageFetcher._redact_url(url)}"
             )
-        if content_length_value > MAX_REMOTE_IMAGE_BYTES:
+        byte_limit = RemoteImageFetcher._effective_max_bytes(max_bytes)
+        if content_length_value > byte_limit:
             raise RemoteImageFetchError(
-                "Image download exceeds the maximum size "
-                f"of {MAX_REMOTE_IMAGE_BYTES} bytes for {RemoteImageFetcher._redact_url(url)}"
+                RemoteImageFetcher._build_size_error_message(
+                    url,
+                    byte_limit=byte_limit,
+                    max_bytes=max_bytes,
+                    max_bytes_scope=max_bytes_scope,
+                )
             )
         return content_length_value
 
     @staticmethod
-    async def _read_bounded_body(response: httpx.Response, url: str) -> bytes:
+    async def _read_bounded_body(
+        response: httpx.Response,
+        url: str,
+        *,
+        max_bytes: Optional[int] = None,
+        max_bytes_scope: str = "single_image",
+    ) -> bytes:
         body = bytearray()
+        byte_limit = RemoteImageFetcher._effective_max_bytes(max_bytes)
         async for chunk in response.aiter_bytes():
             body.extend(chunk)
-            if len(body) > MAX_REMOTE_IMAGE_BYTES:
+            if len(body) > byte_limit:
                 raise RemoteImageFetchError(
-                    "Image download exceeds the maximum size "
-                    f"of {MAX_REMOTE_IMAGE_BYTES} bytes for {RemoteImageFetcher._redact_url(url)}"
+                    RemoteImageFetcher._build_size_error_message(
+                        url,
+                        byte_limit=byte_limit,
+                        max_bytes=max_bytes,
+                        max_bytes_scope=max_bytes_scope,
+                    )
                 )
         return bytes(body)
+
+    @staticmethod
+    def _effective_max_bytes(max_bytes: Optional[int]) -> int:
+        if max_bytes is None:
+            return MAX_REMOTE_IMAGE_BYTES
+        return min(MAX_REMOTE_IMAGE_BYTES, max(0, max_bytes))
+
+    @staticmethod
+    def _build_size_error_message(
+        url: str,
+        *,
+        byte_limit: int,
+        max_bytes: Optional[int],
+        max_bytes_scope: str,
+    ) -> str:
+        if max_bytes is not None and byte_limit < MAX_REMOTE_IMAGE_BYTES and max_bytes_scope == "request_budget":
+            return (
+                "Multimodal input images exceed the remaining request image budget "
+                f"of {byte_limit} bytes while resolving {RemoteImageFetcher._redact_url(url)}"
+            )
+        return (
+            "Image download exceeds the maximum size "
+            f"of {byte_limit} bytes for {RemoteImageFetcher._redact_url(url)}"
+        )
 
     @staticmethod
     def _detect_image_mime_type(content: bytes) -> Optional[str]:

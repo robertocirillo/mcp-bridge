@@ -5,6 +5,7 @@ from typing import Any, Optional
 from urllib.parse import urlsplit
 
 from app.core.multimodal.image_data import ResolvedQueryInputPayload
+from app.core.multimodal.validation import estimate_base64_size
 from app.models.requests import QueryInputPayload
 from app.models.responses import QueryInputImageSummary, QueryInputPayloadSummary
 
@@ -112,8 +113,6 @@ def describe_query_input(query_input: ModelQueryInput | PreparedModelQueryInput)
         f"structured:text_present={_has_text_content(input_payload.text)} "
         f"text_length={text_length} image_count={len(input_payload.images)}"
     )
-
-
 def sanitize_multimodal_error(value: Any) -> str:
     return _DATA_URL_RE.sub(r"data:\1;base64,[REDACTED]", str(value))
 
@@ -123,15 +122,5 @@ def redact_image_url(url: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         return "[redacted-url]"
     return f"{parsed.scheme}://{parsed.netloc}/..."
-
-
-def estimate_base64_size(data: str) -> int:
-    normalized = "".join(data.split())
-    if not normalized:
-        return 0
-    padding = len(normalized) - len(normalized.rstrip("="))
-    return max(0, (len(normalized) * 3) // 4 - padding)
-
-
 def is_langchain_human_message(value: Any) -> bool:
     return isinstance(value, LangChainHumanMessage)

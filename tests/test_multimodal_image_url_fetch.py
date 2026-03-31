@@ -145,6 +145,28 @@ async def test_remote_image_fetcher_rejects_body_over_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_remote_image_fetcher_rejects_body_over_request_budget(monkeypatch):
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "image/png", "content-length": str(len(PNG_BYTES))},
+            content=PNG_BYTES,
+        )
+
+    fetcher = _build_fetcher(handler)
+
+    async def _resolve_host_ips(_hostname: str) -> set[str]:
+        return {"93.184.216.34"}
+
+    monkeypatch.setattr(fetcher, "_resolve_host_ips", _resolve_host_ips)
+
+    with pytest.raises(RemoteImageFetchError) as exc_info:
+        await fetcher.fetch("https://example.com/image.png", max_bytes=len(PNG_BYTES) - 1, max_bytes_scope="request_budget")
+
+    assert "remaining request image budget" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_remote_image_fetcher_rejects_timeout(monkeypatch):
     async def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("timeout", request=request)

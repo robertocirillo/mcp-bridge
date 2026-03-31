@@ -7,14 +7,9 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.core.multimodal.policy import MAX_BASE64_IMAGE_DATA_LENGTH, SUPPORTED_IMAGE_MIME_TYPES
+from app.core.multimodal.validation import normalize_image_mime_type
 from app.models.config import SessionConfig
-
-SUPPORTED_IMAGE_MIME_TYPES = {
-    "image/png",
-    "image/jpeg",
-    "image/webp",
-}
-MAX_BASE64_IMAGE_DATA_LENGTH = 5_000_000
 
 
 def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
@@ -50,11 +45,12 @@ class ImageInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_source(self) -> "ImageInput":
+        self.mime_type = normalize_image_mime_type(self.mime_type)
+
         if self.mime_type is not None and self.mime_type not in SUPPORTED_IMAGE_MIME_TYPES:
             raise ValueError(
                 f"Unsupported mime_type '{self.mime_type}'. Supported values: {sorted(SUPPORTED_IMAGE_MIME_TYPES)}"
             )
-
         self.data = _normalize_base64_data(self.data)
 
         if self.source_type == "url":

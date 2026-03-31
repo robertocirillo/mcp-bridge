@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -7,8 +8,10 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from app.core.multimodal.image_fetch import RemoteImageFetcher
+from app.core.multimodal.image_fetch import RemoteImageFetchError, RemoteImageFetcher
+from app.core.multimodal.policy import MAX_REQUEST_IMAGE_COUNT
 from app.core.multimodal.image_resolver import QueryImageResolver
+from app.core.multimodal.validation import MultimodalInputValidationError
 from app.core.multimodal.model_query import build_model_query
 from app.core.sessions.query_operation_store import serialize_query_operation_error
 from app.models.requests import (
@@ -187,6 +190,68 @@ async def test_build_model_query_converts_structured_payload_to_human_message(mo
         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{PNG_BASE64}"}},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZV9pbWFnZQ=="}},
     ]
+
+
+@pytest.mark.asyncio
+async def test_query_image_resolver_rejects_too_many_images():
+    payload = QueryInputPayload.model_validate(
+        {
+            "images": [
+                {
+                    "source_type": "base64",
+                    "mime_type": "image/png",
+                    "data": "ZmFrZV9pbWFnZQ==",
+                }
+                for _ in range(MAX_REQUEST_IMAGE_COUNT + 1)
+            ]
+        }
+    )
+
+    resolver = QueryImageResolver()
+
+    with pytest.raises(MultimodalInputValidationError) as exc_info:
+        await resolver.resolve(payload)
+
+    assert f"maximum of {MAX_REQUEST_IMAGE_COUNT} images per request" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_query_image_resolver_rejects_total_image_budget_with_url(monkeypatch):
+    import app.core.multimodal.validation as multimodal_validation
+
+    monkeypatch.setattr(multimodal_validation, "MAX_REQUEST_IMAGE_TOTAL_BYTES", 40)
+
+    payload = QueryInputPayload.model_validate(
+        {
+            "images": [
+                {
+                    "source_type": "base64",
+                    "mime_type": "image/png",
+                    "data": base64.b64encode(b"a" * 30).decode("ascii"),
+                },
+                {
+                    "source_type": "url",
+                    "url": "https://example.com/cat.png",
+                },
+            ]
+        }
+    )
+
+    resolver = QueryImageResolver(
+        remote_image_fetcher=_build_remote_image_fetcher(
+            lambda _request: httpx.Response(
+                status_code=200,
+                headers={"content-type": "image/png", "content-length": str(len(PNG_BYTES))},
+                content=PNG_BYTES,
+            ),
+            monkeypatch,
+        )
+    )
+
+    with pytest.raises(RemoteImageFetchError) as exc_info:
+        await resolver.resolve(payload)
+
+    assert "remaining request image budget" in str(exc_info.value)
 
 
 def test_image_input_repr_hides_base64_payload():
