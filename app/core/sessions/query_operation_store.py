@@ -10,6 +10,7 @@ from fastapi.encoders import jsonable_encoder
 
 from app.core.exceptions import (
     ConfigurationError,
+    ImageInputNotSupportedError,
     QueryOperationElicitationDeclinedError,
     QueryOperationNotFoundError,
     SessionNotFoundError,
@@ -85,6 +86,16 @@ def serialize_query_operation_error(exc: Exception) -> QueryOperationError:
         return QueryOperationError(
             code="MCP_ELICITATION_DECLINED",
             message=sanitize_multimodal_error(exc),
+        )
+    if isinstance(exc, ImageInputNotSupportedError):
+        return QueryOperationError(
+            code="MCP_IMAGE_INPUT_NOT_SUPPORTED",
+            message=sanitize_multimodal_error(exc),
+            details={
+                "provider": getattr(exc, "provider", None),
+                "model": getattr(exc, "model", None),
+                "reason": getattr(exc, "reason", None),
+            },
         )
     if isinstance(exc, ConfigurationError):
         return QueryOperationError(code="MCP_CONFIGURATION_ERROR", message=sanitize_multimodal_error(exc))

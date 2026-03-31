@@ -13,6 +13,12 @@ def _build_test_app(monkeypatch):
     from fastapi.testclient import TestClient
 
     from app.api.dependencies import get_session_manager
+    from app.core.multimodal import (
+        ensure_image_input_supported,
+        extract_query_text,
+        has_query_visual_input,
+        replace_query_text,
+    )
     from app.core.sessions.manager import SessionManager
 
     # Fresh in-memory session manager for each test
@@ -165,12 +171,12 @@ def _build_test_app(monkeypatch):
                 out = await gr(ctx, out)
             return out
 
-        async def run_query(self, query: str, max_steps=None, server_name=None) -> str:
+        async def run_query(self, query, max_steps=None, server_name=None) -> str:
             ctx = GuardrailContext(
                 tenant_id=self.tenant_id,
                 run_id=self.run_id,
                 session_id=self.session_id,
-                query=query,
+                query=extract_query_text(query),
                 server_name=server_name,
             )
 
@@ -179,11 +185,15 @@ def _build_test_app(monkeypatch):
             except GuardrailViolationError:
                 raise
 
+            query = replace_query_text(query, text=ctx.query)
             processed = ctx.query or ""
             self.last_processed_query = processed
 
-            if not processed.strip():
+            if not processed.strip() and not has_query_visual_input(query):
                 raise ValueError("Empty query not allowed")
+
+            if has_query_visual_input(query):
+                ensure_image_input_supported(provider=self.llm_provider, model=self.model)
 
             # Deterministic "model output" that includes some PII so output redaction can be tested.
             # It also echoes the processed query so the bias detector can be triggered deterministically.
@@ -208,9 +218,9 @@ def _build_test_app(monkeypatch):
     return TestClient(app), mgr
 
 
-def _create_session(client, guardrails: dict | None):
+def _create_session(client, guardrails: dict | None, *, model: str = "dummy"):
     payload = {
-        "llm_provider": {"provider": "ollama", "model": "dummy", "temperature": 0},
+        "llm_provider": {"provider": "ollama", "model": model, "temperature": 0},
         "mcp_servers": {},
     }
     if guardrails is not None:
@@ -220,8 +230,10 @@ def _create_session(client, guardrails: dict | None):
     return r.json()["session_id"]
 
 
-def _execute_query(client, session_id: str, query: str):
-    return client.post(f"/queries/{session_id}/query", json={"query": query})
+def _execute_query(client, session_id: str, payload):
+    if isinstance(payload, str):
+        payload = {"query": payload}
+    return client.post(f"/queries/{session_id}/query", json=payload)
 
 
 def test_http_contract_pii_redact_allows_and_redacts_input(monkeypatch):
@@ -413,3 +425,60 @@ def test_http_contract_bias_off_does_not_block(monkeypatch):
         assert r.status_code == 200, r.text
     finally:
         set_bias_detector(previous)
+
+
+def test_http_contract_multimodal_vision_capable_model_allows_images(monkeypatch):
+    client, _mgr = _build_test_app(monkeypatch)
+
+    session_id = _create_session(client, None, model="llava")
+    r = _execute_query(
+        client,
+        session_id,
+        {
+            "input": {
+                "text": "describe this image",
+                "images": [
+                    {
+                        "source_type": "base64",
+                        "mime_type": "image/png",
+                        "data": "ZmFrZV9pbWFnZQ==",
+                    }
+                ],
+            }
+        },
+    )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["session_id"] == session_id
+    assert "PROCESSED_QUERY: describe this image" in body["result"]
+
+
+def test_http_contract_multimodal_text_only_model_returns_structured_400(monkeypatch):
+    client, _mgr = _build_test_app(monkeypatch)
+
+    session_id = _create_session(client, None, model="llama3.1")
+    r = _execute_query(
+        client,
+        session_id,
+        {
+            "input": {
+                "text": "describe this image",
+                "images": [
+                    {
+                        "source_type": "base64",
+                        "mime_type": "image/png",
+                        "data": "ZmFrZV9pbWFnZQ==",
+                    }
+                ],
+            }
+        },
+    )
+
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail["code"] == "MCP_IMAGE_INPUT_NOT_SUPPORTED"
+    assert detail["provider"] == "ollama"
+    assert detail["model"] == "llama3.1"
+    assert detail["reason"] == "text_only"
+    assert "does not support image inputs" in detail["message"]

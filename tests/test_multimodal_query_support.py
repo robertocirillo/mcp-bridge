@@ -207,6 +207,22 @@ def test_query_input_payload_text_is_trimmed():
     assert payload.text == "hello input"
 
 
+def test_query_operation_error_serialization_for_image_capability_failure():
+    from app.core.exceptions import ImageInputNotSupportedError
+
+    error = serialize_query_operation_error(
+        ImageInputNotSupportedError(provider="ollama", model="llama3.1", reason="text_only")
+    )
+
+    assert error.code == "MCP_IMAGE_INPUT_NOT_SUPPORTED"
+    assert error.details == {
+        "provider": "ollama",
+        "model": "llama3.1",
+        "reason": "text_only",
+    }
+    assert "does not support image inputs" in error.message
+
+
 class _DummyAgent:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -226,13 +242,18 @@ class _DummyAgent:
         return "MODEL_RESULT"
 
 
-def _build_wrapper(monkeypatch: pytest.MonkeyPatch):
+def _build_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    llm_provider: str = "ollama",
+    model: str = "dummy",
+):
     from app.core.runtime.mcp_wrapper import MCPWrapper
 
     monkeypatch.setattr(MCPWrapper, "_import_dependencies", lambda self: None)
     wrapper = MCPWrapper(
-        llm_provider="ollama",
-        model="dummy",
+        llm_provider=llm_provider,
+        model=model,
         mcp_servers={"alpha": {"url": "http://example.com/mcp"}},
     )
     wrapper.before_model_guardrails = []
@@ -257,7 +278,7 @@ async def test_wrapper_run_query_keeps_legacy_string_queries_unchanged(monkeypat
 async def test_wrapper_run_query_allows_image_only_and_guardrails_only_see_text(monkeypatch):
     from app.core.runtime.mcp_wrapper import GuardrailContext
 
-    wrapper = _build_wrapper(monkeypatch)
+    wrapper = _build_wrapper(monkeypatch, model="llava")
     seen_queries: list[str | None] = []
 
     def _record_guardrail(ctx: GuardrailContext) -> GuardrailContext:
@@ -300,7 +321,7 @@ async def test_wrapper_run_query_allows_image_only_and_guardrails_only_see_text(
 
 @pytest.mark.asyncio
 async def test_wrapper_run_query_fetches_text_plus_remote_image_before_agent_call(monkeypatch):
-    wrapper = _build_wrapper(monkeypatch)
+    wrapper = _build_wrapper(monkeypatch, model="llava")
     wrapper._query_image_resolver = QueryImageResolver(
         remote_image_fetcher=_build_remote_image_fetcher(
             lambda _request: httpx.Response(
@@ -334,7 +355,7 @@ async def test_wrapper_run_query_fetches_text_plus_remote_image_before_agent_cal
 async def test_wrapper_run_query_redacts_only_text_for_multimodal_input(monkeypatch):
     from app.core.runtime.mcp_wrapper import GuardrailContext
 
-    wrapper = _build_wrapper(monkeypatch)
+    wrapper = _build_wrapper(monkeypatch, model="llava")
 
     def _redact_text_guardrail(ctx: GuardrailContext) -> GuardrailContext:
         return replace(ctx, query="[REDACTED_TEXT]")
@@ -369,7 +390,7 @@ async def test_wrapper_run_query_redacts_only_text_for_multimodal_input(monkeypa
 async def test_wrapper_run_query_redacts_fetched_image_data_from_runtime_errors(monkeypatch):
     from app.core.exceptions import MCPWrapperError
 
-    wrapper = _build_wrapper(monkeypatch)
+    wrapper = _build_wrapper(monkeypatch, model="llava")
     wrapper._query_image_resolver = QueryImageResolver(
         remote_image_fetcher=_build_remote_image_fetcher(
             lambda _request: httpx.Response(
@@ -395,6 +416,33 @@ async def test_wrapper_run_query_redacts_fetched_image_data_from_runtime_errors(
 
     assert "[REDACTED]" in str(exc_info.value)
     assert PNG_BASE64 not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_wrapper_run_query_rejects_images_for_text_only_model(monkeypatch):
+    from app.core.exceptions import ImageInputNotSupportedError
+
+    wrapper = _build_wrapper(monkeypatch, model="llama3.1")
+
+    payload = QueryInputPayload.model_validate(
+        {
+            "text": "describe this image",
+            "images": [
+                {
+                    "source_type": "base64",
+                    "mime_type": "image/png",
+                    "data": "ZmFrZV9pbWFnZQ==",
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ImageInputNotSupportedError) as exc_info:
+        await wrapper.run_query(payload, server_name="alpha")
+
+    assert "does not support image inputs" in str(exc_info.value)
+    assert "vision-capable model" in str(exc_info.value)
+    assert wrapper._agent.calls == []
 
 
 class _OperationWrapper:

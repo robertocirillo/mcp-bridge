@@ -128,6 +128,36 @@ class ConfigurationError(MCPAPIException):
     def __init__(self, message: str = "Configuration error"):
         super().__init__(message, status_code=400)
 
+
+class ImageInputNotSupportedError(ConfigurationError):
+    """Raised when the configured provider/model cannot accept image inputs."""
+
+    def __init__(
+        self,
+        *,
+        provider: str,
+        model: str,
+        reason: str,
+        message: str | None = None,
+    ):
+        self.provider = provider
+        self.model = model
+        self.reason = reason
+
+        if message is None:
+            if reason == "text_only":
+                message = (
+                    f"Configured model '{model}' for provider '{provider}' does not support image inputs. "
+                    "Remove images or configure a vision-capable model."
+                )
+            else:
+                message = (
+                    f"Configured model '{model}' for provider '{provider}' is not recognized as vision-capable. "
+                    "Remove images or configure a vision-capable model."
+                )
+
+        super().__init__(message)
+
 class DependencyError(MCPAPIException):
     """Exception for missing dependencies"""
 

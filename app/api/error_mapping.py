@@ -10,6 +10,7 @@ from app.api.dependencies import TenantContext
 from app.api.errors import http_error
 from app.core.exceptions import (
     ConfigurationError,
+    ImageInputNotSupportedError,
     MCPCapabilityNotSupportedError,
     MCPCapabilityUpstreamError,
     MCPWrapperError,
@@ -227,6 +228,17 @@ def map_query_error(
             guardrail=getattr(exc, "rule", None),
             tool_name=getattr(exc, "tool_name", None),
             details=getattr(exc, "details", {}),
+            **context,
+        )
+    if isinstance(exc, ImageInputNotSupportedError):
+        return tenant_http_error(
+            400,
+            "MCP_IMAGE_INPUT_NOT_SUPPORTED",
+            str(exc),
+            tenant_ctx=tenant_ctx,
+            provider=getattr(exc, "provider", None),
+            model=getattr(exc, "model", None),
+            reason=getattr(exc, "reason", None),
             **context,
         )
     if isinstance(exc, ConfigurationError):

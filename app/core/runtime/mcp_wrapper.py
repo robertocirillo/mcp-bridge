@@ -23,6 +23,7 @@ from app.core.runtime import tools as mcp_wrapper_tools
 from app.core.exceptions import (
     ConfigurationError,
     MCPWrapperError,
+    ImageInputNotSupportedError,
     QueryOperationElicitationDeclinedError,
 )
 from app.core.guardrails.runner import GuardrailExecutionContext, GuardrailRunner
@@ -35,6 +36,7 @@ from app.core.multimodal.model_query import (
     replace_query_text,
     sanitize_multimodal_error,
 )
+from app.core.multimodal.capabilities import ensure_image_input_supported
 from app.core.multimodal.image_fetch import RemoteImageFetchError
 from app.core.multimodal.image_resolver import QueryImageResolver
 from app.core.audit.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
@@ -1116,6 +1118,9 @@ class MCPWrapper:
             if server_name and server_name not in self.mcp_servers:
                 raise ConfigurationError(f"Server '{server_name}' not configured")
 
+            if has_query_visual_input(guarded_query_input):
+                ensure_image_input_supported(provider=self.llm_provider, model=self.model)
+
             prepared_query_input = await self._query_image_resolver.resolve(guarded_query_input)
 
             # Build the agent run payload and optionally scope it to a specific configured server.
@@ -1205,6 +1210,13 @@ class MCPWrapper:
             raise
         except RemoteImageFetchError as exc:
             logger.warning("Remote image resolution failed: %s", sanitize_multimodal_error(exc))
+            raise
+        except ImageInputNotSupportedError:
+            self._record_audit_event(
+                event_type="query_execution",
+                outcome="blocked",
+                details={"reason": "image_input_not_supported", "server_name": server_name},
+            )
             raise
         except Exception as exc:
             # Collapse unexpected runtime failures into the public wrapper error type.
