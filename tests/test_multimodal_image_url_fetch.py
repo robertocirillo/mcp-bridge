@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.core.multimodal_image_fetch import (
+from app.core.multimodal.image_fetch import (
     MAX_REMOTE_IMAGE_BYTES,
     REMOTE_IMAGE_FETCH_USER_AGENT,
     RemoteImageFetchError,

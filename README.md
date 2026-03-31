@@ -58,9 +58,11 @@ mcp-bridge/
     │   ├── guardrail_runner.py             # Guardrail execution pipeline
     │   ├── mcp_policy_engine.py            # Tool policy evaluation
     │   ├── mcp_audit.py                    # Audit event primitives/recorder
-    │   ├── multimodal_image_fetch.py       # Remote image fetch/validation with SSRF-aware checks
-    │   ├── multimodal_image_resolver.py    # Multimodal image normalization to provider-ready payloads
-    │   ├── multimodal_image_data.py        # Internal resolved image/data-URL primitives
+    │   ├── multimodal/
+    │   │   ├── image_fetch.py              # Remote image fetch/validation with SSRF-aware checks
+    │   │   ├── image_resolver.py           # Multimodal image normalization to provider-ready payloads
+    │   │   ├── image_data.py               # Internal resolved image/data-URL primitives
+    │   │   └── model_query.py              # Multimodal query normalization/building helpers
     │   ├── session_manager.py              # Public session/query-operation orchestrator
     │   ├── session_store.py                # In-memory SessionData and SessionStore primitives
     │   ├── query_operation_store.py        # Async query-operation state/task storage

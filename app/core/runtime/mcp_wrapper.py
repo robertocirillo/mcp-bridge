@@ -26,7 +26,7 @@ from app.core.exceptions import (
     QueryOperationElicitationDeclinedError,
 )
 from app.core.guardrails.runner import GuardrailExecutionContext, GuardrailRunner
-from app.core.model_query import (
+from app.core.multimodal.model_query import (
     ModelQueryInput,
     build_model_query,
     describe_query_input,
@@ -35,8 +35,8 @@ from app.core.model_query import (
     replace_query_text,
     sanitize_multimodal_error,
 )
-from app.core.multimodal_image_fetch import RemoteImageFetchError
-from app.core.multimodal_image_resolver import QueryImageResolver
+from app.core.multimodal.image_fetch import RemoteImageFetchError
+from app.core.multimodal.image_resolver import QueryImageResolver
 from app.core.audit.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
 from app.core.guardrails.policy_engine import ToolInvocationContext, ToolInvocationDecision, ToolPolicy, ToolPolicyEngine
 from app.core.runtime.task_runtime import BridgeTaskStatusNotification, install_task_notification_runtime_patch

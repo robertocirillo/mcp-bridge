@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.core.multimodal_image_data import (
+from app.core.multimodal.image_data import (
     ResolvedImageInput,
     ResolvedQueryInputPayload,
     encode_image_bytes_to_base64,
 )
-from app.core.multimodal_image_fetch import RemoteImageFetcher
+from app.core.multimodal.image_fetch import RemoteImageFetcher
 from app.models.requests import ImageInput, QueryInputPayload
 
 

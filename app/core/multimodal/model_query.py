@@ -4,7 +4,7 @@ import re
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
-from app.core.multimodal_image_data import ResolvedQueryInputPayload
+from app.core.multimodal.image_data import ResolvedQueryInputPayload
 from app.models.requests import QueryInputPayload
 from app.models.responses import QueryInputImageSummary, QueryInputPayloadSummary
 

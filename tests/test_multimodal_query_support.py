@@ -7,9 +7,9 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from app.core.model_query import build_model_query
-from app.core.multimodal_image_fetch import RemoteImageFetcher
-from app.core.multimodal_image_resolver import QueryImageResolver
+from app.core.multimodal.image_fetch import RemoteImageFetcher
+from app.core.multimodal.image_resolver import QueryImageResolver
+from app.core.multimodal.model_query import build_model_query
 from app.core.sessions.query_operation_store import serialize_query_operation_error
 from app.models.requests import (
     MAX_BASE64_IMAGE_DATA_LENGTH,

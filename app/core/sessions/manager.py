@@ -15,7 +15,7 @@ from app.core.exceptions import (
     QueryOperationNotFoundError,
     SessionNotFoundError,
 )
-from app.core.model_query import resolve_request_query
+from app.core.multimodal.model_query import resolve_request_query
 from app.core.runtime.mcp_wrapper import MCPWrapper
 from app.core.sessions.query_operation_store import (
     QueryOperationStore,
