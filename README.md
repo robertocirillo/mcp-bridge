@@ -425,7 +425,13 @@ curl -X POST "http://localhost:8000/sessions/d0c02f31-06f0-4e8c-9e80-3f7eaf606e5
 }
 ```
 
-V1.5 also supports a structured `input` payload for multimodal model queries. Images are sent in JSON only, never as multipart uploads.
+V1.5 also supports a structured `input` payload for multimodal model queries.
+
+There are now two image ingestion paths:
+
+- JSON `POST /sessions/{session_id}/query` or `POST /sessions/{session_id}/query-operations` with `input.images`
+- multipart `POST /sessions/{session_id}/query-multipart` for synchronous real file uploads
+- multipart `POST /sessions/{session_id}/query-operations-multipart` for asynchronous real file uploads
 
 Important runtime note:
 
@@ -536,16 +542,52 @@ Notes:
 
 - If both `query` and `input` are provided, `input` wins.
 - `POST /sessions/{session_id}/query-operations` accepts the same query payload shapes.
+- `POST /sessions/{session_id}/query-multipart` accepts uploaded image files via repeated `images` form parts for the synchronous query path.
+- `POST /sessions/{session_id}/query-operations-multipart` accepts the same multipart form shape for the asynchronous query-operation path and returns a standard `QueryOperationResponse`.
 - Base64 images are limited to `MAX_BASE64_IMAGE_DATA_LENGTH = 5_000_000` characters per image to keep request size and memory usage bounded in V1.
 - For `source_type="url"`, mcp-bridge downloads the image server-side, validates it, and converts it to an internal base64 data URL before calling the provider/runtime.
 - Remote image fetch accepts only `http`/`https`, uses a `5.0s` timeout, follows at most `3` redirects, and enforces `MAX_REMOTE_IMAGE_BYTES = 5_000_000` on both declared and actual downloaded bytes.
 - Remote image fetch rejects localhost, loopback, private, link-local, multicast, reserved, and unspecified IP targets. Redirects are revalidated with the same rules.
 - The bridge requires a supported response `Content-Type` and validates the downloaded bytes against PNG/JPEG/WEBP signatures before forwarding the image.
+- Multipart image upload applies the same PNG/JPEG/WEBP allowlist and aggregate request limits as JSON/base64 multimodal input.
+- Async multipart uploads are first materialized into local temporary session-scoped files, then resolved through the same multimodal pipeline used by JSON/base64 inputs when the background operation executes.
+- Temporary multipart uploads are cleaned up after operation completion when possible, on session deletion, and by a best-effort TTL sweep for stale local leftovers.
 - Async query-operation metadata stores a safe multimodal summary and never echoes raw base64 blobs.
 - Before-model guardrails still apply only to the textual portion (`query` or `input.text`). Image content is not moderated, inspected, or OCR-processed by the bridge.
 - URL reachability depends on the network connectivity of the mcp-bridge server, not on the browser/client.
 - SSRF hardening is a baseline defense, not a perfect sandbox. In particular, it does not fully eliminate DNS rebinding or every proxy/network edge case.
 - Effective multimodal support depends on the configured provider/model. If the selected model does not support image input, the request can fail at runtime.
+
+Multipart image upload example:
+
+```bash
+curl -X POST "http://localhost:8000/sessions/${SESSION_ID}/query-multipart" \
+  -H "X-Tenant-Id: tenant-a" \
+  -F 'text=Describe the uploaded images' \
+  -F 'max_steps=10' \
+  -F 'images=@./cat.png;type=image/png' \
+  -F 'images=@./diagram.jpg;type=image/jpeg'
+```
+
+Multipart async query-operation example:
+
+```bash
+curl -X POST "http://localhost:8000/sessions/${SESSION_ID}/query-operations-multipart" \
+  -H "X-Tenant-Id: tenant-a" \
+  -F 'text=Describe the uploaded images' \
+  -F 'max_steps=10' \
+  -F 'images=@./cat.png;type=image/png' \
+  -F 'images=@./diagram.jpg;type=image/jpeg'
+```
+
+Multipart slice scope:
+
+- sync query and async query-operations
+- images only
+- local temporary upload storage only
+- no general reusable session asset API yet
+- no S3/object storage yet
+- no persistent or multi-instance-safe asset backend yet
 
 If the `session_id` does not belong to tenant-A, the API will respond with **404** (even if the session exists for another tenant).
 
@@ -835,9 +877,17 @@ List active sessions for the current tenant.
 Execute a query in the given MCP session (tenant must match).
 Supports legacy `query` and structured multimodal `input`.
 
+#### POST /sessions/{session_id}/query-multipart
+Execute a synchronous multipart multimodal query in the given MCP session.
+Accepts `text`, optional sync query settings, and one or more uploaded image files under `images`.
+
 #### POST /sessions/{session_id}/query-operations
 Create an asynchronous query execution using the same legacy or multimodal payload.
 Public operation metadata exposes only a safe multimodal summary.
+
+#### POST /sessions/{session_id}/query-operations-multipart
+Create an asynchronous multipart multimodal query operation in the given MCP session.
+Accepts `text`, optional async query settings, and one or more uploaded image files under `images`.
 
 ---
 

@@ -34,7 +34,7 @@ class SessionCreateRequest(SessionConfig):
 class ImageInput(BaseModel):
     """Structured image input accepted by multimodal queries."""
 
-    source_type: Literal["url", "base64"] = Field(..., description="How the image is provided")
+    source_type: Literal["url", "base64", "upload"] = Field(..., description="How the image is provided")
     url: Optional[str] = Field(None, description="Remote image URL for source_type=url")
     data: Optional[str] = Field(
         None,
@@ -42,6 +42,17 @@ class ImageInput(BaseModel):
         repr=False,
     )
     mime_type: Optional[str] = Field(None, description="MIME type for base64 image input")
+    asset_id: Optional[str] = Field(
+        None,
+        description="Internal temporary asset identifier for source_type=upload",
+        repr=False,
+    )
+    size_bytes: Optional[int] = Field(
+        None,
+        gt=0,
+        description="Known byte size for source_type=upload",
+    )
+    filename: Optional[str] = Field(None, description="Original filename for source_type=upload")
 
     @model_validator(mode="after")
     def validate_source(self) -> "ImageInput":
@@ -61,6 +72,19 @@ class ImageInput(BaseModel):
                 raise ValueError("Field 'url' must be an absolute http/https URL when source_type='url'")
             if self.data is not None:
                 raise ValueError("Field 'data' is not allowed when source_type='url'")
+            return self
+
+        if self.source_type == "upload":
+            if not self.asset_id:
+                raise ValueError("Field 'asset_id' is required when source_type='upload'")
+            if not self.mime_type:
+                raise ValueError("Field 'mime_type' is required when source_type='upload'")
+            if self.size_bytes is None:
+                raise ValueError("Field 'size_bytes' is required when source_type='upload'")
+            if self.url is not None:
+                raise ValueError("Field 'url' is not allowed when source_type='upload'")
+            if self.data is not None:
+                raise ValueError("Field 'data' is not allowed when source_type='upload'")
             return self
 
         if not self.data:

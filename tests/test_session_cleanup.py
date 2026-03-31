@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.dependencies import get_session_manager
 from app.api.routes.sessions import router as sessions_router
+from app.core.multimodal.temp_uploads import TemporaryImageUpload, TemporaryImageUploadStore
 from app.core.runtime.mcp_wrapper import MCPWrapper
 from app.core.sessions.manager import SessionData, SessionManager
 from app.models.responses import (
@@ -241,3 +242,34 @@ def test_delete_route_passes_tenant_id_to_background_task():
 
     assert response.status_code == 200, response.text
     assert received == [("s1", "tenant-a")]
+
+
+def test_delete_session_cleans_up_temporary_upload_assets(tmp_path):
+    manager = SessionManager()
+    manager._temporary_upload_store = TemporaryImageUploadStore(root_dir=tmp_path, ttl_seconds=3600)
+
+    wrapper = _DummyWrapper()
+    config = _session_config_stub()
+    manager._sessions["s1"] = SessionData("s1", config, wrapper, tenant_id="t1")
+
+    session_dir = tmp_path / "s1"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    asset_path = session_dir / "asset-1"
+    asset_path.write_bytes(b"fake-image")
+    manager._temporary_upload_store._assets["s1"] = {
+        "asset-1": TemporaryImageUpload(
+            asset_id="asset-1",
+            session_id="s1",
+            path=asset_path,
+            mime_type="image/png",
+            size_bytes=len(b"fake-image"),
+            filename="cat.png",
+            created_at=datetime.now(),
+        )
+    }
+
+    asyncio.run(manager.delete_session("s1", tenant_id="t1"))
+
+    assert wrapper.closed == 1
+    assert not asset_path.exists()
+    assert not session_dir.exists()

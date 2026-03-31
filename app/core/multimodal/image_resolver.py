@@ -8,6 +8,7 @@ from app.core.multimodal.image_data import (
     encode_image_bytes_to_base64,
 )
 from app.core.multimodal.image_fetch import RemoteImageFetcher
+from app.core.multimodal.temp_uploads import TemporaryImageUploadStore
 from app.core.multimodal.validation import (
     calculate_remaining_image_budget,
     estimate_base64_size,
@@ -21,10 +22,21 @@ from app.models.requests import ImageInput, QueryInputPayload
 class QueryImageResolver:
     """Normalize structured multimodal image inputs into provider-ready data URLs."""
 
-    def __init__(self, *, remote_image_fetcher: Optional[RemoteImageFetcher] = None) -> None:
+    def __init__(
+        self,
+        *,
+        remote_image_fetcher: Optional[RemoteImageFetcher] = None,
+        upload_store: Optional[TemporaryImageUploadStore] = None,
+    ) -> None:
         self._remote_image_fetcher = remote_image_fetcher or RemoteImageFetcher()
+        self._upload_store = upload_store
 
-    async def resolve(self, query_input: str | QueryInputPayload) -> str | ResolvedQueryInputPayload:
+    async def resolve(
+        self,
+        query_input: str | QueryInputPayload,
+        *,
+        session_id: str | None = None,
+    ) -> str | ResolvedQueryInputPayload:
         if isinstance(query_input, str):
             return query_input
 
@@ -37,6 +49,7 @@ class QueryImageResolver:
                 await self._resolve_image(
                     image,
                     remaining_request_image_bytes=calculate_remaining_image_budget(total_image_bytes),
+                    session_id=session_id,
                 )
             )
             total_image_bytes += validate_resolved_image(images[-1], index=index)
@@ -52,6 +65,7 @@ class QueryImageResolver:
         image: ImageInput,
         *,
         remaining_request_image_bytes: int,
+        session_id: str | None,
     ) -> ResolvedImageInput:
         if image.source_type == "base64":
             return ResolvedImageInput(
@@ -59,6 +73,22 @@ class QueryImageResolver:
                 mime_type=image.mime_type or "",
                 base64_data=image.data or "",
                 data_size_bytes=estimate_base64_size(image.data or ""),
+            )
+
+        if image.source_type == "upload":
+            if self._upload_store is None:
+                raise ValueError("Temporary upload store is not configured")
+            if session_id is None:
+                raise ValueError("Session context is required to resolve uploaded images")
+            image_bytes = await self._upload_store.read_image_bytes(
+                session_id=session_id,
+                asset_id=image.asset_id or "",
+            )
+            return ResolvedImageInput(
+                source_type="base64",
+                mime_type=image.mime_type or "",
+                base64_data=encode_image_bytes_to_base64(image_bytes),
+                data_size_bytes=len(image_bytes),
             )
 
         fetched_image = await self._remote_image_fetcher.fetch(

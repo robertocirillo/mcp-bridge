@@ -70,13 +70,23 @@ def validate_multimodal_request_precheck(images: Sequence[object]) -> None:
 
     known_total_bytes = 0
     for index, image in enumerate(images):
-        if getattr(image, "source_type", None) != "base64":
+        source_type = getattr(image, "source_type", None)
+        if source_type not in {"base64", "upload"}:
             continue
         validate_supported_image_mime_type(
             getattr(image, "mime_type", None),
             context=f"input.images[{index}]",
         )
-        known_total_bytes += estimate_base64_size(getattr(image, "data", None) or "")
+        if source_type == "base64":
+            known_total_bytes += estimate_base64_size(getattr(image, "data", None) or "")
+            continue
+
+        size_bytes = getattr(image, "size_bytes", None)
+        if size_bytes is None or size_bytes <= 0:
+            raise MultimodalInputValidationError(
+                f"Temporary upload size metadata is missing for input.images[{index}]"
+            )
+        known_total_bytes += size_bytes
 
     validate_total_image_bytes(known_total_bytes)
 

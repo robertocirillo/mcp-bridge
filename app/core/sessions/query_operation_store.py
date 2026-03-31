@@ -14,6 +14,7 @@ from app.core.exceptions import (
     QueryOperationElicitationDeclinedError,
     QueryOperationNotFoundError,
     SessionNotFoundError,
+    TemporaryUploadError,
 )
 from app.core.multimodal.model_query import sanitize_multimodal_error, summarize_query_input
 from app.core.runtime.mcp_wrapper import GuardrailViolationError, MCPToolNotAllowedError
@@ -99,6 +100,8 @@ def serialize_query_operation_error(exc: Exception) -> QueryOperationError:
         )
     if isinstance(exc, ConfigurationError):
         return QueryOperationError(code="MCP_CONFIGURATION_ERROR", message=sanitize_multimodal_error(exc))
+    if isinstance(exc, TemporaryUploadError):
+        return QueryOperationError(code="MCP_TEMP_UPLOAD_ERROR", message=sanitize_multimodal_error(exc))
     if isinstance(exc, SessionNotFoundError):
         return QueryOperationError(code="MCP_SESSION_NOT_FOUND", message=sanitize_multimodal_error(exc))
     if isinstance(exc, QueryOperationNotFoundError):

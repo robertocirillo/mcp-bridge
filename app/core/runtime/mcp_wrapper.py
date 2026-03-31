@@ -1121,7 +1121,10 @@ class MCPWrapper:
             if has_query_visual_input(guarded_query_input):
                 ensure_image_input_supported(provider=self.llm_provider, model=self.model)
 
-            prepared_query_input = await self._query_image_resolver.resolve(guarded_query_input)
+            prepared_query_input = await self._query_image_resolver.resolve(
+                guarded_query_input,
+                session_id=self.session_id,
+            )
 
             # Build the agent run payload and optionally scope it to a specific configured server.
             run_kwargs: Dict[str, Any] = {"query": build_model_query(prepared_query_input)}

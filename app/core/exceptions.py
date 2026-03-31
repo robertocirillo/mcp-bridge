@@ -158,6 +158,20 @@ class ImageInputNotSupportedError(ConfigurationError):
 
         super().__init__(message)
 
+
+class TemporaryUploadError(MCPAPIException):
+    """Raised when temporary multipart upload storage fails."""
+
+    def __init__(self, message: str = "Temporary multipart upload handling failed"):
+        super().__init__(message, status_code=500)
+
+
+class TemporaryUploadNotFoundError(TemporaryUploadError):
+    """Raised when a temporary upload asset cannot be resolved anymore."""
+
+    def __init__(self, message: str = "Temporary multipart upload asset not found"):
+        super().__init__(message)
+
 class DependencyError(MCPAPIException):
     """Exception for missing dependencies"""
 

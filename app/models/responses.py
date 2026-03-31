@@ -65,7 +65,7 @@ class QueryOperationInput(BaseModel):
 class QueryInputImageSummary(BaseModel):
     """Safe summary of an image attached to a multimodal query."""
 
-    source_type: Literal["url", "base64"] = Field(..., description="How the image was provided")
+    source_type: Literal["url", "base64", "upload"] = Field(..., description="How the image was provided")
     mime_type: Optional[str] = Field(None, description="Declared MIME type when available")
     url: Optional[str] = Field(None, description="Redacted URL summary for remote images")
     data_size_bytes: Optional[int] = Field(None, description="Estimated decoded size for base64 images")

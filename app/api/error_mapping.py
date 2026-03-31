@@ -20,6 +20,7 @@ from app.core.exceptions import (
     QueryOperationNotFoundError,
     QueryOperationResumeInvalidError,
     SessionNotFoundError,
+    TemporaryUploadError,
 )
 from app.core.runtime.mcp_wrapper import GuardrailViolationError, MCPToolNotAllowedError
 
@@ -245,6 +246,14 @@ def map_query_error(
         return tenant_http_error(
             400,
             "MCP_CONFIGURATION_ERROR",
+            str(exc),
+            tenant_ctx=tenant_ctx,
+            **context,
+        )
+    if isinstance(exc, TemporaryUploadError):
+        return tenant_http_error(
+            500,
+            "MCP_TEMP_UPLOAD_ERROR",
             str(exc),
             tenant_ctx=tenant_ctx,
             **context,

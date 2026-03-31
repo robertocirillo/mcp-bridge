@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from app.api.dependencies import TenantContext, get_session_manager, get_tenant_context
 from app.api.services import query_service
@@ -28,6 +28,28 @@ async def execute_query(
     )
 
 
+@router.post("/{session_id}/query-multipart", response_model=QueryResponse)
+async def execute_multipart_query(
+    session_id: str,
+    tenant_ctx: TenantDep,
+    session_manager: SessionManager = Depends(get_session_manager),
+    text: Annotated[str | None, Form()] = None,
+    max_steps: Annotated[int | None, Form()] = None,
+    server_name: Annotated[str | None, Form()] = None,
+    images: Annotated[list[UploadFile] | None, File()] = None,
+):
+    """Execute a synchronous multimodal query from multipart form-data uploads."""
+    return await query_service.execute_multipart_query(
+        session_id=session_id,
+        text=text,
+        max_steps=max_steps,
+        server_name=server_name,
+        images=images,
+        tenant_ctx=tenant_ctx,
+        session_manager=session_manager,
+    )
+
+
 @router.post("/{session_id}/query-operations", response_model=QueryOperationResponse)
 async def create_query_operation(
     session_id: str,
@@ -39,6 +61,28 @@ async def create_query_operation(
     return await query_service.create_query_operation(
         session_id=session_id,
         request=request,
+        tenant_ctx=tenant_ctx,
+        session_manager=session_manager,
+    )
+
+
+@router.post("/{session_id}/query-operations-multipart", response_model=QueryOperationResponse)
+async def create_multipart_query_operation(
+    session_id: str,
+    tenant_ctx: TenantDep,
+    session_manager: SessionManager = Depends(get_session_manager),
+    text: Annotated[str | None, Form()] = None,
+    max_steps: Annotated[int | None, Form()] = None,
+    server_name: Annotated[str | None, Form()] = None,
+    images: Annotated[list[UploadFile] | None, File()] = None,
+):
+    """Create an asynchronous multimodal query operation from multipart form-data uploads."""
+    return await query_service.create_multipart_query_operation(
+        session_id=session_id,
+        text=text,
+        max_steps=max_steps,
+        server_name=server_name,
+        images=images,
         tenant_ctx=tenant_ctx,
         session_manager=session_manager,
     )

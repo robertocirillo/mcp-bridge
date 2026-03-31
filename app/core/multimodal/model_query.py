@@ -91,7 +91,7 @@ def summarize_query_input(input_payload: QueryInputPayload) -> QueryInputPayload
             source_type=image.source_type,
             mime_type=image.mime_type,
             url=redact_image_url(image.url) if image.url else None,
-            data_size_bytes=estimate_base64_size(image.data) if image.data else None,
+            data_size_bytes=estimate_base64_size(image.data) if image.data else getattr(image, "size_bytes", None),
         )
         for image in input_payload.images
     ]
