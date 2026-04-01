@@ -17,7 +17,8 @@ from app.core.exceptions import (
 )
 from app.core.multimodal.image_resolver import QueryImageResolver
 from app.core.multimodal.model_query import resolve_request_query
-from app.core.multimodal.temp_uploads import TemporaryImageUploadStore
+from app.core.multimodal.preflight import validate_multimodal_query_request
+from app.core.session_assets.local_store import LocalTemporarySessionAssetStore
 from app.core.runtime.mcp_wrapper import MCPWrapper
 from app.core.sessions.query_operation_store import (
     QueryOperationStore,
@@ -62,11 +63,15 @@ class SessionManager:
         )
         self._cleanup_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
-        self._temporary_upload_store = TemporaryImageUploadStore(ttl_seconds=settings.SESSION_TIMEOUT)
+        self._temporary_asset_store = LocalTemporarySessionAssetStore(ttl_seconds=settings.SESSION_TIMEOUT)
 
     @property
-    def temporary_upload_store(self) -> TemporaryImageUploadStore:
-        return self._temporary_upload_store
+    def temporary_asset_store(self) -> LocalTemporarySessionAssetStore:
+        return self._temporary_asset_store
+
+    @property
+    def temporary_upload_store(self) -> LocalTemporarySessionAssetStore:
+        return self._temporary_asset_store
 
     async def initialize(self):
         """Initializes the session manager"""
@@ -117,7 +122,7 @@ class SessionManager:
 
                 # Set context for guardrails/logging
                 wrapper.set_context(tenant_id=tenant_id, run_id=run_id, session_id=session_id)
-                wrapper._query_image_resolver = QueryImageResolver(upload_store=self._temporary_upload_store)
+                wrapper._query_image_resolver = QueryImageResolver(upload_store=self._temporary_asset_store)
                 self._wire_wrapper_elicitation_handler(wrapper)
                 self._wire_wrapper_task_status_handler(wrapper)
 
@@ -281,7 +286,7 @@ class SessionManager:
                 task.cancel()
         if operation_tasks:
             await asyncio.gather(*operation_tasks, return_exceptions=True)
-        await self._temporary_upload_store.delete_session_assets(session_id)
+        await self._temporary_asset_store.delete_session_assets(session_id)
 
         async with self._lock:
             session_data = self._session_store.get(session_id, tenant_id=tenant_id, touch=False)
@@ -306,7 +311,12 @@ class SessionManager:
         run_id: Optional[str] = None,
     ) -> QueryOperationResponse:
         """Create and schedule an asynchronous query operation for a session."""
-        await self.get_session(session_id=session_id, tenant_id=tenant_id)
+        session_data = await self.get_session(session_id=session_id, tenant_id=tenant_id)
+        validate_multimodal_query_request(
+            request=request,
+            provider=session_data.config.llm_provider.provider,
+            model=session_data.config.llm_provider.model,
+        )
 
         operation_id = str(uuid.uuid4())
         timestamp = datetime.now()
@@ -451,7 +461,7 @@ class SessionManager:
                     except Exception as e:
                         logger.error(f"Error in automatic cleanup of session {session_id}: {e}")
 
-                await self._temporary_upload_store.sweep_expired()
+                await self._temporary_asset_store.sweep_expired()
 
                 # Wait before next check
                 await asyncio.sleep(300)  # 5 minutes
@@ -503,7 +513,7 @@ class SessionManager:
                 )
             if request is None:
                 return
-            upload_asset_ids = _extract_temporary_upload_asset_ids(request)
+            upload_asset_ids = _extract_temporary_session_asset_ids(request)
 
             session_data = await self.get_session(session_id=session_id, tenant_id=tenant_id)
             wrapper = session_data.wrapper
@@ -575,7 +585,7 @@ class SessionManager:
                     error=serialize_query_operation_error(exc),
                 )
         finally:
-            await self._temporary_upload_store.delete_assets(
+            await self._temporary_asset_store.delete_assets(
                 session_id=session_id,
                 asset_ids=upload_asset_ids,
             )
@@ -656,7 +666,7 @@ class SessionManager:
         return mcp_servers
 
 
-def _extract_temporary_upload_asset_ids(request: QueryOperationCreateRequest | None) -> list[str]:
+def _extract_temporary_session_asset_ids(request: QueryOperationCreateRequest | None) -> list[str]:
     if request is None or request.input is None:
         return []
 

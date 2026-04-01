@@ -65,10 +65,13 @@ class QueryOperationInput(BaseModel):
 class QueryInputImageSummary(BaseModel):
     """Safe summary of an image attached to a multimodal query."""
 
+    asset_kind: str = Field("image", description="Logical asset kind for future multimodal extensibility")
     source_type: Literal["url", "base64", "upload"] = Field(..., description="How the image was provided")
     mime_type: Optional[str] = Field(None, description="Declared MIME type when available")
     url: Optional[str] = Field(None, description="Redacted URL summary for remote images")
     data_size_bytes: Optional[int] = Field(None, description="Estimated decoded size for base64 images")
+    filename_present: bool = Field(False, description="True when the original upload included a filename")
+    asset_id_present: bool = Field(False, description="True when the input references a stored session asset")
 
 
 class QueryInputPayloadSummary(BaseModel):
@@ -77,6 +80,7 @@ class QueryInputPayloadSummary(BaseModel):
     text_present: bool = Field(..., description="True when textual input was provided")
     text_length: Optional[int] = Field(None, description="Length of the text input when available")
     image_count: int = Field(..., description="Number of images attached to the request")
+    total_image_bytes: int = Field(0, description="Known total decoded image size across all attached images")
     images: List[QueryInputImageSummary] = Field(default_factory=list, description="Safe image summaries")
 
 

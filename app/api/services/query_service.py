@@ -15,6 +15,7 @@ from app.api.services.multipart_query import (
     build_multipart_query_operation_request,
     build_multipart_query_request,
 )
+from app.core.multimodal.preflight import validate_multimodal_query_request
 from app.core.multimodal.model_query import resolve_request_query
 from app.core.sessions.manager import SessionManager
 from app.models.requests import QueryOperationCreateRequest, QueryOperationResumeRequest, QueryRequest
@@ -28,7 +29,12 @@ async def _execute_query_request(
     tenant_ctx: TenantContext,
     session_manager: SessionManager,
 ) -> QueryResponse:
-    session_data = await session_manager.get_session(session_id)
+    session_data = await session_manager.get_session(session_id=session_id, tenant_id=tenant_ctx.tenant_id)
+    validate_multimodal_query_request(
+        request=request,
+        provider=session_data.config.llm_provider.provider,
+        model=session_data.config.llm_provider.model,
+    )
     wrapper = bind_wrapper_context(
         session_data.wrapper,
         tenant_ctx=tenant_ctx,
@@ -93,12 +99,15 @@ async def execute_multipart_query(
     tenant_ctx: TenantContext,
     session_manager: SessionManager,
 ) -> QueryResponse:
+    asset_ids: list[str] = []
     try:
-        request = await build_multipart_query_request(
+        request, asset_ids = await build_multipart_query_request(
+            session_id=session_id,
             text=text,
             max_steps=max_steps,
             server_name=server_name,
             images=images,
+            asset_store=session_manager.temporary_asset_store,
         )
     except Exception as exc:
         raise map_query_error(
@@ -122,6 +131,11 @@ async def execute_multipart_query(
             tenant_ctx=tenant_ctx,
             session_id=session_id,
         ) from exc
+    finally:
+        await session_manager.temporary_asset_store.delete_assets(
+            session_id=session_id,
+            asset_ids=asset_ids,
+        )
 
 
 async def create_query_operation(
@@ -132,6 +146,12 @@ async def create_query_operation(
     session_manager: SessionManager,
 ) -> QueryOperationResponse:
     try:
+        session_data = await session_manager.get_session(session_id=session_id, tenant_id=tenant_ctx.tenant_id)
+        validate_multimodal_query_request(
+            request=request,
+            provider=session_data.config.llm_provider.provider,
+            model=session_data.config.llm_provider.model,
+        )
         return await session_manager.create_query_operation(
             session_id=session_id,
             request=request,
@@ -157,14 +177,16 @@ async def create_multipart_query_operation(
     tenant_ctx: TenantContext,
     session_manager: SessionManager,
 ) -> QueryOperationResponse:
+    asset_ids: list[str] = []
+    operation_created = False
     try:
-        request = await build_multipart_query_operation_request(
+        request, asset_ids = await build_multipart_query_operation_request(
             session_id=session_id,
             text=text,
             max_steps=max_steps,
             server_name=server_name,
             images=images,
-            upload_store=session_manager.temporary_upload_store,
+            asset_store=session_manager.temporary_asset_store,
         )
     except Exception as exc:
         raise map_query_error(
@@ -175,12 +197,20 @@ async def create_multipart_query_operation(
         ) from exc
 
     try:
-        return await session_manager.create_query_operation(
+        session_data = await session_manager.get_session(session_id=session_id, tenant_id=tenant_ctx.tenant_id)
+        validate_multimodal_query_request(
+            request=request,
+            provider=session_data.config.llm_provider.provider,
+            model=session_data.config.llm_provider.model,
+        )
+        response = await session_manager.create_query_operation(
             session_id=session_id,
             request=request,
             tenant_id=tenant_ctx.tenant_id,
             run_id=tenant_ctx.run_id,
         )
+        operation_created = True
+        return response
     except Exception as exc:
         raise map_query_error(
             exc,
@@ -188,6 +218,12 @@ async def create_multipart_query_operation(
             tenant_ctx=tenant_ctx,
             session_id=session_id,
         ) from exc
+    finally:
+        if asset_ids and not operation_created:
+            await session_manager.temporary_asset_store.delete_assets(
+                session_id=session_id,
+                asset_ids=asset_ids,
+            )
 
 
 async def get_query_operation(

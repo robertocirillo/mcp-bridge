@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from fastapi import UploadFile
 
-from app.core.multimodal.temp_uploads import TemporaryImageUploadStore
-from app.core.multimodal.uploads import build_image_input_from_upload
+from app.core.session_assets.local_store import LocalTemporarySessionAssetStore
+from app.core.multimodal.uploads import validate_uploaded_image_payload
 from app.core.multimodal.validation import (
     MultimodalInputValidationError,
     validate_request_image_count,
@@ -14,59 +15,29 @@ from app.core.multimodal.validation import (
 from app.models.requests import QueryInputPayload, QueryOperationCreateRequest, QueryRequest
 
 
-async def build_multipart_query_request(
-    *,
-    text: str | None,
-    max_steps: int | None,
-    server_name: str | None,
-    images: Sequence[UploadFile] | None,
-) -> QueryRequest:
+@dataclass(frozen=True)
+class PreparedMultipartQuery:
+    input_payload: QueryInputPayload
+    asset_ids: list[str]
+
+
+def _filter_upload_files(images: Sequence[UploadFile] | None) -> list[UploadFile]:
     upload_files = [image for image in (images or []) if image is not None]
     if not upload_files:
         raise MultimodalInputValidationError("At least one uploaded image must be provided in field 'images'")
 
     validate_request_image_count(len(upload_files))
-
-    total_image_bytes = 0
-    image_inputs = []
-    for index, image in enumerate(upload_files):
-        try:
-            content = await image.read()
-        finally:
-            await image.close()
-
-        total_image_bytes += len(content)
-        validate_total_image_bytes(total_image_bytes)
-        image_inputs.append(
-            build_image_input_from_upload(
-                content=content,
-                declared_mime_type=image.content_type,
-                filename=image.filename,
-                index=index,
-            )
-        )
-
-    return QueryRequest(
-        input=QueryInputPayload(text=text, images=image_inputs),
-        max_steps=max_steps,
-        server_name=server_name,
-    )
+    return upload_files
 
 
-async def build_multipart_query_operation_request(
+async def prepare_multipart_image_input(
     *,
     session_id: str,
     text: str | None,
-    max_steps: int | None,
-    server_name: str | None,
     images: Sequence[UploadFile] | None,
-    upload_store: TemporaryImageUploadStore,
-) -> QueryOperationCreateRequest:
-    upload_files = [image for image in (images or []) if image is not None]
-    if not upload_files:
-        raise MultimodalInputValidationError("At least one uploaded image must be provided in field 'images'")
-
-    validate_request_image_count(len(upload_files))
+    asset_store: LocalTemporarySessionAssetStore,
+) -> PreparedMultipartQuery:
+    upload_files = _filter_upload_files(images)
 
     total_image_bytes = 0
     image_inputs = []
@@ -74,14 +45,17 @@ async def build_multipart_query_operation_request(
 
     try:
         for index, image in enumerate(upload_files):
-            asset = await upload_store.persist_image_upload(
+            asset = await asset_store.persist_upload(
                 session_id=session_id,
                 upload=image,
                 index=index,
+                kind="image",
+                purpose="input_image",
                 current_total_bytes=total_image_bytes,
+                content_validator=validate_uploaded_image_payload,
+                size_validator=validate_total_image_bytes,
             )
             total_image_bytes += asset.size_bytes
-            validate_total_image_bytes(total_image_bytes)
             stored_asset_ids.append(asset.asset_id)
             image_inputs.append(
                 {
@@ -93,11 +67,60 @@ async def build_multipart_query_operation_request(
                 }
             )
 
-        return QueryOperationCreateRequest(
-            input=QueryInputPayload.model_validate({"text": text, "images": image_inputs}),
-            max_steps=max_steps,
-            server_name=server_name,
+        return PreparedMultipartQuery(
+            input_payload=QueryInputPayload.model_validate({"text": text, "images": image_inputs}),
+            asset_ids=stored_asset_ids,
         )
     except Exception:
-        await upload_store.delete_assets(session_id=session_id, asset_ids=stored_asset_ids)
+        await asset_store.delete_assets(session_id=session_id, asset_ids=stored_asset_ids)
         raise
+
+
+async def build_multipart_query_request(
+    *,
+    session_id: str,
+    text: str | None,
+    max_steps: int | None,
+    server_name: str | None,
+    images: Sequence[UploadFile] | None,
+    asset_store: LocalTemporarySessionAssetStore,
+) -> tuple[QueryRequest, list[str]]:
+    prepared = await prepare_multipart_image_input(
+        session_id=session_id,
+        text=text,
+        images=images,
+        asset_store=asset_store,
+    )
+    return (
+        QueryRequest(
+            input=prepared.input_payload,
+            max_steps=max_steps,
+            server_name=server_name,
+        ),
+        prepared.asset_ids,
+    )
+
+
+async def build_multipart_query_operation_request(
+    *,
+    session_id: str,
+    text: str | None,
+    max_steps: int | None,
+    server_name: str | None,
+    images: Sequence[UploadFile] | None,
+    asset_store: LocalTemporarySessionAssetStore,
+) -> tuple[QueryOperationCreateRequest, list[str]]:
+    prepared = await prepare_multipart_image_input(
+        session_id=session_id,
+        text=text,
+        images=images,
+        asset_store=asset_store,
+    )
+    return (
+        QueryOperationCreateRequest(
+            input=prepared.input_payload,
+            max_steps=max_steps,
+            server_name=server_name,
+        ),
+        prepared.asset_ids,
+    )

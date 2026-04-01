@@ -8,7 +8,7 @@ from app.core.multimodal.image_data import (
     encode_image_bytes_to_base64,
 )
 from app.core.multimodal.image_fetch import RemoteImageFetcher
-from app.core.multimodal.temp_uploads import TemporaryImageUploadStore
+from app.core.session_assets.local_store import LocalTemporarySessionAssetStore
 from app.core.multimodal.validation import (
     calculate_remaining_image_budget,
     estimate_base64_size,
@@ -26,7 +26,7 @@ class QueryImageResolver:
         self,
         *,
         remote_image_fetcher: Optional[RemoteImageFetcher] = None,
-        upload_store: Optional[TemporaryImageUploadStore] = None,
+        upload_store: Optional[LocalTemporarySessionAssetStore] = None,
     ) -> None:
         self._remote_image_fetcher = remote_image_fetcher or RemoteImageFetcher()
         self._upload_store = upload_store

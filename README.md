@@ -550,13 +550,13 @@ Notes:
 - Remote image fetch rejects localhost, loopback, private, link-local, multicast, reserved, and unspecified IP targets. Redirects are revalidated with the same rules.
 - The bridge requires a supported response `Content-Type` and validates the downloaded bytes against PNG/JPEG/WEBP signatures before forwarding the image.
 - Multipart image upload applies the same PNG/JPEG/WEBP allowlist and aggregate request limits as JSON/base64 multimodal input.
-- Async multipart uploads are first materialized into local temporary session-scoped files, then resolved through the same multimodal pipeline used by JSON/base64 inputs when the background operation executes.
-- Temporary multipart uploads are cleaned up after operation completion when possible, on session deletion, and by a best-effort TTL sweep for stale local leftovers.
-- Async query-operation metadata stores a safe multimodal summary and never echoes raw base64 blobs.
+- Both sync and async multipart uploads are first materialized into local temporary session-scoped assets, then resolved through the same normalized upload image path used by the multimodal resolver.
+- Temporary multipart assets are cleaned up after sync execution or async operation completion, on session deletion, and by a restart-safe TTL sweep over persisted asset metadata.
+- Async query-operation metadata stores a safe multimodal summary with source kind, MIME, filename presence, and byte size while never echoing raw base64 blobs, raw files, or asset contents.
 - Before-model guardrails still apply only to the textual portion (`query` or `input.text`). Image content is not moderated, inspected, or OCR-processed by the bridge.
 - URL reachability depends on the network connectivity of the mcp-bridge server, not on the browser/client.
 - SSRF hardening is a baseline defense, not a perfect sandbox. In particular, it does not fully eliminate DNS rebinding or every proxy/network edge case.
-- Effective multimodal support depends on the configured provider/model. If the selected model does not support image input, the request can fail at runtime.
+- Effective multimodal support depends on the configured provider/model. Unsupported image input is rejected during request preflight before the bridge queues async work or reaches ambiguous downstream model failures.
 
 Multipart image upload example:
 
@@ -584,8 +584,8 @@ Multipart slice scope:
 
 - sync query and async query-operations
 - images only
-- local temporary upload storage only
-- no general reusable session asset API yet
+- local temporary session asset storage only
+- no public reusable session asset API yet
 - no S3/object storage yet
 - no persistent or multi-instance-safe asset backend yet
 
@@ -880,6 +880,7 @@ Supports legacy `query` and structured multimodal `input`.
 #### POST /sessions/{session_id}/query-multipart
 Execute a synchronous multipart multimodal query in the given MCP session.
 Accepts `text`, optional sync query settings, and one or more uploaded image files under `images`.
+Uploaded files are first registered as temporary session assets, then resolved through the standard image pipeline, then deleted in a best-effort `finally`.
 
 #### POST /sessions/{session_id}/query-operations
 Create an asynchronous query execution using the same legacy or multimodal payload.
@@ -888,6 +889,7 @@ Public operation metadata exposes only a safe multimodal summary.
 #### POST /sessions/{session_id}/query-operations-multipart
 Create an asynchronous multipart multimodal query operation in the given MCP session.
 Accepts `text`, optional async query settings, and one or more uploaded image files under `images`.
+Unsupported image models are rejected before an operation is queued.
 
 ---
 

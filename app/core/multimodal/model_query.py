@@ -88,10 +88,13 @@ def build_model_query(query_input: PreparedModelQueryInput) -> BuiltModelQuery:
 def summarize_query_input(input_payload: QueryInputPayload) -> QueryInputPayloadSummary:
     images = [
         QueryInputImageSummary(
+            asset_kind="image",
             source_type=image.source_type,
             mime_type=image.mime_type,
             url=redact_image_url(image.url) if image.url else None,
             data_size_bytes=estimate_base64_size(image.data) if image.data else getattr(image, "size_bytes", None),
+            filename_present=bool(getattr(image, "filename", None)),
+            asset_id_present=bool(getattr(image, "asset_id", None)),
         )
         for image in input_payload.images
     ]
@@ -99,20 +102,26 @@ def summarize_query_input(input_payload: QueryInputPayload) -> QueryInputPayload
         text_present=_has_text_content(input_payload.text),
         text_length=len(input_payload.text) if _has_text_content(input_payload.text) else None,
         image_count=len(images),
+        total_image_bytes=sum(image.data_size_bytes or 0 for image in images),
         images=images,
     )
 
 
 def describe_query_input(query_input: ModelQueryInput | PreparedModelQueryInput) -> str:
     if isinstance(query_input, str):
-        return f"text:{query_input[:100]}"
+        text_length = len(query_input) if _has_text_content(query_input) else 0
+        return f"text:text_present={_has_text_content(query_input)} text_length={text_length}"
 
     input_payload = query_input
     text_length = len(input_payload.text) if _has_text_content(input_payload.text) else 0
+    image_sources = ",".join(sorted({image.source_type for image in input_payload.images})) or "none"
     return (
         f"structured:text_present={_has_text_content(input_payload.text)} "
-        f"text_length={text_length} image_count={len(input_payload.images)}"
+        f"text_length={text_length} image_count={len(input_payload.images)} "
+        f"image_sources={image_sources}"
     )
+
+
 def sanitize_multimodal_error(value: Any) -> str:
     return _DATA_URL_RE.sub(r"data:\1;base64,[REDACTED]", str(value))
 
@@ -122,5 +131,7 @@ def redact_image_url(url: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         return "[redacted-url]"
     return f"{parsed.scheme}://{parsed.netloc}/..."
+
+
 def is_langchain_human_message(value: Any) -> bool:
     return isinstance(value, LangChainHumanMessage)

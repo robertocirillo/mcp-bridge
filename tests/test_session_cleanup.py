@@ -1,12 +1,18 @@
 import asyncio
+from datetime import timedelta
 from datetime import datetime
+from io import BytesIO
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
+from starlette.datastructures import Headers
 
 from app.api.dependencies import get_session_manager
 from app.api.routes.sessions import router as sessions_router
+from app.core.exceptions import TemporaryUploadError
 from app.core.multimodal.temp_uploads import TemporaryImageUpload, TemporaryImageUploadStore
 from app.core.runtime.mcp_wrapper import MCPWrapper
 from app.core.sessions.manager import SessionData, SessionManager
@@ -246,7 +252,7 @@ def test_delete_route_passes_tenant_id_to_background_task():
 
 def test_delete_session_cleans_up_temporary_upload_assets(tmp_path):
     manager = SessionManager()
-    manager._temporary_upload_store = TemporaryImageUploadStore(root_dir=tmp_path, ttl_seconds=3600)
+    manager._temporary_asset_store = TemporaryImageUploadStore(root_dir=tmp_path, ttl_seconds=3600)
 
     wrapper = _DummyWrapper()
     config = _session_config_stub()
@@ -254,9 +260,9 @@ def test_delete_session_cleans_up_temporary_upload_assets(tmp_path):
 
     session_dir = tmp_path / "s1"
     session_dir.mkdir(parents=True, exist_ok=True)
-    asset_path = session_dir / "asset-1"
+    asset_path = session_dir / "asset-1.bin"
     asset_path.write_bytes(b"fake-image")
-    manager._temporary_upload_store._assets["s1"] = {
+    manager._temporary_asset_store._assets["s1"] = {
         "asset-1": TemporaryImageUpload(
             asset_id="asset-1",
             session_id="s1",
@@ -265,6 +271,7 @@ def test_delete_session_cleans_up_temporary_upload_assets(tmp_path):
             size_bytes=len(b"fake-image"),
             filename="cat.png",
             created_at=datetime.now(),
+            metadata_path=session_dir / "asset-1.json",
         )
     }
 
@@ -273,3 +280,123 @@ def test_delete_session_cleans_up_temporary_upload_assets(tmp_path):
     assert wrapper.closed == 1
     assert not asset_path.exists()
     assert not session_dir.exists()
+
+
+def test_temporary_asset_store_reloads_metadata_after_in_memory_state_is_lost(tmp_path):
+    store = TemporaryImageUploadStore(root_dir=tmp_path, ttl_seconds=3600)
+
+    async def _exercise():
+        upload = UploadFile(
+            filename="cat.png",
+            file=BytesIO(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8),
+            headers=Headers({"content-type": "image/png"}),
+        )
+        asset = await store.persist_image_upload(
+            session_id="s1",
+            upload=upload,
+            index=0,
+            current_total_bytes=0,
+        )
+        store._assets.clear()
+        content = await store.read_image_bytes(session_id="s1", asset_id=asset.asset_id)
+        return asset, content
+
+    asset, content = asyncio.run(_exercise())
+
+    assert content.startswith(b"\x89PNG\r\n\x1a\n")
+    assert (tmp_path / "s1" / f"{asset.asset_id}.json").exists()
+
+
+def test_temporary_asset_metadata_reload_uses_neutral_legacy_fallbacks(tmp_path):
+    asset = TemporaryImageUpload.from_metadata_payload(
+        session_dir=tmp_path,
+        metadata_path=tmp_path / "asset-1.json",
+        payload={
+            "asset_id": "asset-1",
+            "session_id": "s1",
+            "path": "asset-1.bin",
+            "mime_type": "application/octet-stream",
+            "size_bytes": 12,
+            "filename": "blob.bin",
+            "created_at": datetime.now().isoformat(),
+        },
+    )
+
+    assert asset.kind == "generic"
+    assert asset.purpose == "attachment"
+
+
+def test_temporary_asset_store_persist_upload_error_is_asset_neutral(tmp_path):
+    store = TemporaryImageUploadStore(root_dir=tmp_path, ttl_seconds=3600)
+
+    def _raise_runtime_error(**_kwargs):
+        raise RuntimeError("boom")
+
+    async def _exercise():
+        upload = UploadFile(
+            filename="cat.png",
+            file=BytesIO(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8),
+            headers=Headers({"content-type": "image/png"}),
+        )
+        await store.persist_upload(
+            session_id="s1",
+            upload=upload,
+            index=0,
+            kind="image",
+            purpose="input_image",
+            content_validator=_raise_runtime_error,
+        )
+
+    with pytest.raises(TemporaryUploadError) as exc_info:
+        asyncio.run(_exercise())
+
+    assert "Failed to persist multipart asset at index 0" in str(exc_info.value)
+    assert "kind=image" in str(exc_info.value)
+    assert "purpose=input_image" in str(exc_info.value)
+    assert "images[0]" not in str(exc_info.value)
+
+
+def test_temporary_asset_store_sweep_expired_is_restart_safe_and_idempotent(tmp_path):
+    store = TemporaryImageUploadStore(root_dir=tmp_path, ttl_seconds=1)
+
+    async def _exercise():
+        upload = UploadFile(
+            filename="cat.png",
+            file=BytesIO(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8),
+            headers=Headers({"content-type": "image/png"}),
+        )
+        asset = await store.persist_image_upload(
+            session_id="s1",
+            upload=upload,
+            index=0,
+            current_total_bytes=0,
+        )
+        expired_asset = TemporaryImageUpload(
+            asset_id=asset.asset_id,
+            session_id=asset.session_id,
+            path=asset.path,
+            mime_type=asset.mime_type,
+            size_bytes=asset.size_bytes,
+            filename=asset.filename,
+            created_at=asset.created_at,
+            kind=asset.kind,
+            purpose=asset.purpose,
+            metadata_path=asset.metadata_path,
+            declared_content_type=asset.declared_content_type,
+            storage_backend=asset.storage_backend,
+            last_accessed_at=asset.created_at,
+            expires_at=asset.created_at - timedelta(seconds=10),
+        )
+        store._assets = {"s1": {asset.asset_id: expired_asset}}
+        store._write_metadata(expired_asset)
+        store._assets.clear()
+        await store.sweep_expired()
+        await store.sweep_expired()
+        return asset
+
+    asset = asyncio.run(_exercise())
+
+    assert not asset.path.exists()
+    assert asset.metadata_path is not None
+    assert not asset.metadata_path.exists()
+    assert not (tmp_path / "s1").exists()

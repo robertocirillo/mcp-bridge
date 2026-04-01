@@ -12,7 +12,7 @@ from app.core.multimodal.image_fetch import RemoteImageFetchError, RemoteImageFe
 from app.core.multimodal.policy import MAX_REQUEST_IMAGE_COUNT
 from app.core.multimodal.image_resolver import QueryImageResolver
 from app.core.multimodal.validation import MultimodalInputValidationError
-from app.core.multimodal.model_query import build_model_query
+from app.core.multimodal.model_query import build_model_query, describe_query_input
 from app.core.sessions.query_operation_store import serialize_query_operation_error
 from app.models.requests import (
     MAX_BASE64_IMAGE_DATA_LENGTH,
@@ -266,6 +266,13 @@ def test_image_input_repr_hides_base64_payload():
     assert "ZmFrZV9zZWNyZXRfYmxvYg==" not in repr(image)
 
 
+def test_describe_query_input_avoids_logging_raw_text():
+    description = describe_query_input("super secret query")
+
+    assert "super secret query" not in description
+    assert "text_present=True" in description
+
+
 def test_query_input_payload_text_is_trimmed():
     payload = QueryInputPayload.model_validate({"text": "  hello input  "})
 
@@ -510,6 +517,43 @@ async def test_wrapper_run_query_rejects_images_for_text_only_model(monkeypatch)
     assert wrapper._agent.calls == []
 
 
+@pytest.mark.asyncio
+async def test_session_manager_create_query_operation_rejects_images_for_text_only_model(monkeypatch):
+    from app.core.exceptions import ImageInputNotSupportedError
+    from app.core.sessions.manager import SessionManager
+
+    monkeypatch.setattr("app.core.sessions.manager.MCPWrapper", _OperationWrapper)
+
+    manager = SessionManager()
+    session_id = await manager.create_session(
+        SessionCreateRequest.model_validate(
+            {
+                "llm_provider": {"provider": "ollama", "model": "llama3.1", "temperature": 0},
+                "mcp_servers": {},
+            }
+        )
+    )
+
+    with pytest.raises(ImageInputNotSupportedError):
+        await manager.create_query_operation(
+            session_id=session_id,
+            request=QueryOperationCreateRequest.model_validate(
+                {
+                    "input": {
+                        "text": "describe this image",
+                        "images": [
+                            {
+                                "source_type": "base64",
+                                "mime_type": "image/png",
+                                "data": "ZmFrZV9pbWFnZQ==",
+                            }
+                        ],
+                    }
+                }
+            ),
+        )
+
+
 class _OperationWrapper:
     def __init__(
         self,
@@ -576,7 +620,7 @@ async def test_session_manager_async_operation_stores_safe_multimodal_summary(mo
     session_id = await manager.create_session(
         SessionCreateRequest.model_validate(
             {
-                "llm_provider": {"provider": "ollama", "model": "dummy", "temperature": 0},
+                "llm_provider": {"provider": "ollama", "model": "llava", "temperature": 0},
                 "mcp_servers": {},
             }
         )
@@ -611,15 +655,22 @@ async def test_session_manager_async_operation_stores_safe_multimodal_summary(mo
             "text_present": True,
             "text_length": 13,
             "image_count": 2,
+            "total_image_bytes": 15,
             "images": [
                 {
+                    "asset_kind": "image",
                     "source_type": "url",
                     "url": "https://example.com/...",
+                    "filename_present": False,
+                    "asset_id_present": False,
                 },
                 {
+                    "asset_kind": "image",
                     "source_type": "base64",
                     "mime_type": "image/png",
                     "data_size_bytes": 15,
+                    "filename_present": False,
+                    "asset_id_present": False,
                 },
             ],
         },

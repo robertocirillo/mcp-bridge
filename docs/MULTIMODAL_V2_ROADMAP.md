@@ -1,4 +1,4 @@
-# MULTIMODAL_V2_ROADMAP_UPDATED.md
+# Multimodal V2 Roadmap
 
 Roadmap and design notes for the next evolution of multimodal/file support in **mcp-bridge**.
 
@@ -271,6 +271,13 @@ For PDFs, the design does **not** need to force image-style normalization if the
 ---
 
 ## 7. Updated roadmap
+
+Implementation status for the current branch/release target:
+
+- capability preflight now happens before sync execution and before async query-operation creation
+- multipart sync and async flows both use session-scoped temporary assets plus the same normalized upload resolution path
+- local temporary assets now persist minimal metadata on disk so TTL cleanup remains idempotent and restart-safe
+- the public API remains image-focused for 0.2.0, while the internal storage abstraction is now session-asset oriented for the next PDF milestone
 
 ## Phase 1 - foundation hardening (to be incorporated into 0.2.0)
 

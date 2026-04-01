@@ -28,7 +28,7 @@ def _build_test_api(
 
     mgr = SessionManager()
     if upload_root is not None:
-        mgr._temporary_upload_store = TemporaryImageUploadStore(root_dir=upload_root, ttl_seconds=3600)
+        mgr._temporary_asset_store = TemporaryImageUploadStore(root_dir=upload_root, ttl_seconds=3600)
 
     monkeypatch.setattr("app.api.dependencies._session_manager", mgr, raising=False)
     monkeypatch.setattr(settings.multi_tenancy, "enabled", True, raising=False)
@@ -208,6 +208,21 @@ def test_multipart_query_accepts_multiple_images_within_limits(monkeypatch):
     assert response.json()["result"] == "TEXT:compare them|IMAGES:2"
 
 
+def test_multipart_query_cleans_up_temporary_uploads_after_completion(monkeypatch, tmp_path):
+    client, _mgr = _build_test_client(monkeypatch, upload_root=tmp_path)
+    session_id = _create_session(client)
+
+    response = client.post(
+        f"/sessions/{session_id}/query-multipart",
+        data={"text": "describe this image"},
+        files=[("images", ("cat.png", PNG_BYTES, "image/png"))],
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert not (tmp_path / session_id).exists()
+
+
 @pytest.mark.asyncio
 async def test_multipart_query_operation_accepts_text_plus_one_image(monkeypatch, tmp_path):
     app, _mgr = _build_test_api(monkeypatch, upload_root=tmp_path)
@@ -302,7 +317,10 @@ async def test_multipart_query_operation_cleans_up_temporary_uploads_after_compl
 
         session_dir = tmp_path / session_id
         assert session_dir.exists()
-        assert len(list(session_dir.iterdir())) == 1
+        session_files = list(session_dir.iterdir())
+        assert len(session_files) == 2
+        assert any(path.suffix == ".bin" for path in session_files)
+        assert any(path.suffix == ".json" for path in session_files)
 
         release_async_query.set()
 
@@ -391,18 +409,11 @@ async def test_multipart_query_operation_fails_with_coherent_error_for_text_only
             headers={"X-Tenant-Id": "tenant-a"},
         )
 
-        assert create_response.status_code == 200, create_response.text
-        create_body = create_response.json()
-
-        final_body = await _wait_for_operation_status(
-            client,
-            session_id=session_id,
-            operation_id=create_body["operation_id"],
-            expected_status="failed",
-        )
-
-        assert final_body["error"]["code"] == "MCP_IMAGE_INPUT_NOT_SUPPORTED"
-        assert final_body["error"]["details"]["reason"] == "text_only"
+        assert create_response.status_code == 400, create_response.text
+        detail = create_response.json()["detail"]
+        assert detail["code"] == "MCP_IMAGE_INPUT_NOT_SUPPORTED"
+        assert detail["reason"] == "text_only"
+        assert not (tmp_path / session_id).exists()
 
 
 def test_existing_json_query_route_still_works(monkeypatch):

@@ -22,6 +22,7 @@ __all__ = [
     "resolve_request_query",
     "sanitize_multimodal_error",
     "summarize_query_input",
+    "validate_multimodal_query_request",
 ]
 
 _EXPORTS = {
@@ -46,6 +47,7 @@ _EXPORTS = {
     "resolve_request_query": (".model_query", "resolve_request_query"),
     "sanitize_multimodal_error": (".model_query", "sanitize_multimodal_error"),
     "summarize_query_input": (".model_query", "summarize_query_input"),
+    "validate_multimodal_query_request": (".preflight", "validate_multimodal_query_request"),
 }
 
 
