@@ -1,8 +1,13 @@
-# MULTIMODAL_V2_ROADMAP.md
+# MULTIMODAL_V2_ROADMAP_UPDATED.md
 
 Roadmap and design notes for the next evolution of multimodal/file support in **mcp-bridge**.
 
-This document is intended to preserve the current architectural direction across future chats and implementation phases.
+This version updates the previous roadmap with the following decisions:
+
+- the work previously thought of as **0.2.1** should be **incorporated into 0.2.0** before re-cutting the tag/release
+- the original sequencing remains valid: **finish multipart image support and lifecycle hardening first**
+- **PDF support** should be the **first non-image format**, implemented **immediately after** the image multipart + cleanup milestone
+- for PDF support toward LLMs, the preferred strategy is **pass-through with capability gating**, **not** unconditional bridge-side text extraction and **not** blind pass-through
 
 ---
 
@@ -81,14 +86,6 @@ Preferred structure:
 - one shared bucket
 - per-session prefixes, for example `sessions/{session_id}/...`
 
-Why:
-
-- simpler lifecycle management
-- lower infrastructure overhead
-- easier policy handling
-- more realistic cleanup strategy
-- avoids over-coupling storage topology to application session creation/deletion
-
 ### D5 - Cleanup must never rely only on explicit session deletion
 
 **Accepted**
@@ -98,6 +95,40 @@ Regardless of backend storage choice (local temp storage first, S3 later), asset
 1. primary cleanup on explicit session deletion
 2. fallback cleanup via TTL / background garbage collection
 3. cleanup logic must be idempotent and resilient to crashes/restarts
+
+### D6 - PDF is the first non-image format to add after the multipart image milestone
+
+**Accepted**
+
+The first extension beyond images should be **PDF only**, immediately after the multipart image milestone is complete.
+
+Reason:
+
+- PDFs cover many practical document-export scenarios
+- limiting scope to one non-image type keeps the design controlled
+- PDFs are a good fit both for future LLM use and MCP-server/tool use
+- this reduces scope compared with generic file support while still validating the extensible asset model
+
+### D7 - For PDFs toward LLMs, prefer pass-through with capability gating
+
+**Accepted**
+
+For PDF input sent toward LLMs, the bridge should prefer:
+
+- **pass-through when the configured backend/runtime is explicitly known to support PDF input**
+- **clear bridge-side error when it is not supported**
+
+The bridge should **not** initially:
+
+- always extract text from PDF as the baseline path
+- blindly pass PDFs downstream and hope the runtime fails cleanly
+
+Reason:
+
+- avoids unnecessary bridge-side document processing in the first step
+- avoids ambiguous downstream failures
+- keeps API behavior explicit and predictable
+- stays aligned with capability checks already planned for multimodal input
 
 ---
 
@@ -144,10 +175,6 @@ S3-compatible object storage remains a strong follow-up evolution.
 - it does not remove the need for bridge-side validation and normalization
 - the immediate problem can be solved sooner and more safely with multipart
 
-### Important note
-
-The valuable future idea is **object-backed asset storage**, not specifically "bucket per session".
-
 ---
 
 ## 5. Target architecture direction
@@ -165,7 +192,7 @@ Suggested fields:
 - `asset_id`
 - `session_id`
 - `kind` (e.g. `image`, `document`, `audio`, `generic`)
-- `purpose` (e.g. `input_image`, `attachment`, future categories)
+- `purpose` (e.g. `input_image`, `input_document`, `attachment`, future categories)
 - `original_filename`
 - `declared_content_type`
 - `detected_content_type`
@@ -192,6 +219,11 @@ A dedicated path responsible for converting a stored asset into the format neede
 
 For images, this should continue to end in the current normalized resolved-image model.
 
+For PDFs, the initial design target is:
+
+- **MCP-server/tool path**: pass asset handle/reference/bytes in a controlled way
+- **LLM path**: allow pass-through only after capability gating confirms support
+
 ### 5.2 Storage backend evolution
 
 The internal abstraction should make room for more than one backend:
@@ -205,7 +237,7 @@ This means multipart V2 should not hardcode file handling too deeply into route 
 
 ## 6. Recommended implementation shape
 
-### 6.1 Keep existing multimodal/image modules modular
+### 6.1 Keep multimodal and asset logic modular
 
 Do not add too much logic to already large files.
 
@@ -215,28 +247,34 @@ Prefer new modules such as:
 - `app/core/session_asset_store.py`
 - `app/core/session_asset_cleanup.py`
 - `app/core/image_validation.py`
+- `app/core/document_validation.py`
 - `app/core/multipart_parser.py`
 - `app/core/model_capabilities.py`
 
-Names may vary, but the direction is:
+Direction:
 
 - separate file ingestion/storage concerns from request routing
 - separate provider capability checks from request parsing
 - separate cleanup logic from session deletion orchestration
+- avoid mixing image-specific and future document-specific logic in one large route/service file
 
-### 6.2 Preserve normalized internal resolution
+### 6.2 Preserve normalized internal resolution where needed
 
 The existing multimodal flow already resolves input images before provider invocation.
 
-This normalized internal contract should remain the central design point.
+This normalized internal contract should remain the central design point for images.
 
-New input forms should converge into the same internal representation.
+New input forms should converge into the same internal representation **when that representation is actually needed**.
+
+For PDFs, the design does **not** need to force image-style normalization if the actual runtime contract is a gated pass-through.
 
 ---
 
-## 7. V2 roadmap
+## 7. Updated roadmap
 
-## Phase 1 - foundation hardening
+## Phase 1 - foundation hardening (to be incorporated into 0.2.0)
+
+This phase is effectively the work that had been discussed as a potential **0.2.1**, but should now be completed and folded into the release that will remain **0.2.0**.
 
 ### 1. Capability checks for image input
 
@@ -271,9 +309,7 @@ Extend safe summaries with fields such as:
 
 Never expose raw base64 or raw file bytes in public metadata.
 
----
-
-## Phase 2 - multipart V2
+## Phase 2 - multipart V2 for images (still part of the 0.2.0 consolidation)
 
 ### 4. Introduce multipart ingestion endpoints or multipart-capable route variants
 
@@ -310,9 +346,7 @@ Target principle:
 
 should all converge toward the same resolved image contract.
 
----
-
-## Phase 3 - cleanup and lifecycle
+## Phase 3 - cleanup and lifecycle (still part of the 0.2.0 consolidation)
 
 ### 7. Cleanup on session deletion
 
@@ -335,44 +369,62 @@ Requirements:
 - resilience to crash/restart scenarios
 - idempotent delete operations
 
----
+## Phase 4 - PDF support immediately after the 0.2.0 consolidation
 
-## Phase 4 - extension toward generic file support
+This phase should start **immediately after** Phase 1-3 are completed and folded into the final 0.2.0 release.
 
-### 9. Generalize from image upload to session asset upload
+### 9. Add PDF as the first non-image session asset type
 
-After multipart image support is stable, gradually evolve the internal model to support additional file classes.
+Scope:
+
+- accept PDF upload in multipart flows
+- register PDF assets in the same session-scoped asset model
+- apply PDF-specific validation policy
+- preserve cleanup/lifecycle guarantees already established for images
+
+### 10. Support PDF for MCP-server/tool use
+
+Target behavior:
+
+- PDFs can be passed to MCP-server/tool flows in a controlled way
+- the bridge remains responsible for lifecycle and access mediation
+- the API/runtime contract should avoid exposing storage internals more than necessary
+
+### 11. Support PDF for LLMs via capability gating + pass-through
+
+Target behavior:
+
+- if the configured backend/runtime is known to support PDF input, allow pass-through
+- if not supported, fail early with a clear client-facing error
+- do not rely on downstream runtime failure to define product behavior
+
+### 12. Defer bridge-side PDF text extraction to a later optional phase
+
+Text extraction from PDF is **not** the baseline strategy for the first PDF milestone.
+
+It may be evaluated later as an explicit fallback or optional mode if needed.
+
+## Phase 5 - broader generic file support
+
+Only after images + lifecycle + PDF support are stable should the bridge expand toward broader non-image coverage.
 
 Examples:
 
-- PDF
-- text documents
+- text documents beyond PDF
 - audio
 - structured data files
+- other asset-only file categories
 
 Important distinction:
 
 - not every uploaded file type must be accepted as direct model multimodal input
-- some file types may be allowed only as session assets for future tool/runtime use
+- some file types may remain asset-only for tool/runtime use
 
-### 10. Introduce policy by file class
+## Phase 6 - S3/object storage evolution
 
-Different file types should eventually have distinct policies.
+### 13. Introduce pluggable asset storage backend
 
-Examples:
-
-- images: strict MIME allowlist, model-bound resolution path
-- documents: different size and validation rules
-- audio: separate future pipeline
-- generic files: asset-only, not directly sent to the model
-
----
-
-## Phase 5 - S3/object storage evolution
-
-### 11. Introduce pluggable asset storage backend
-
-After multipart and session asset semantics are stable, add an object-storage-backed implementation.
+After multipart, lifecycle, and PDF semantics are stable, add an object-storage-backed implementation.
 
 Preferred model:
 
@@ -382,7 +434,7 @@ Preferred model:
 - cleanup by prefix on session delete
 - fallback lifecycle/TTL policy in storage layer
 
-### 12. Future optional storage references
+### 14. Future optional storage references
 
 Only after storage support is mature should the bridge consider accepting storage-backed references from clients.
 
@@ -390,50 +442,49 @@ This should be designed carefully to avoid over-coupling the visual builder to s
 
 ---
 
-## 8. Non-goals for the first multipart V2
+## 8. Non-goals for the current 0.2.0 consolidation and immediate next step
 
-The first multipart V2 should **not** try to solve everything at once.
+The current delivery should **not** try to solve everything at once.
 
-Not required in the first step:
+Not required in the consolidated 0.2.0:
 
 - full generic file platform support
 - S3 integration immediately
 - bucket-per-session provisioning
-- image moderation / OCR / deep visual policy analysis
+- bridge-side PDF text extraction as the default path
 - rich cross-service storage contracts with the visual builder
-
-Those may come later, but should not block the first useful V2 milestone.
 
 ---
 
 ## 9. Practical decision summary
 
-For future chats and implementation planning, the current agreed direction is:
+Current agreed direction:
 
 1. keep the current V1/V1.5 multimodal base
-2. implement multipart next
-3. design multipart internally as extensible session asset ingestion
-4. support cleanup via session deletion plus TTL/GC fallback
-5. later introduce S3-compatible storage for larger and more diverse files
-6. when S3 is introduced, use a shared bucket with session prefixes, not a bucket per session
-
-This is the current project direction unless explicitly revised.
+2. complete foundation hardening + multipart image support + cleanup/lifecycle
+3. fold that work into the final **0.2.0** release
+4. immediately after, add **PDF** as the first non-image format
+5. for PDF toward MCP servers, support controlled pass-through/runtime use
+6. for PDF toward LLMs, use **capability gating + pass-through**
+7. defer PDF text extraction to a later optional phase if needed
+8. only later expand to broader file classes
+9. only after that, introduce S3-compatible storage if still justified
 
 ---
 
 ## 10. Suggested branch names
 
-Possible branch names for the multipart-first phase:
-
-- `feature/multimodal-images-v2`
-- `feature/multimodal-upload-v2`
-- `feature/multimodal-image-sources-v2`
-- `feature/session-assets-v1`
-
-Preferred if the design is intentionally extensible beyond images:
+For the work being folded into the final 0.2.0:
 
 - `feature/session-assets-v1`
 - `feature/multimodal-image-sources-v2`
+- `feature/multipart-images-hardening`
+
+For the PDF phase that follows immediately after:
+
+- `feature/pdf-session-assets`
+- `feature/pdf-pass-through-v1`
+- `feature/pdf-multimodal-v1`
 
 ---
 
@@ -442,9 +493,10 @@ Preferred if the design is intentionally extensible beyond images:
 When continuing this topic in a new chat, the assistant should be told that:
 
 - V1/V1.5 already exists and works
-- the next step is multipart, not a redesign from zero
-- multipart should be implemented in an extensible way for future file classes
-- S3 is considered a later storage evolution
-- S3 should use a shared bucket plus session prefixes
-- cleanup must include both explicit session deletion and fallback TTL/GC
-
+- the immediate priority is to finish multipart images plus cleanup/lifecycle
+- that work should be folded into the final 0.2.0 release
+- immediately after that, PDF is the first non-image format to add
+- PDF toward LLMs should use capability gating + pass-through
+- PDF text extraction is intentionally deferred
+- broader generic file support comes after PDF, not before
+- S3 is still a later storage evolution
