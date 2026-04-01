@@ -16,6 +16,7 @@ _VISION_MODEL_MARKERS: dict[str, tuple[str, ...]] = {
         "moondream",
         "qwen2.5-vl",
         "qwen2.5vl",
+        "qwen3-vl:8b",
         "minicpm-v",
         "llama4",
         "gemma3",
