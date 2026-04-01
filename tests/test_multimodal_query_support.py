@@ -25,6 +25,8 @@ from app.models.requests import (
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 PNG_BASE64 = "iVBORw0KGgoAAAAAAAAAAAAAAAAAAAAA"
+PDF_BYTES = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
+PDF_BASE64 = "JVBERi0xLjcKMSAwIG9iago8PD4+CmVuZG9iagp0cmFpbGVyCjw8Pj4KJSVFT0YK"
 
 
 def _build_remote_image_fetcher(handler, monkeypatch: pytest.MonkeyPatch) -> RemoteImageFetcher:
@@ -193,6 +195,82 @@ async def test_build_model_query_converts_structured_payload_to_human_message(mo
 
 
 @pytest.mark.asyncio
+async def test_build_model_query_converts_uploaded_pdf_for_openai(monkeypatch, tmp_path):
+    from fastapi import UploadFile
+    from starlette.datastructures import Headers
+    from io import BytesIO
+    from app.core.session_assets.local_store import LocalTemporarySessionAssetStore
+
+    store = LocalTemporarySessionAssetStore(root_dir=tmp_path, ttl_seconds=3600)
+    upload = UploadFile(
+        filename="report.pdf",
+        file=BytesIO(PDF_BYTES),
+        headers=Headers({"content-type": "application/pdf"}),
+    )
+    asset = await store.persist_upload(
+        session_id="s1",
+        upload=upload,
+        index=0,
+        kind="document",
+        purpose="input_document",
+        content_validator=lambda **kwargs: "application/pdf",
+    )
+
+    payload = QueryInputPayload.model_validate(
+        {
+            "text": "summarize this",
+            "documents": [
+                {
+                    "source_type": "upload",
+                    "asset_id": asset.asset_id,
+                    "mime_type": "application/pdf",
+                    "size_bytes": len(PDF_BYTES),
+                    "filename": "report.pdf",
+                }
+            ],
+        }
+    )
+
+    resolver = QueryImageResolver()
+    resolver._upload_store = store
+    message = build_model_query(await resolver.resolve(payload, session_id="s1"), provider="openai")
+    assert hasattr(message, "content")
+    assert message.content == [
+        {"type": "text", "text": "summarize this"},
+        {
+            "type": "file",
+            "file": {
+                "filename": "report.pdf",
+                "file_data": f"data:application/pdf;base64,{PDF_BASE64}",
+            },
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_build_multipart_query_operation_request_requires_documents_for_direct_tool_invocation(tmp_path):
+    from app.api.services.multipart_query import build_multipart_query_operation_request
+    from app.core.session_assets.local_store import LocalTemporarySessionAssetStore
+
+    store = LocalTemporarySessionAssetStore(root_dir=tmp_path, ttl_seconds=3600)
+
+    with pytest.raises(MultimodalInputValidationError) as exc_info:
+        await build_multipart_query_operation_request(
+            session_id="s1",
+            text=None,
+            max_steps=None,
+            server_name="filesystem",
+            tool_name="analyze_pdf",
+            arguments='{"topic":"contracts"}',
+            images=None,
+            documents=[],
+            asset_store=store,
+        )
+
+    assert str(exc_info.value) == "Field 'documents' is required when 'tool_name' is provided"
+
+
+@pytest.mark.asyncio
 async def test_query_image_resolver_rejects_too_many_images():
     payload = QueryInputPayload.model_validate(
         {
@@ -293,6 +371,22 @@ def test_query_operation_error_serialization_for_image_capability_failure():
         "reason": "text_only",
     }
     assert "does not support image inputs" in error.message
+
+
+def test_query_operation_error_serialization_for_pdf_capability_failure():
+    from app.core.exceptions import PDFInputNotSupportedError
+
+    error = serialize_query_operation_error(
+        PDFInputNotSupportedError(provider="ollama", model="llava", reason="unknown")
+    )
+
+    assert error.code == "MCP_PDF_INPUT_NOT_SUPPORTED"
+    assert error.details == {
+        "provider": "ollama",
+        "model": "llava",
+        "reason": "unknown",
+    }
+    assert "PDF-capable model" in error.message
 
 
 class _DummyAgent:
@@ -518,6 +612,34 @@ async def test_wrapper_run_query_rejects_images_for_text_only_model(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_wrapper_run_query_rejects_pdfs_for_non_pdf_model(monkeypatch):
+    from app.core.exceptions import PDFInputNotSupportedError
+
+    wrapper = _build_wrapper(monkeypatch, model="llava")
+
+    payload = QueryInputPayload.model_validate(
+        {
+            "text": "summarize this pdf",
+            "documents": [
+                {
+                    "source_type": "upload",
+                    "asset_id": "asset-1",
+                    "mime_type": "application/pdf",
+                    "size_bytes": 12,
+                    "filename": "report.pdf",
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(PDFInputNotSupportedError) as exc_info:
+        await wrapper.run_query(payload, server_name="alpha")
+
+    assert "does not support PDF inputs" in str(exc_info.value) or "PDF-capable model" in str(exc_info.value)
+    assert wrapper._agent.calls == []
+
+
+@pytest.mark.asyncio
 async def test_session_manager_create_query_operation_rejects_images_for_text_only_model(monkeypatch):
     from app.core.exceptions import ImageInputNotSupportedError
     from app.core.sessions.manager import SessionManager
@@ -673,6 +795,9 @@ async def test_session_manager_async_operation_stores_safe_multimodal_summary(mo
                     "asset_id_present": False,
                 },
             ],
+            "document_count": 0,
+            "total_document_bytes": 0,
+            "documents": [],
         },
     }
     assert blob not in json.dumps(created.model_dump(mode="json"))
@@ -694,8 +819,9 @@ async def test_session_manager_async_operation_stores_safe_multimodal_summary(mo
 
 def test_serialize_query_operation_error_redacts_data_urls():
     error = serialize_query_operation_error(
-        RuntimeError("boom data:image/png;base64,ZmFrZV9pbWFnZV9kYXRh")
+        RuntimeError("boom data:image/png;base64,ZmFrZV9pbWFnZV9kYXRh and data:application/pdf;base64,ZmFrZQ==")
     )
 
     assert "[REDACTED]" in error.message
     assert "ZmFrZV9pbWFnZV9kYXRh" not in error.message
+    assert "ZmFrZQ==" not in error.message

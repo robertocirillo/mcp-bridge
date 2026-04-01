@@ -20,16 +20,39 @@ class ResolvedImageInput:
 
 
 @dataclass(frozen=True)
+class ResolvedDocumentInput:
+    """Internal normalized PDF payload ready for provider or tool consumption."""
+
+    source_type: Literal["upload"]
+    mime_type: str
+    base64_data: str
+    data_size_bytes: Optional[int] = None
+    filename: Optional[str] = None
+
+    def as_data_url(self) -> str:
+        return build_file_data_url(mime_type=self.mime_type, base64_data=self.base64_data)
+
+
+@dataclass(frozen=True)
 class ResolvedQueryInputPayload:
     """Internal normalized multimodal input passed to the provider builder."""
 
     text: Optional[str]
     images: list[ResolvedImageInput] = field(default_factory=list)
+    documents: list[ResolvedDocumentInput] = field(default_factory=list)
+
+
+def encode_bytes_to_base64(content: bytes) -> str:
+    return base64.b64encode(content).decode("ascii")
 
 
 def encode_image_bytes_to_base64(image_bytes: bytes) -> str:
-    return base64.b64encode(image_bytes).decode("ascii")
+    return encode_bytes_to_base64(image_bytes)
 
 
 def build_image_data_url(*, mime_type: str, base64_data: str) -> str:
+    return build_file_data_url(mime_type=mime_type, base64_data=base64_data)
+
+
+def build_file_data_url(*, mime_type: str, base64_data: str) -> str:
     return f"data:{mime_type};base64,{base64_data}"

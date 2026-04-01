@@ -11,15 +11,21 @@ from fastapi.encoders import jsonable_encoder
 from app.core.exceptions import (
     ConfigurationError,
     ImageInputNotSupportedError,
+    PDFInputNotSupportedError,
     QueryOperationElicitationDeclinedError,
     QueryOperationNotFoundError,
     SessionNotFoundError,
     TemporaryUploadError,
 )
 from app.core.multimodal.model_query import sanitize_multimodal_error, summarize_query_input
+from app.core.multimodal.tool_documents import (
+    extract_uploaded_document_asset_refs,
+    strip_uploaded_document_asset_refs,
+)
 from app.core.runtime.mcp_wrapper import GuardrailViolationError, MCPToolNotAllowedError
 from app.models.requests import QueryOperationCreateRequest
 from app.models.responses import (
+    QueryInputDocumentSummary,
     QueryOperationError,
     QueryOperationInput,
     QueryOperationMultimodalInput,
@@ -34,10 +40,30 @@ def build_query_operation_input(
     request: QueryOperationCreateRequest,
 ) -> QueryOperationInput | QueryOperationMultimodalInput | QueryOperationToolInput:
     if request.tool_name is not None:
+        uploaded_documents = [
+            QueryInputDocumentSummary(
+                asset_kind=str(document_ref.get("asset_kind") or "document"),
+                source_type="upload",
+                mime_type=(
+                    str(document_ref["mime_type"])
+                    if document_ref.get("mime_type") is not None
+                    else None
+                ),
+                data_size_bytes=(
+                    int(document_ref["size_bytes"])
+                    if isinstance(document_ref.get("size_bytes"), int)
+                    else None
+                ),
+                filename_present=bool(document_ref.get("filename")),
+                asset_id_present=bool(document_ref.get("asset_id")),
+            )
+            for document_ref in extract_uploaded_document_asset_refs(request.arguments)
+        ]
         return QueryOperationToolInput(
             server_name=request.server_name,
             tool_name=request.tool_name,
-            arguments=dict(request.arguments),
+            arguments=strip_uploaded_document_asset_refs(request.arguments),
+            uploaded_documents=uploaded_documents or None,
         )
 
     if request.input is not None:
@@ -91,6 +117,16 @@ def serialize_query_operation_error(exc: Exception) -> QueryOperationError:
     if isinstance(exc, ImageInputNotSupportedError):
         return QueryOperationError(
             code="MCP_IMAGE_INPUT_NOT_SUPPORTED",
+            message=sanitize_multimodal_error(exc),
+            details={
+                "provider": getattr(exc, "provider", None),
+                "model": getattr(exc, "model", None),
+                "reason": getattr(exc, "reason", None),
+            },
+        )
+    if isinstance(exc, PDFInputNotSupportedError):
+        return QueryOperationError(
+            code="MCP_PDF_INPUT_NOT_SUPPORTED",
             message=sanitize_multimodal_error(exc),
             details={
                 "provider": getattr(exc, "provider", None),

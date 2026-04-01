@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 16
+PDF_BYTES = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
 
 
 def _build_test_api(
@@ -20,7 +21,7 @@ def _build_test_api(
     release_async_query: asyncio.Event | None = None,
 ):
     from app.api.dependencies import get_session_manager
-    from app.core.multimodal import QueryImageResolver, ensure_image_input_supported
+    from app.core.multimodal import QueryImageResolver, ensure_image_input_supported, ensure_pdf_input_supported
     from app.core.multimodal.model_query import build_model_query
     from app.core.multimodal.temp_uploads import TemporaryImageUploadStore
     from app.core.sessions.manager import SessionManager
@@ -104,13 +105,36 @@ def _build_test_api(
                 ensure_image_input_supported(provider=self.llm_provider, model=self.model)
                 if release_async_query is not None and any(image.source_type == "upload" for image in query.images):
                     await release_async_query.wait()
+            if query.documents:
+                ensure_pdf_input_supported(provider=self.llm_provider, model=self.model)
+                if release_async_query is not None and any(document.source_type == "upload" for document in query.documents):
+                    await release_async_query.wait()
 
             prepared = await self._query_image_resolver.resolve(query, session_id=self.session_id)
-            message = build_model_query(prepared)
+            message = build_model_query(prepared, provider=self.llm_provider)
             blocks = getattr(message, "content", [])
             image_count = sum(1 for block in blocks if block.get("type") == "image_url")
+            document_count = sum(1 for block in blocks if block.get("type") in {"file", "document"})
             text_values = [block.get("text", "") for block in blocks if block.get("type") == "text"]
-            return f"TEXT:{' '.join(text_values)}|IMAGES:{image_count}"
+            return f"TEXT:{' '.join(text_values)}|IMAGES:{image_count}|PDFS:{document_count}"
+
+        async def call_tool(self, tool_name, arguments=None, server_name=None):
+            self.last_server_used = server_name
+            uploaded_documents = list((arguments or {}).get("_bridge_uploaded_documents") or [])
+            return {
+                "tool_name": tool_name,
+                "server_name": server_name,
+                "topic": (arguments or {}).get("topic"),
+                "uploaded_documents": [
+                    {
+                        "mime_type": document.get("mime_type"),
+                        "filename": document.get("filename"),
+                        "size_bytes": document.get("size_bytes"),
+                        "has_base64": bool(document.get("data_base64")),
+                    }
+                    for document in uploaded_documents
+                ],
+            }
 
     monkeypatch.setattr("app.core.sessions.manager.MCPWrapper", DummyMCPWrapper)
 
@@ -129,9 +153,9 @@ def _build_test_client(monkeypatch, **kwargs):
     return TestClient(app), mgr
 
 
-def _create_session(client: TestClient, *, model: str = "llava") -> str:
+def _create_session(client: TestClient, *, provider: str = "ollama", model: str = "llava") -> str:
     payload = {
-        "llm_provider": {"provider": "ollama", "model": model, "temperature": 0},
+        "llm_provider": {"provider": provider, "model": model, "temperature": 0},
         "mcp_servers": {},
     }
     response = client.post("/sessions", json=payload, headers={"X-Tenant-Id": "tenant-a"})
@@ -139,9 +163,9 @@ def _create_session(client: TestClient, *, model: str = "llava") -> str:
     return response.json()["session_id"]
 
 
-async def _create_session_async(client: AsyncClient, *, model: str = "llava") -> str:
+async def _create_session_async(client: AsyncClient, *, provider: str = "ollama", model: str = "llava") -> str:
     payload = {
-        "llm_provider": {"provider": "ollama", "model": model, "temperature": 0},
+        "llm_provider": {"provider": provider, "model": model, "temperature": 0},
         "mcp_servers": {},
     }
     response = await client.post("/sessions", json=payload, headers={"X-Tenant-Id": "tenant-a"})
@@ -186,7 +210,7 @@ def test_multipart_query_accepts_text_plus_one_image(monkeypatch):
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["session_id"] == session_id
-    assert body["result"] == "TEXT:describe this image|IMAGES:1"
+    assert body["result"] == "TEXT:describe this image|IMAGES:1|PDFS:0"
     assert body["steps_used"] == 7
 
 
@@ -205,7 +229,7 @@ def test_multipart_query_accepts_multiple_images_within_limits(monkeypatch):
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["result"] == "TEXT:compare them|IMAGES:2"
+    assert response.json()["result"] == "TEXT:compare them|IMAGES:2|PDFS:0"
 
 
 def test_multipart_query_cleans_up_temporary_uploads_after_completion(monkeypatch, tmp_path):
@@ -221,6 +245,56 @@ def test_multipart_query_cleans_up_temporary_uploads_after_completion(monkeypatc
 
     assert response.status_code == 200, response.text
     assert not (tmp_path / session_id).exists()
+
+
+def test_multipart_query_accepts_pdf_for_pdf_capable_model(monkeypatch):
+    client, _mgr = _build_test_client(monkeypatch)
+    session_id = _create_session(client, provider="openai", model="gpt-4o")
+
+    response = client.post(
+        f"/sessions/{session_id}/query-multipart",
+        data={"text": "summarize this pdf"},
+        files=[("documents", ("report.pdf", PDF_BYTES, "application/pdf"))],
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"] == "TEXT:summarize this pdf|IMAGES:0|PDFS:1"
+
+
+def test_multipart_query_rejects_pdf_for_non_pdf_model(monkeypatch):
+    client, _mgr = _build_test_client(monkeypatch)
+    session_id = _create_session(client, provider="ollama", model="llava")
+
+    response = client.post(
+        f"/sessions/{session_id}/query-multipart",
+        data={"text": "summarize this pdf"},
+        files=[("documents", ("report.pdf", PDF_BYTES, "application/pdf"))],
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+
+    assert response.status_code == 400, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "MCP_PDF_INPUT_NOT_SUPPORTED"
+    assert detail["operation"] == "execute_multipart_query"
+
+
+def test_multipart_query_rejects_non_pdf_upload_with_clear_error(monkeypatch):
+    client, _mgr = _build_test_client(monkeypatch)
+    session_id = _create_session(client, provider="openai", model="gpt-4o")
+
+    response = client.post(
+        f"/sessions/{session_id}/query-multipart",
+        data={"text": "summarize this"},
+        files=[("documents", ("notes.txt", b"not-a-pdf", "text/plain"))],
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["code"] == "MCP_SCHEMA_ERROR"
+    assert detail["operation"] == "execute_multipart_query"
+    assert "not a supported PDF" in detail["message"]
 
 
 @pytest.mark.asyncio
@@ -254,7 +328,7 @@ async def test_multipart_query_operation_accepts_text_plus_one_image(monkeypatch
             expected_status="completed",
         )
 
-        assert final_body["result"]["result"] == "TEXT:describe this image|IMAGES:1"
+        assert final_body["result"]["result"] == "TEXT:describe this image|IMAGES:1|PDFS:0"
         assert final_body["result"]["steps_used"] == 7
 
 
@@ -284,7 +358,7 @@ async def test_multipart_query_operation_accepts_multiple_images_within_limits(m
             expected_status="completed",
         )
 
-        assert final_body["result"]["result"] == "TEXT:compare them|IMAGES:2"
+        assert final_body["result"]["result"] == "TEXT:compare them|IMAGES:2|PDFS:0"
 
 
 @pytest.mark.asyncio
@@ -336,6 +410,141 @@ async def test_multipart_query_operation_cleans_up_temporary_uploads_after_compl
             await asyncio.sleep(0.01)
 
         assert not session_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_multipart_query_operation_accepts_pdf_for_pdf_capable_model(monkeypatch, tmp_path):
+    app, _mgr = _build_test_api(monkeypatch, upload_root=tmp_path)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(client, provider="openai", model="gpt-4o")
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations-multipart",
+            data={"text": "summarize this pdf"},
+            files=[("documents", ("report.pdf", PDF_BYTES, "application/pdf"))],
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+
+        assert create_response.status_code == 200, create_response.text
+        create_body = create_response.json()
+        assert create_body["metadata"]["request"]["input"]["document_count"] == 1
+        document_summary = create_body["metadata"]["request"]["input"]["documents"][0]
+        assert document_summary["mime_type"] == "application/pdf"
+        assert document_summary["data_size_bytes"] == len(PDF_BYTES)
+
+        final_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=create_body["operation_id"],
+            expected_status="completed",
+        )
+
+        assert final_body["result"]["result"] == "TEXT:summarize this pdf|IMAGES:0|PDFS:1"
+
+
+@pytest.mark.asyncio
+async def test_multipart_query_operation_direct_tool_invocation_passes_pdf_to_tool(monkeypatch, tmp_path):
+    app, _mgr = _build_test_api(monkeypatch, upload_root=tmp_path)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(client, provider="ollama", model="llava")
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations-multipart",
+            data={
+                "tool_name": "analyze_pdf",
+                "server_name": "filesystem",
+                "arguments": '{"topic":"contracts"}',
+            },
+            files=[("documents", ("report.pdf", PDF_BYTES, "application/pdf"))],
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+
+        assert create_response.status_code == 200, create_response.text
+        create_body = create_response.json()
+        assert create_body["metadata"]["request"] == {
+            "server_name": "filesystem",
+            "tool_name": "analyze_pdf",
+            "arguments": {"topic": "contracts"},
+            "uploaded_documents": [
+                {
+                    "asset_kind": "document",
+                    "source_type": "upload",
+                    "mime_type": "application/pdf",
+                    "data_size_bytes": len(PDF_BYTES),
+                    "filename_present": True,
+                    "asset_id_present": True,
+                }
+            ],
+        }
+
+        final_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=create_body["operation_id"],
+            expected_status="completed",
+        )
+
+        assert final_body["result"]["result"] == {
+            "tool_name": "analyze_pdf",
+            "server_name": "filesystem",
+            "topic": "contracts",
+            "uploaded_documents": [
+                {
+                    "mime_type": "application/pdf",
+                    "filename": "report.pdf",
+                    "size_bytes": len(PDF_BYTES),
+                    "has_base64": True,
+                }
+            ],
+        }
+        assert not (tmp_path / session_id).exists()
+
+
+@pytest.mark.asyncio
+async def test_multipart_query_operation_direct_tool_invocation_requires_documents(monkeypatch, tmp_path):
+    app, _mgr = _build_test_api(monkeypatch, upload_root=tmp_path)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(client, provider="ollama", model="llava")
+
+        response = await client.post(
+            f"/sessions/{session_id}/query-operations-multipart",
+            data={
+                "tool_name": "analyze_pdf",
+                "server_name": "filesystem",
+                "arguments": '{"topic":"contracts"}',
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["code"] == "MCP_SCHEMA_ERROR"
+        assert detail["operation"] == "create_multipart_query_operation"
+        assert detail["message"] == "Field 'documents' is required when 'tool_name' is provided"
+
+
+@pytest.mark.asyncio
+async def test_multipart_query_operation_rejects_non_pdf_upload_with_clear_error(monkeypatch, tmp_path):
+    app, _mgr = _build_test_api(monkeypatch, upload_root=tmp_path)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(client, provider="openai", model="gpt-4o")
+
+        response = await client.post(
+            f"/sessions/{session_id}/query-operations-multipart",
+            data={"text": "summarize this"},
+            files=[("documents", ("notes.txt", b"not-a-pdf", "text/plain"))],
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["code"] == "MCP_SCHEMA_ERROR"
+        assert detail["operation"] == "create_multipart_query_operation"
+        assert "not a supported PDF" in detail["message"]
 
 
 def test_multipart_query_rejects_non_image_upload_with_clear_error(monkeypatch):

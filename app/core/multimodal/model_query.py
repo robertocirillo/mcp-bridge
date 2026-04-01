@@ -7,7 +7,11 @@ from urllib.parse import urlsplit
 from app.core.multimodal.image_data import ResolvedQueryInputPayload
 from app.core.multimodal.validation import estimate_base64_size
 from app.models.requests import QueryInputPayload
-from app.models.responses import QueryInputImageSummary, QueryInputPayloadSummary
+from app.models.responses import (
+    QueryInputDocumentSummary,
+    QueryInputImageSummary,
+    QueryInputPayloadSummary,
+)
 
 try:
     from langchain_core.messages import HumanMessage as LangChainHumanMessage
@@ -25,7 +29,7 @@ PreparedModelQueryInput = str | ResolvedQueryInputPayload
 BuiltModelQuery = str | LangChainHumanMessage
 
 _DATA_URL_RE = re.compile(
-    r"data:(image/(?:png|jpeg|webp));base64,[A-Za-z0-9+/=]+",
+    r"data:([A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+);base64,[A-Za-z0-9+/=]+",
     re.IGNORECASE,
 )
 
@@ -58,7 +62,11 @@ def replace_query_text(
     if isinstance(query_input, str):
         return text or ""
     if isinstance(query_input, ResolvedQueryInputPayload):
-        return ResolvedQueryInputPayload(text=text, images=list(query_input.images))
+        return ResolvedQueryInputPayload(
+            text=text,
+            images=list(query_input.images),
+            documents=list(query_input.documents),
+        )
     return query_input.model_copy(update={"text": text})
 
 
@@ -66,7 +74,15 @@ def has_query_visual_input(query_input: ModelQueryInput | PreparedModelQueryInpu
     return not isinstance(query_input, str) and bool(query_input.images)
 
 
-def build_model_query(query_input: PreparedModelQueryInput) -> BuiltModelQuery:
+def has_query_pdf_input(query_input: ModelQueryInput | PreparedModelQueryInput) -> bool:
+    return not isinstance(query_input, str) and bool(getattr(query_input, "documents", []))
+
+
+def build_model_query(
+    query_input: PreparedModelQueryInput,
+    *,
+    provider: str | None = None,
+) -> BuiltModelQuery:
     if isinstance(query_input, str):
         return query_input
 
@@ -79,6 +95,31 @@ def build_model_query(query_input: PreparedModelQueryInput) -> BuiltModelQuery:
             {
                 "type": "image_url",
                 "image_url": {"url": image.as_data_url()},
+            }
+        )
+
+    normalized_provider = (provider or "").strip().lower()
+    for document in query_input.documents:
+        if normalized_provider == "anthropic":
+            blocks.append(
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": document.mime_type,
+                        "data": document.base64_data,
+                    },
+                }
+            )
+            continue
+
+        blocks.append(
+            {
+                "type": "file",
+                "file": {
+                    "filename": document.filename or "document.pdf",
+                    "file_data": document.as_data_url(),
+                },
             }
         )
 
@@ -98,12 +139,26 @@ def summarize_query_input(input_payload: QueryInputPayload) -> QueryInputPayload
         )
         for image in input_payload.images
     ]
+    documents = [
+        QueryInputDocumentSummary(
+            asset_kind="document",
+            source_type=document.source_type,
+            mime_type=document.mime_type,
+            data_size_bytes=getattr(document, "size_bytes", None),
+            filename_present=bool(getattr(document, "filename", None)),
+            asset_id_present=bool(getattr(document, "asset_id", None)),
+        )
+        for document in input_payload.documents
+    ]
     return QueryInputPayloadSummary(
         text_present=_has_text_content(input_payload.text),
         text_length=len(input_payload.text) if _has_text_content(input_payload.text) else None,
         image_count=len(images),
         total_image_bytes=sum(image.data_size_bytes or 0 for image in images),
         images=images,
+        document_count=len(documents),
+        total_document_bytes=sum(document.data_size_bytes or 0 for document in documents),
+        documents=documents,
     )
 
 
@@ -115,10 +170,12 @@ def describe_query_input(query_input: ModelQueryInput | PreparedModelQueryInput)
     input_payload = query_input
     text_length = len(input_payload.text) if _has_text_content(input_payload.text) else 0
     image_sources = ",".join(sorted({image.source_type for image in input_payload.images})) or "none"
+    document_sources = ",".join(sorted({document.source_type for document in input_payload.documents})) or "none"
     return (
         f"structured:text_present={_has_text_content(input_payload.text)} "
         f"text_length={text_length} image_count={len(input_payload.images)} "
-        f"image_sources={image_sources}"
+        f"image_sources={image_sources} document_count={len(input_payload.documents)} "
+        f"document_sources={document_sources}"
     )
 
 

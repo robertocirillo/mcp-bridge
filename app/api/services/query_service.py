@@ -96,6 +96,7 @@ async def execute_multipart_query(
     max_steps: int | None,
     server_name: str | None,
     images: Sequence[UploadFile] | None,
+    documents: Sequence[UploadFile] | None,
     tenant_ctx: TenantContext,
     session_manager: SessionManager,
 ) -> QueryResponse:
@@ -107,6 +108,7 @@ async def execute_multipart_query(
             max_steps=max_steps,
             server_name=server_name,
             images=images,
+            documents=documents,
             asset_store=session_manager.temporary_asset_store,
         )
     except Exception as exc:
@@ -173,7 +175,10 @@ async def create_multipart_query_operation(
     text: str | None,
     max_steps: int | None,
     server_name: str | None,
+    tool_name: str | None,
+    arguments: str | None,
     images: Sequence[UploadFile] | None,
+    documents: Sequence[UploadFile] | None,
     tenant_ctx: TenantContext,
     session_manager: SessionManager,
 ) -> QueryOperationResponse:
@@ -185,7 +190,10 @@ async def create_multipart_query_operation(
             text=text,
             max_steps=max_steps,
             server_name=server_name,
+            tool_name=tool_name,
+            arguments=arguments,
             images=images,
+            documents=documents,
             asset_store=session_manager.temporary_asset_store,
         )
     except Exception as exc:

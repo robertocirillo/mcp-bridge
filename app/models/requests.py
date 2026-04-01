@@ -7,8 +7,12 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.core.multimodal.policy import MAX_BASE64_IMAGE_DATA_LENGTH, SUPPORTED_IMAGE_MIME_TYPES
-from app.core.multimodal.validation import normalize_image_mime_type
+from app.core.multimodal.policy import (
+    MAX_BASE64_IMAGE_DATA_LENGTH,
+    SUPPORTED_DOCUMENT_MIME_TYPES,
+    SUPPORTED_IMAGE_MIME_TYPES,
+)
+from app.core.multimodal.validation import normalize_document_mime_type, normalize_image_mime_type
 from app.models.config import SessionConfig
 
 
@@ -106,18 +110,53 @@ class ImageInput(BaseModel):
         return f"data:{self.mime_type};base64,{self.data}"
 
 
+class DocumentInput(BaseModel):
+    """Structured PDF input accepted by multipart-backed multimodal queries."""
+
+    source_type: Literal["upload"] = Field("upload", description="How the PDF is provided")
+    asset_id: Optional[str] = Field(
+        None,
+        description="Internal temporary asset identifier for source_type=upload",
+        repr=False,
+    )
+    mime_type: Optional[str] = Field(None, description="MIME type for the uploaded PDF")
+    size_bytes: Optional[int] = Field(
+        None,
+        gt=0,
+        description="Known byte size for source_type=upload",
+    )
+    filename: Optional[str] = Field(None, description="Original filename for source_type=upload")
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "DocumentInput":
+        self.mime_type = normalize_document_mime_type(self.mime_type)
+
+        if self.mime_type is not None and self.mime_type not in SUPPORTED_DOCUMENT_MIME_TYPES:
+            raise ValueError(
+                f"Unsupported mime_type '{self.mime_type}'. Supported values: {sorted(SUPPORTED_DOCUMENT_MIME_TYPES)}"
+            )
+        if not self.asset_id:
+            raise ValueError("Field 'asset_id' is required when source_type='upload'")
+        if not self.mime_type:
+            raise ValueError("Field 'mime_type' is required when source_type='upload'")
+        if self.size_bytes is None:
+            raise ValueError("Field 'size_bytes' is required when source_type='upload'")
+        return self
+
+
 class QueryInputPayload(BaseModel):
     """Structured multimodal query input."""
 
     text: Optional[str] = Field(None, description="Optional textual input associated with the request")
     images: list[ImageInput] = Field(default_factory=list, description="Optional list of image inputs")
+    documents: list[DocumentInput] = Field(default_factory=list, description="Optional list of uploaded PDF inputs")
 
     @model_validator(mode="after")
     def validate_not_empty(self) -> "QueryInputPayload":
         self.text = _normalize_optional_text(self.text)
 
-        if self.text is None and not self.images:
-            raise ValueError("At least one of 'text' or 'images' must be provided in 'input'")
+        if self.text is None and not self.images and not self.documents:
+            raise ValueError("At least one of 'text', 'images', or 'documents' must be provided in 'input'")
         return self
 
 

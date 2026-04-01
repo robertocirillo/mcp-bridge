@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from app.core.multimodal.image_data import encode_image_bytes_to_base64
-from app.core.multimodal.policy import supported_image_mime_types_sorted
+from app.core.multimodal.policy import (
+    supported_document_mime_types_sorted,
+    supported_image_mime_types_sorted,
+)
 from app.core.multimodal.validation import (
     MultimodalInputValidationError,
+    normalize_document_mime_type,
     normalize_image_mime_type,
+    validate_supported_document_mime_type,
     validate_supported_image_mime_type,
 )
 from app.models.requests import ImageInput
@@ -13,6 +18,7 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _JPEG_SIGNATURE = b"\xff\xd8\xff"
 _WEBP_RIFF_SIGNATURE = b"RIFF"
 _WEBP_FORMAT_SIGNATURE = b"WEBP"
+_PDF_SIGNATURE = b"%PDF-"
 _GENERIC_BINARY_MIME_TYPES = frozenset({"application/octet-stream"})
 
 
@@ -61,6 +67,33 @@ def validate_uploaded_image_payload(
         return validated_declared_mime_type
 
     return detected_mime_type
+
+
+def validate_uploaded_pdf_payload(
+    *,
+    content_prefix: bytes,
+    declared_mime_type: str | None,
+    filename: str | None,
+    index: int,
+) -> str:
+    context = f"documents[{index}]"
+    normalized_declared_mime_type = normalize_document_mime_type(declared_mime_type)
+    if normalized_declared_mime_type in _GENERIC_BINARY_MIME_TYPES:
+        normalized_declared_mime_type = None
+
+    if not content_prefix:
+        raise MultimodalInputValidationError(f"Uploaded PDF payload is empty for {context}")
+
+    if not content_prefix.startswith(_PDF_SIGNATURE):
+        label = filename or context
+        raise MultimodalInputValidationError(
+            f"Uploaded file '{label}' is not a supported PDF. Supported values: {supported_document_mime_types_sorted()}"
+        )
+
+    if normalized_declared_mime_type is not None:
+        return validate_supported_document_mime_type(normalized_declared_mime_type, context=context)
+
+    return "application/pdf"
 
 
 def build_image_input_from_upload(

@@ -74,6 +74,17 @@ class QueryInputImageSummary(BaseModel):
     asset_id_present: bool = Field(False, description="True when the input references a stored session asset")
 
 
+class QueryInputDocumentSummary(BaseModel):
+    """Safe summary of a PDF attached to a multimodal request or tool invocation."""
+
+    asset_kind: str = Field("document", description="Logical asset kind for future multimodal extensibility")
+    source_type: Literal["upload"] = Field("upload", description="How the PDF was provided")
+    mime_type: Optional[str] = Field(None, description="Declared MIME type when available")
+    data_size_bytes: Optional[int] = Field(None, description="Known uploaded PDF size")
+    filename_present: bool = Field(False, description="True when the original upload included a filename")
+    asset_id_present: bool = Field(False, description="True when the input references a stored session asset")
+
+
 class QueryInputPayloadSummary(BaseModel):
     """Safe summary of structured multimodal input."""
 
@@ -82,6 +93,9 @@ class QueryInputPayloadSummary(BaseModel):
     image_count: int = Field(..., description="Number of images attached to the request")
     total_image_bytes: int = Field(0, description="Known total decoded image size across all attached images")
     images: List[QueryInputImageSummary] = Field(default_factory=list, description="Safe image summaries")
+    document_count: int = Field(0, description="Number of PDFs attached to the request")
+    total_document_bytes: int = Field(0, description="Known total uploaded PDF size across the request")
+    documents: List[QueryInputDocumentSummary] = Field(default_factory=list, description="Safe PDF summaries")
 
 
 class QueryOperationMultimodalInput(BaseModel):
@@ -98,6 +112,10 @@ class QueryOperationToolInput(BaseModel):
     server_name: Optional[str] = Field(None, description="Specific server name to use")
     tool_name: str = Field(..., description="Direct MCP tool name to invoke")
     arguments: Dict[str, Any] = Field(default_factory=dict, description="Tool arguments")
+    uploaded_documents: Optional[List[QueryInputDocumentSummary]] = Field(
+        default=None,
+        description="Safe summary of bridge-managed PDF uploads attached to the tool call",
+    )
 
 
 class QueryOperationMetadata(BaseModel):

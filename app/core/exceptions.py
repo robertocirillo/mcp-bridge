@@ -159,6 +159,36 @@ class ImageInputNotSupportedError(ConfigurationError):
         super().__init__(message)
 
 
+class PDFInputNotSupportedError(ConfigurationError):
+    """Raised when the configured provider/model cannot accept PDF inputs."""
+
+    def __init__(
+        self,
+        *,
+        provider: str,
+        model: str,
+        reason: str,
+        message: str | None = None,
+    ):
+        self.provider = provider
+        self.model = model
+        self.reason = reason
+
+        if message is None:
+            if reason == "text_only":
+                message = (
+                    f"Configured model '{model}' for provider '{provider}' does not support PDF inputs. "
+                    "Remove PDFs or configure a PDF-capable model."
+                )
+            else:
+                message = (
+                    f"Configured model '{model}' for provider '{provider}' is not recognized as PDF-capable. "
+                    "Remove PDFs or configure a PDF-capable model."
+                )
+
+        super().__init__(message)
+
+
 class TemporaryUploadError(MCPAPIException):
     """Raised when temporary multipart upload storage fails."""
 

@@ -13,7 +13,7 @@ from fastapi import UploadFile
 
 from app.core.exceptions import TemporaryUploadError, TemporaryUploadNotFoundError
 from app.core.multimodal.uploads import validate_uploaded_image_payload
-from app.core.multimodal.validation import validate_total_image_bytes
+from app.core.multimodal.validation import validate_total_document_bytes, validate_total_image_bytes
 
 from .cleanup import file_is_stale, remove_dir_if_empty, stale_cutoff
 from .models import SessionAsset
@@ -138,6 +138,34 @@ class LocalTemporarySessionAssetStore:
             size_validator=validate_total_image_bytes,
         )
 
+    async def persist_document_upload(
+        self,
+        *,
+        session_id: str,
+        upload: UploadFile,
+        index: int,
+        current_total_bytes: int,
+        content_validator: AssetContentValidator,
+    ) -> SessionAsset:
+        return await self.persist_upload(
+            session_id=session_id,
+            upload=upload,
+            index=index,
+            kind="document",
+            purpose="input_document",
+            current_total_bytes=current_total_bytes,
+            content_validator=content_validator,
+            size_validator=validate_total_document_bytes,
+        )
+
+    async def get_asset(
+        self,
+        *,
+        session_id: str,
+        asset_id: str,
+    ) -> SessionAsset:
+        return await self._get_asset(session_id=session_id, asset_id=asset_id)
+
     async def read_bytes(
         self,
         *,
@@ -161,6 +189,14 @@ class LocalTemporarySessionAssetStore:
         return content
 
     async def read_image_bytes(
+        self,
+        *,
+        session_id: str,
+        asset_id: str,
+    ) -> bytes:
+        return await self.read_bytes(session_id=session_id, asset_id=asset_id)
+
+    async def read_document_bytes(
         self,
         *,
         session_id: str,

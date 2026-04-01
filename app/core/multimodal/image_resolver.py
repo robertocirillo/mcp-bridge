@@ -3,24 +3,28 @@ from __future__ import annotations
 from typing import Optional
 
 from app.core.multimodal.image_data import (
+    ResolvedDocumentInput,
     ResolvedImageInput,
     ResolvedQueryInputPayload,
+    encode_bytes_to_base64,
     encode_image_bytes_to_base64,
 )
 from app.core.multimodal.image_fetch import RemoteImageFetcher
 from app.core.session_assets.local_store import LocalTemporarySessionAssetStore
 from app.core.multimodal.validation import (
+    validate_resolved_document,
     calculate_remaining_image_budget,
     estimate_base64_size,
     validate_multimodal_request_precheck,
     validate_resolved_image,
+    validate_total_document_bytes,
     validate_total_image_bytes,
 )
-from app.models.requests import ImageInput, QueryInputPayload
+from app.models.requests import DocumentInput, ImageInput, QueryInputPayload
 
 
-class QueryImageResolver:
-    """Normalize structured multimodal image inputs into provider-ready data URLs."""
+class QueryAssetResolver:
+    """Normalize structured multimodal image and PDF inputs into provider-ready payloads."""
 
     def __init__(
         self,
@@ -40,7 +44,10 @@ class QueryImageResolver:
         if isinstance(query_input, str):
             return query_input
 
-        validate_multimodal_request_precheck(query_input.images)
+        validate_multimodal_request_precheck(
+            query_input.images,
+            query_input.documents,
+        )
 
         images: list[ResolvedImageInput] = []
         total_image_bytes = 0
@@ -55,9 +62,22 @@ class QueryImageResolver:
             total_image_bytes += validate_resolved_image(images[-1], index=index)
             validate_total_image_bytes(total_image_bytes)
 
+        documents: list[ResolvedDocumentInput] = []
+        total_document_bytes = 0
+        for index, document in enumerate(query_input.documents):
+            documents.append(
+                await self._resolve_document(
+                    document,
+                    session_id=session_id,
+                )
+            )
+            total_document_bytes += validate_resolved_document(documents[-1], index=index)
+            validate_total_document_bytes(total_document_bytes)
+
         return ResolvedQueryInputPayload(
             text=query_input.text,
             images=images,
+            documents=documents,
         )
 
     async def _resolve_image(
@@ -103,3 +123,29 @@ class QueryImageResolver:
             data_size_bytes=len(fetched_image.content),
             source_url=image.url,
         )
+
+    async def _resolve_document(
+        self,
+        document: DocumentInput,
+        *,
+        session_id: str | None,
+    ) -> ResolvedDocumentInput:
+        if self._upload_store is None:
+            raise ValueError("Temporary upload store is not configured")
+        if session_id is None:
+            raise ValueError("Session context is required to resolve uploaded PDF documents")
+
+        document_bytes = await self._upload_store.read_document_bytes(
+            session_id=session_id,
+            asset_id=document.asset_id or "",
+        )
+        return ResolvedDocumentInput(
+            source_type="upload",
+            mime_type=document.mime_type or "",
+            base64_data=encode_bytes_to_base64(document_bytes),
+            data_size_bytes=len(document_bytes),
+            filename=document.filename,
+        )
+
+
+QueryImageResolver = QueryAssetResolver

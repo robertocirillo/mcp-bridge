@@ -37,6 +37,7 @@ async def execute_multipart_query(
     max_steps: Annotated[int | None, Form()] = None,
     server_name: Annotated[str | None, Form()] = None,
     images: Annotated[list[UploadFile] | None, File()] = None,
+    documents: Annotated[list[UploadFile] | None, File()] = None,
 ):
     """Execute a synchronous multimodal query from multipart form-data uploads."""
     return await query_service.execute_multipart_query(
@@ -45,6 +46,7 @@ async def execute_multipart_query(
         max_steps=max_steps,
         server_name=server_name,
         images=images,
+        documents=documents,
         tenant_ctx=tenant_ctx,
         session_manager=session_manager,
     )
@@ -74,7 +76,10 @@ async def create_multipart_query_operation(
     text: Annotated[str | None, Form()] = None,
     max_steps: Annotated[int | None, Form()] = None,
     server_name: Annotated[str | None, Form()] = None,
+    tool_name: Annotated[str | None, Form()] = None,
+    arguments: Annotated[str | None, Form()] = None,
     images: Annotated[list[UploadFile] | None, File()] = None,
+    documents: Annotated[list[UploadFile] | None, File()] = None,
 ):
     """Create an asynchronous multimodal query operation from multipart form-data uploads."""
     return await query_service.create_multipart_query_operation(
@@ -82,7 +87,10 @@ async def create_multipart_query_operation(
         text=text,
         max_steps=max_steps,
         server_name=server_name,
+        tool_name=tool_name,
+        arguments=arguments,
         images=images,
+        documents=documents,
         tenant_ctx=tenant_ctx,
         session_manager=session_manager,
     )

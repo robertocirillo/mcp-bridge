@@ -24,6 +24,7 @@ from app.core.exceptions import (
     ConfigurationError,
     MCPWrapperError,
     ImageInputNotSupportedError,
+    PDFInputNotSupportedError,
     QueryOperationElicitationDeclinedError,
 )
 from app.core.guardrails.runner import GuardrailExecutionContext, GuardrailRunner
@@ -32,11 +33,12 @@ from app.core.multimodal.model_query import (
     build_model_query,
     describe_query_input,
     extract_query_text,
+    has_query_pdf_input,
     has_query_visual_input,
     replace_query_text,
     sanitize_multimodal_error,
 )
-from app.core.multimodal.capabilities import ensure_image_input_supported
+from app.core.multimodal.capabilities import ensure_image_input_supported, ensure_pdf_input_supported
 from app.core.multimodal.image_fetch import RemoteImageFetchError
 from app.core.multimodal.image_resolver import QueryImageResolver
 from app.core.audit.mcp_audit import AuditEvent, InMemoryAuditRecorder, utc_now_iso
@@ -1107,7 +1109,11 @@ class MCPWrapper:
             # Run input guardrails before the query reaches the model or any MCP tool.
             ctx = await self._run_before_model_guardrails(ctx)
             guarded_query_input = replace_query_text(query_input, text=ctx.query)
-            if not (ctx.query or "").strip() and not has_query_visual_input(guarded_query_input):
+            if (
+                not (ctx.query or "").strip()
+                and not has_query_visual_input(guarded_query_input)
+                and not has_query_pdf_input(guarded_query_input)
+            ):
                 raise ValueError("Empty query not allowed")
 
             # Track the active server so policy and audit logic can attribute tool calls correctly.
@@ -1120,6 +1126,8 @@ class MCPWrapper:
 
             if has_query_visual_input(guarded_query_input):
                 ensure_image_input_supported(provider=self.llm_provider, model=self.model)
+            if has_query_pdf_input(guarded_query_input):
+                ensure_pdf_input_supported(provider=self.llm_provider, model=self.model)
 
             prepared_query_input = await self._query_image_resolver.resolve(
                 guarded_query_input,
@@ -1127,7 +1135,9 @@ class MCPWrapper:
             )
 
             # Build the agent run payload and optionally scope it to a specific configured server.
-            run_kwargs: Dict[str, Any] = {"query": build_model_query(prepared_query_input)}
+            run_kwargs: Dict[str, Any] = {
+                "query": build_model_query(prepared_query_input, provider=self.llm_provider)
+            }
             if max_steps is not None:
                 run_kwargs["max_steps"] = max_steps
             if server_name:
@@ -1219,6 +1229,13 @@ class MCPWrapper:
                 event_type="query_execution",
                 outcome="blocked",
                 details={"reason": "image_input_not_supported", "server_name": server_name},
+            )
+            raise
+        except PDFInputNotSupportedError:
+            self._record_audit_event(
+                event_type="query_execution",
+                outcome="blocked",
+                details={"reason": "pdf_input_not_supported", "server_name": server_name},
             )
             raise
         except Exception as exc:

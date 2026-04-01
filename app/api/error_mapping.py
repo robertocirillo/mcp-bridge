@@ -15,6 +15,7 @@ from app.core.exceptions import (
     MCPCapabilityUpstreamError,
     MCPWrapperError,
     MaxSessionsExceededError,
+    PDFInputNotSupportedError,
     QueryOperationElicitationExpiredError,
     QueryOperationElicitationUnavailableError,
     QueryOperationNotFoundError,
@@ -235,6 +236,17 @@ def map_query_error(
         return tenant_http_error(
             400,
             "MCP_IMAGE_INPUT_NOT_SUPPORTED",
+            str(exc),
+            tenant_ctx=tenant_ctx,
+            provider=getattr(exc, "provider", None),
+            model=getattr(exc, "model", None),
+            reason=getattr(exc, "reason", None),
+            **context,
+        )
+    if isinstance(exc, PDFInputNotSupportedError):
+        return tenant_http_error(
+            400,
+            "MCP_PDF_INPUT_NOT_SUPPORTED",
             str(exc),
             tenant_ctx=tenant_ctx,
             provider=getattr(exc, "provider", None),
