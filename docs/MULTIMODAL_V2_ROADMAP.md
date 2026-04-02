@@ -4,10 +4,10 @@ Roadmap and design notes for the next evolution of multimodal/file support in **
 
 This version updates the previous roadmap with the following decisions:
 
-- the work previously thought of as **0.2.1** should be **incorporated into 0.2.0** before re-cutting the tag/release
-- the original sequencing remains valid: **finish multipart image support and lifecycle hardening first**
-- **PDF support** should be the **first non-image format**, implemented **immediately after** the image multipart + cleanup milestone
-- for PDF support toward LLMs, the preferred strategy is **pass-through with capability gating**, **not** unconditional bridge-side text extraction and **not** blind pass-through
+- the work previously thought of as **0.2.1** has now been **incorporated into the consolidated 0.2.0**
+- the original sequencing remained valid: multipart image support and lifecycle hardening landed before the first document format
+- **PDF support** is now the **first non-image format** included in the consolidated `0.2.0`
+- for PDF support toward LLMs, the chosen strategy is **pass-through with capability gating**, **not** unconditional bridge-side text extraction and **not** blind pass-through
 
 ---
 
@@ -96,11 +96,11 @@ Regardless of backend storage choice (local temp storage first, S3 later), asset
 2. fallback cleanup via TTL / background garbage collection
 3. cleanup logic must be idempotent and resilient to crashes/restarts
 
-### D6 - PDF is the first non-image format to add after the multipart image milestone
+### D6 - PDF is the first non-image format included in the consolidated 0.2.0
 
 **Accepted**
 
-The first extension beyond images should be **PDF only**, immediately after the multipart image milestone is complete.
+The first extension beyond images is **PDF only**, added after the multipart image milestone and folded into the consolidated `0.2.0`.
 
 Reason:
 
@@ -272,12 +272,13 @@ For PDFs, the design does **not** need to force image-style normalization if the
 
 ## 7. Updated roadmap
 
-Implementation status for the current branch/release target:
+Implementation status for the consolidated `0.2.0` target:
 
 - capability preflight now happens before sync execution and before async query-operation creation
 - multipart sync and async flows both use session-scoped temporary assets plus the same normalized upload resolution path
 - local temporary assets now persist minimal metadata on disk so TTL cleanup remains idempotent and restart-safe
-- the public API remains image-focused for 0.2.0, while the internal storage abstraction is now session-asset oriented for the next PDF milestone
+- multipart PDF uploads are now supported for LLM queries and for direct MCP tool invocation within the scoped bridge-owned asset flow
+- the consolidated `0.2.0` now includes multipart images, cleanup/lifecycle hardening, and the first PDF milestone; broader file support and S3 remain future work
 
 ## Phase 1 - foundation hardening (to be incorporated into 0.2.0)
 
@@ -376,9 +377,9 @@ Requirements:
 - resilience to crash/restart scenarios
 - idempotent delete operations
 
-## Phase 4 - PDF support immediately after the 0.2.0 consolidation
+## Phase 4 - PDF support (included in the consolidated 0.2.0)
 
-This phase should start **immediately after** Phase 1-3 are completed and folded into the final 0.2.0 release.
+This phase is now part of the final consolidated `0.2.0` release.
 
 ### 9. Add PDF as the first non-image session asset type
 
@@ -449,7 +450,7 @@ This should be designed carefully to avoid over-coupling the visual builder to s
 
 ---
 
-## 8. Non-goals for the current 0.2.0 consolidation and immediate next step
+## 8. Non-goals for the consolidated 0.2.0
 
 The current delivery should **not** try to solve everything at once.
 
@@ -468,14 +469,13 @@ Not required in the consolidated 0.2.0:
 Current agreed direction:
 
 1. keep the current V1/V1.5 multimodal base
-2. complete foundation hardening + multipart image support + cleanup/lifecycle
-3. fold that work into the final **0.2.0** release
-4. immediately after, add **PDF** as the first non-image format
-5. for PDF toward MCP servers, support controlled pass-through/runtime use
-6. for PDF toward LLMs, use **capability gating + pass-through**
-7. defer PDF text extraction to a later optional phase if needed
-8. only later expand to broader file classes
-9. only after that, introduce S3-compatible storage if still justified
+2. complete foundation hardening + multipart image support + cleanup/lifecycle + scoped PDF support
+3. fold all of that into the final **0.2.0** release
+4. for PDF toward MCP servers, support controlled pass-through/runtime use
+5. for PDF toward LLMs, use **capability gating + pass-through**
+6. defer PDF text extraction to a later optional phase if needed
+7. only later expand to broader file classes
+8. only after that, introduce S3-compatible storage if still justified
 
 ---
 
@@ -487,7 +487,7 @@ For the work being folded into the final 0.2.0:
 - `feature/multimodal-image-sources-v2`
 - `feature/multipart-images-hardening`
 
-For the PDF phase that follows immediately after:
+For the PDF tranche that was folded into the consolidated 0.2.0:
 
 - `feature/pdf-session-assets`
 - `feature/pdf-pass-through-v1`
@@ -500,9 +500,7 @@ For the PDF phase that follows immediately after:
 When continuing this topic in a new chat, the assistant should be told that:
 
 - V1/V1.5 already exists and works
-- the immediate priority is to finish multipart images plus cleanup/lifecycle
-- that work should be folded into the final 0.2.0 release
-- immediately after that, PDF is the first non-image format to add
+- the consolidated `0.2.0` already includes multipart images, cleanup/lifecycle hardening, and scoped PDF support
 - PDF toward LLMs should use capability gating + pass-through
 - PDF text extraction is intentionally deferred
 - broader generic file support comes after PDF, not before
