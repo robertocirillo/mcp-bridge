@@ -248,26 +248,35 @@ async def test_build_model_query_converts_uploaded_pdf_for_openai(monkeypatch, t
 
 
 @pytest.mark.asyncio
-async def test_build_multipart_query_operation_request_requires_documents_for_direct_tool_invocation(tmp_path):
+async def test_build_multipart_query_operation_request_builds_query_only_request(tmp_path):
     from app.api.services.multipart_query import build_multipart_query_operation_request
     from app.core.session_assets.local_store import LocalTemporarySessionAssetStore
 
     store = LocalTemporarySessionAssetStore(root_dir=tmp_path, ttl_seconds=3600)
 
-    with pytest.raises(MultimodalInputValidationError) as exc_info:
-        await build_multipart_query_operation_request(
-            session_id="s1",
-            text=None,
-            max_steps=None,
-            server_name="filesystem",
-            tool_name="analyze_pdf",
-            arguments='{"topic":"contracts"}',
-            images=None,
-            documents=[],
-            asset_store=store,
-        )
+    request, asset_ids = await build_multipart_query_operation_request(
+        session_id="s1",
+        text="summarize this",
+        max_steps=5,
+        server_name="filesystem",
+        images=None,
+        documents=None,
+        asset_store=store,
+    )
 
-    assert str(exc_info.value) == "Field 'documents' is required when 'tool_name' is provided"
+    assert request.model_dump() == {
+        "query": None,
+        "input": {
+            "text": "summarize this",
+            "images": [],
+            "documents": [],
+        },
+        "max_steps": 5,
+        "server_name": "filesystem",
+        "tool_name": None,
+        "arguments": {},
+    }
+    assert asset_ids == []
 
 
 @pytest.mark.asyncio

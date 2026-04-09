@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from fastapi import UploadFile
 
 from app.core.session_assets.local_store import LocalTemporarySessionAssetStore
-from app.core.multimodal.tool_documents import BRIDGE_UPLOADED_DOCUMENTS_ARGUMENT
 from app.core.multimodal.uploads import validate_uploaded_image_payload, validate_uploaded_pdf_payload
 from app.core.multimodal.validation import (
     MultimodalInputValidationError,
@@ -51,20 +49,6 @@ def _validate_multipart_query_payload(
     raise MultimodalInputValidationError(
         "At least one of 'text', 'images', or 'documents' must be provided in multipart input"
     )
-
-
-def _parse_tool_arguments(arguments: str | None) -> dict:
-    if arguments is None or not arguments.strip():
-        return {}
-    try:
-        parsed = json.loads(arguments)
-    except json.JSONDecodeError as exc:
-        raise MultimodalInputValidationError("Field 'arguments' must be a valid JSON object") from exc
-    if parsed is None:
-        return {}
-    if not isinstance(parsed, dict):
-        raise MultimodalInputValidationError("Field 'arguments' must decode to a JSON object")
-    return parsed
 
 
 async def _persist_document_uploads(
@@ -133,35 +117,6 @@ async def _persist_image_uploads(
             }
         )
     return image_inputs
-
-
-def _build_tool_request_from_uploaded_documents(
-    *,
-    tool_name: str,
-    server_name: str | None,
-    arguments: str | None,
-    document_inputs: list[dict[str, object]],
-) -> QueryOperationCreateRequest:
-    parsed_arguments = _parse_tool_arguments(arguments)
-    if parsed_arguments.get(BRIDGE_UPLOADED_DOCUMENTS_ARGUMENT) is not None:
-        raise MultimodalInputValidationError(
-            f"Field 'arguments.{BRIDGE_UPLOADED_DOCUMENTS_ARGUMENT}' is reserved by the bridge"
-        )
-    parsed_arguments[BRIDGE_UPLOADED_DOCUMENTS_ARGUMENT] = [
-        {
-            "asset_id": str(document["asset_id"]),
-            "asset_kind": "document",
-            "mime_type": document.get("mime_type"),
-            "filename": document.get("filename"),
-            "size_bytes": document.get("size_bytes"),
-        }
-        for document in document_inputs
-    ]
-    return QueryOperationCreateRequest(
-        tool_name=tool_name,
-        server_name=server_name,
-        arguments=parsed_arguments,
-    )
 
 
 async def prepare_multipart_query_input(
@@ -244,48 +199,10 @@ async def build_multipart_query_operation_request(
     text: str | None,
     max_steps: int | None,
     server_name: str | None,
-    tool_name: str | None,
-    arguments: str | None,
     images: Sequence[UploadFile] | None,
     documents: Sequence[UploadFile] | None,
     asset_store: LocalTemporarySessionAssetStore,
 ) -> tuple[QueryOperationCreateRequest, list[str]]:
-    if tool_name is not None:
-        if (text or "").strip():
-            raise MultimodalInputValidationError("Field 'text' is not allowed when 'tool_name' is provided")
-        if max_steps is not None:
-            raise MultimodalInputValidationError("Field 'max_steps' is not allowed when 'tool_name' is provided")
-        if images:
-            raise MultimodalInputValidationError(
-                "Field 'images' is not supported for multipart direct tool invocation"
-            )
-        upload_documents = _filter_upload_files(documents, field_name="documents")
-        if not upload_documents:
-            raise MultimodalInputValidationError("Field 'documents' is required when 'tool_name' is provided")
-        stored_asset_ids: list[str] = []
-        try:
-            document_inputs = await _persist_document_uploads(
-                session_id=session_id,
-                documents=upload_documents,
-                asset_store=asset_store,
-                stored_asset_ids=stored_asset_ids,
-            )
-            return (
-                _build_tool_request_from_uploaded_documents(
-                    tool_name=tool_name,
-                    server_name=server_name,
-                    arguments=arguments,
-                    document_inputs=document_inputs,
-                ),
-                stored_asset_ids,
-            )
-        except Exception:
-            await asset_store.delete_assets(session_id=session_id, asset_ids=stored_asset_ids)
-            raise
-
-    if arguments is not None and arguments.strip():
-        raise MultimodalInputValidationError("Field 'arguments' is only supported when 'tool_name' is provided")
-
     prepared = await prepare_multipart_query_input(
         session_id=session_id,
         text=text,

@@ -12,6 +12,11 @@ from httpx import ASGITransport, AsyncClient
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 16
 PDF_BYTES = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
+MULTIPART_DIRECT_TOOL_INVOCATION_NOT_SUPPORTED_MESSAGE = (
+    "Multipart direct tool invocation with uploaded documents is not supported in 0.2.0. "
+    "Use POST /sessions/{session_id}/query-operations with JSON arguments. "
+    "If the MCP server is path-based, pass a file_path reachable by that server."
+)
 
 
 def _build_test_api(
@@ -120,20 +125,10 @@ def _build_test_api(
 
         async def call_tool(self, tool_name, arguments=None, server_name=None):
             self.last_server_used = server_name
-            uploaded_documents = list((arguments or {}).get("_bridge_uploaded_documents") or [])
             return {
                 "tool_name": tool_name,
                 "server_name": server_name,
-                "topic": (arguments or {}).get("topic"),
-                "uploaded_documents": [
-                    {
-                        "mime_type": document.get("mime_type"),
-                        "filename": document.get("filename"),
-                        "size_bytes": document.get("size_bytes"),
-                        "has_base64": bool(document.get("data_base64")),
-                    }
-                    for document in uploaded_documents
-                ],
+                "arguments": arguments or {},
             }
 
     monkeypatch.setattr("app.core.sessions.manager.MCPWrapper", DummyMCPWrapper)
@@ -297,6 +292,27 @@ def test_multipart_query_rejects_non_pdf_upload_with_clear_error(monkeypatch):
     assert "not a supported PDF" in detail["message"]
 
 
+def test_query_operations_multipart_openapi_is_query_only(monkeypatch):
+    client, _mgr = _build_test_client(monkeypatch)
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    multipart_operation = body["paths"]["/sessions/{session_id}/query-operations-multipart"]["post"]
+    schema_ref = multipart_operation["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"]
+    schema_name = schema_ref.rsplit("/", 1)[-1]
+    properties = body["components"]["schemas"][schema_name]["properties"]
+
+    assert "text" in properties
+    assert "max_steps" in properties
+    assert "server_name" in properties
+    assert "images" in properties
+    assert "documents" in properties
+    assert "tool_name" not in properties
+    assert "arguments" not in properties
+
+
 @pytest.mark.asyncio
 async def test_multipart_query_operation_accepts_text_plus_one_image(monkeypatch, tmp_path):
     app, _mgr = _build_test_api(monkeypatch, upload_root=tmp_path)
@@ -444,13 +460,13 @@ async def test_multipart_query_operation_accepts_pdf_for_pdf_capable_model(monke
 
 
 @pytest.mark.asyncio
-async def test_multipart_query_operation_direct_tool_invocation_passes_pdf_to_tool(monkeypatch, tmp_path):
+async def test_multipart_query_operation_rejects_direct_tool_invocation_with_documents(monkeypatch, tmp_path):
     app, _mgr = _build_test_api(monkeypatch, upload_root=tmp_path)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         session_id = await _create_session_async(client, provider="ollama", model="llava")
 
-        create_response = await client.post(
+        response = await client.post(
             f"/sessions/{session_id}/query-operations-multipart",
             data={
                 "tool_name": "analyze_pdf",
@@ -461,49 +477,16 @@ async def test_multipart_query_operation_direct_tool_invocation_passes_pdf_to_to
             headers={"X-Tenant-Id": "tenant-a"},
         )
 
-        assert create_response.status_code == 200, create_response.text
-        create_body = create_response.json()
-        assert create_body["metadata"]["request"] == {
-            "server_name": "filesystem",
-            "tool_name": "analyze_pdf",
-            "arguments": {"topic": "contracts"},
-            "uploaded_documents": [
-                {
-                    "asset_kind": "document",
-                    "source_type": "upload",
-                    "mime_type": "application/pdf",
-                    "data_size_bytes": len(PDF_BYTES),
-                    "filename_present": True,
-                    "asset_id_present": True,
-                }
-            ],
-        }
-
-        final_body = await _wait_for_operation_status(
-            client,
-            session_id=session_id,
-            operation_id=create_body["operation_id"],
-            expected_status="completed",
-        )
-
-        assert final_body["result"]["result"] == {
-            "tool_name": "analyze_pdf",
-            "server_name": "filesystem",
-            "topic": "contracts",
-            "uploaded_documents": [
-                {
-                    "mime_type": "application/pdf",
-                    "filename": "report.pdf",
-                    "size_bytes": len(PDF_BYTES),
-                    "has_base64": True,
-                }
-            ],
-        }
+        assert response.status_code == 400, response.text
+        detail = response.json()["detail"]
+        assert detail["code"] == "MCP_SCHEMA_ERROR"
+        assert detail["operation"] == "create_multipart_query_operation"
+        assert detail["message"] == MULTIPART_DIRECT_TOOL_INVOCATION_NOT_SUPPORTED_MESSAGE
         assert not (tmp_path / session_id).exists()
 
 
 @pytest.mark.asyncio
-async def test_multipart_query_operation_direct_tool_invocation_requires_documents(monkeypatch, tmp_path):
+async def test_multipart_query_operation_rejects_tool_name_without_documents(monkeypatch, tmp_path):
     app, _mgr = _build_test_api(monkeypatch, upload_root=tmp_path)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -523,7 +506,32 @@ async def test_multipart_query_operation_direct_tool_invocation_requires_documen
         detail = response.json()["detail"]
         assert detail["code"] == "MCP_SCHEMA_ERROR"
         assert detail["operation"] == "create_multipart_query_operation"
-        assert detail["message"] == "Field 'documents' is required when 'tool_name' is provided"
+        assert detail["message"] == MULTIPART_DIRECT_TOOL_INVOCATION_NOT_SUPPORTED_MESSAGE
+        assert not (tmp_path / session_id).exists()
+
+
+@pytest.mark.asyncio
+async def test_multipart_query_operation_rejects_arguments_without_tool_name(monkeypatch, tmp_path):
+    app, _mgr = _build_test_api(monkeypatch, upload_root=tmp_path)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(client, provider="ollama", model="llava")
+
+        response = await client.post(
+            f"/sessions/{session_id}/query-operations-multipart",
+            data={
+                "server_name": "filesystem",
+                "arguments": '{"topic":"contracts"}',
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]
+        assert detail["code"] == "MCP_SCHEMA_ERROR"
+        assert detail["operation"] == "create_multipart_query_operation"
+        assert detail["message"] == MULTIPART_DIRECT_TOOL_INVOCATION_NOT_SUPPORTED_MESSAGE
+        assert not (tmp_path / session_id).exists()
 
 
 @pytest.mark.asyncio
@@ -662,3 +670,42 @@ async def test_existing_json_query_operation_route_still_works(monkeypatch, tmp_
         )
 
         assert final_body["result"]["result"] == "QUERY:hello async"
+
+
+@pytest.mark.asyncio
+async def test_existing_json_query_operation_direct_tool_invocation_still_works(monkeypatch, tmp_path):
+    app, _mgr = _build_test_api(monkeypatch, upload_root=tmp_path)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(client, model="dummy")
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations",
+            json={
+                "server_name": "filesystem",
+                "tool_name": "analyze_pdf",
+                "arguments": {"topic": "contracts"},
+            },
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+
+        assert create_response.status_code == 200, create_response.text
+        create_body = create_response.json()
+        assert create_body["metadata"]["request"] == {
+            "server_name": "filesystem",
+            "tool_name": "analyze_pdf",
+            "arguments": {"topic": "contracts"},
+        }
+
+        final_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=create_body["operation_id"],
+            expected_status="completed",
+        )
+
+        assert final_body["result"]["result"] == {
+            "tool_name": "analyze_pdf",
+            "server_name": "filesystem",
+            "arguments": {"topic": "contracts"},
+        }

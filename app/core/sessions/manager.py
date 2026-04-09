@@ -18,10 +18,6 @@ from app.core.exceptions import (
 from app.core.multimodal.image_resolver import QueryImageResolver
 from app.core.multimodal.model_query import resolve_request_query
 from app.core.multimodal.preflight import validate_multimodal_query_request
-from app.core.multimodal.tool_documents import (
-    extract_uploaded_document_asset_refs,
-    resolve_uploaded_document_arguments,
-)
 from app.core.session_assets.local_store import LocalTemporarySessionAssetStore
 from app.core.runtime.mcp_wrapper import MCPWrapper
 from app.core.sessions.query_operation_store import (
@@ -535,14 +531,9 @@ class SessionManager:
                 session_id=session_id,
             ):
                 if request.tool_name is not None:
-                    resolved_arguments = await resolve_uploaded_document_arguments(
-                        session_id=session_id,
-                        arguments=request.arguments,
-                        asset_store=self._temporary_asset_store,
-                    )
                     result = await wrapper.call_tool(
                         tool_name=request.tool_name,
-                        arguments=resolved_arguments,
+                        arguments=request.arguments,
                         server_name=request.server_name,
                     )
                     serialized_result = serialize_operation_result(result)
@@ -689,9 +680,4 @@ def _extract_temporary_session_asset_ids(request: QueryOperationCreateRequest | 
             if document.source_type != "upload" or not document.asset_id:
                 continue
             asset_ids.append(document.asset_id)
-
-    for document_ref in extract_uploaded_document_asset_refs(request.arguments):
-        asset_id = document_ref.get("asset_id")
-        if isinstance(asset_id, str) and asset_id not in asset_ids:
-            asset_ids.append(asset_id)
     return asset_ids

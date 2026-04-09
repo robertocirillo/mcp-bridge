@@ -17,9 +17,27 @@ from app.api.services.multipart_query import (
 )
 from app.core.multimodal.preflight import validate_multimodal_query_request
 from app.core.multimodal.model_query import resolve_request_query
+from app.core.multimodal.validation import MultimodalInputValidationError
 from app.core.sessions.manager import SessionManager
 from app.models.requests import QueryOperationCreateRequest, QueryOperationResumeRequest, QueryRequest
 from app.models.responses import QueryOperationResponse, QueryResponse
+
+MULTIPART_DIRECT_TOOL_INVOCATION_NOT_SUPPORTED_MESSAGE = (
+    "Multipart direct tool invocation with uploaded documents is not supported in 0.2.0. "
+    "Use POST /sessions/{session_id}/query-operations with JSON arguments. "
+    "If the MCP server is path-based, pass a file_path reachable by that server."
+)
+
+
+def _multipart_field_has_non_empty_value(values: Sequence[object] | None) -> bool:
+    for value in values or ():
+        if isinstance(value, str):
+            if value.strip():
+                return True
+            continue
+        if value is not None:
+            return True
+    return False
 
 
 async def _execute_query_request(
@@ -175,8 +193,8 @@ async def create_multipart_query_operation(
     text: str | None,
     max_steps: int | None,
     server_name: str | None,
-    tool_name: str | None,
-    arguments: str | None,
+    raw_tool_name_values: Sequence[object] | None,
+    raw_arguments_values: Sequence[object] | None,
     images: Sequence[UploadFile] | None,
     documents: Sequence[UploadFile] | None,
     tenant_ctx: TenantContext,
@@ -185,13 +203,16 @@ async def create_multipart_query_operation(
     asset_ids: list[str] = []
     operation_created = False
     try:
+        if (
+            _multipart_field_has_non_empty_value(raw_tool_name_values)
+            or _multipart_field_has_non_empty_value(raw_arguments_values)
+        ):
+            raise MultimodalInputValidationError(MULTIPART_DIRECT_TOOL_INVOCATION_NOT_SUPPORTED_MESSAGE)
         request, asset_ids = await build_multipart_query_operation_request(
             session_id=session_id,
             text=text,
             max_steps=max_steps,
             server_name=server_name,
-            tool_name=tool_name,
-            arguments=arguments,
             images=images,
             documents=documents,
             asset_store=session_manager.temporary_asset_store,

@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
 from app.api.dependencies import TenantContext, get_session_manager, get_tenant_context
 from app.api.services import query_service
@@ -71,24 +71,24 @@ async def create_query_operation(
 @router.post("/{session_id}/query-operations-multipart", response_model=QueryOperationResponse)
 async def create_multipart_query_operation(
     session_id: str,
+    request: Request,
     tenant_ctx: TenantDep,
     session_manager: SessionManager = Depends(get_session_manager),
     text: Annotated[str | None, Form()] = None,
     max_steps: Annotated[int | None, Form()] = None,
     server_name: Annotated[str | None, Form()] = None,
-    tool_name: Annotated[str | None, Form()] = None,
-    arguments: Annotated[str | None, Form()] = None,
     images: Annotated[list[UploadFile] | None, File()] = None,
     documents: Annotated[list[UploadFile] | None, File()] = None,
 ):
     """Create an asynchronous multimodal query operation from multipart form-data uploads."""
+    form = await request.form()
     return await query_service.create_multipart_query_operation(
         session_id=session_id,
         text=text,
         max_steps=max_steps,
         server_name=server_name,
-        tool_name=tool_name,
-        arguments=arguments,
+        raw_tool_name_values=form.getlist("tool_name"),
+        raw_arguments_values=form.getlist("arguments"),
         images=images,
         documents=documents,
         tenant_ctx=tenant_ctx,

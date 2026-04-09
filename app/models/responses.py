@@ -75,7 +75,7 @@ class QueryInputImageSummary(BaseModel):
 
 
 class QueryInputDocumentSummary(BaseModel):
-    """Safe summary of a PDF attached to a multimodal request or tool invocation."""
+    """Safe summary of a PDF attached to a multimodal request."""
 
     asset_kind: str = Field("document", description="Logical asset kind for future multimodal extensibility")
     source_type: Literal["upload"] = Field("upload", description="How the PDF was provided")
@@ -112,10 +112,6 @@ class QueryOperationToolInput(BaseModel):
     server_name: Optional[str] = Field(None, description="Specific server name to use")
     tool_name: str = Field(..., description="Direct MCP tool name to invoke")
     arguments: Dict[str, Any] = Field(default_factory=dict, description="Tool arguments")
-    uploaded_documents: Optional[List[QueryInputDocumentSummary]] = Field(
-        default=None,
-        description="Safe summary of bridge-managed PDF uploads attached to the tool call",
-    )
 
 
 class QueryOperationMetadata(BaseModel):

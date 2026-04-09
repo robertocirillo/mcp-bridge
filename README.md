@@ -541,9 +541,9 @@ Text + image via base64:
 Notes:
 
 - If both `query` and `input` are provided, `input` wins.
-- `POST /sessions/{session_id}/query-operations` accepts the same query payload shapes.
+- `POST /sessions/{session_id}/query-operations` accepts the same query payload shapes and remains the supported JSON path for direct MCP tool invocation with `tool_name` plus `arguments`.
 - `POST /sessions/{session_id}/query-multipart` accepts uploaded image files via repeated `images` form parts and uploaded PDF files via repeated `documents` form parts for the synchronous query path.
-- `POST /sessions/{session_id}/query-operations-multipart` accepts the same multipart query form shape for asynchronous query execution, and also supports direct MCP tool invocation with `tool_name`, JSON-encoded `arguments`, and uploaded PDF files under `documents`.
+- `POST /sessions/{session_id}/query-operations-multipart` accepts the same multipart query form shape for asynchronous query execution only.
 - Base64 images are limited to `MAX_BASE64_IMAGE_DATA_LENGTH = 5_000_000` characters per image to keep request size and memory usage bounded in V1.
 - For `source_type="url"`, mcp-bridge downloads the image server-side, validates it, and converts it to an internal base64 data URL before calling the provider/runtime.
 - Remote image fetch accepts only `http`/`https`, uses a `5.0s` timeout, follows at most `3` redirects, and enforces `MAX_REMOTE_IMAGE_BYTES = 5_000_000` on both declared and actual downloaded bytes.
@@ -552,7 +552,7 @@ Notes:
 - Multipart image upload applies the same PNG/JPEG/WEBP allowlist and aggregate request limits as JSON/base64 multimodal input.
 - Multipart PDF upload accepts only `application/pdf`, validates the on-disk payload against a PDF signature, and applies a separate per-request document count/size budget.
 - Both sync and async multipart uploads are first materialized into local temporary session-scoped assets, then resolved through the same normalized upload image path used by the multimodal resolver.
-- Uploaded PDFs stay bridge-owned session assets until resolution time. For LLM queries they are converted into provider-ready PDF blocks only after capability gating; for direct MCP tool invocation they are resolved into a reserved `_bridge_uploaded_documents` argument containing base64 payload plus safe metadata.
+- Uploaded PDFs stay session-scoped temporary assets until resolution time and are converted into provider-ready PDF blocks only for query execution after capability gating.
 - Temporary multipart assets are cleaned up after sync execution or async operation completion, on session deletion, and by a restart-safe TTL sweep over persisted asset metadata.
 - Async query-operation metadata stores a safe multimodal summary with source kind, MIME, filename presence, and byte size while never echoing raw base64 blobs, raw files, or asset contents.
 - Before-model guardrails still apply only to the textual portion (`query` or `input.text`). Image content is not moderated, inspected, or OCR-processed by the bridge.
@@ -560,7 +560,8 @@ Notes:
 - URL reachability depends on the network connectivity of the mcp-bridge server, not on the browser/client.
 - SSRF hardening is a baseline defense, not a perfect sandbox. In particular, it does not fully eliminate DNS rebinding or every proxy/network edge case.
 - Effective multimodal support depends on the configured provider/model. Unsupported image input is rejected during request preflight before the bridge queues async work or reaches ambiguous downstream model failures.
-- Effective PDF support also depends on the configured provider/model. Unsupported PDF input is rejected by the bridge before query execution begins. Direct MCP tool invocation does not require LLM PDF capability because the PDF is resolved on the bridge side and sent straight to the tool call.
+- Effective PDF support also depends on the configured provider/model. Unsupported PDF input is rejected by the bridge before query execution begins.
+- For direct MCP tool invocation, use JSON `POST /sessions/{session_id}/query-operations`. If the MCP server is path-based, pass a `file_path` reachable by that server.
 
 Multipart image upload example:
 
@@ -593,14 +594,12 @@ curl -X POST "http://localhost:8000/sessions/${SESSION_ID}/query-multipart" \
   -F 'documents=@./report.pdf;type=application/pdf'
 ```
 
-Multipart direct tool invocation with PDF example:
+Multipart async PDF query example:
 
 ```bash
 curl -X POST "http://localhost:8000/sessions/${SESSION_ID}/query-operations-multipart" \
   -H "X-Tenant-Id: tenant-a" \
-  -F 'server_name=filesystem' \
-  -F 'tool_name=analyze_pdf' \
-  -F 'arguments={"topic":"contracts"}' \
+  -F 'text=Summarize the uploaded PDF' \
   -F 'documents=@./report.pdf;type=application/pdf'
 ```
 
@@ -608,6 +607,23 @@ Multipart slice scope:
 
 - sync query and async query-operations
 - images plus PDF
+- JSON `POST /sessions/{session_id}/query-operations` for direct MCP tool invocation
+
+JSON direct tool invocation example:
+
+```bash
+curl -X POST "http://localhost:8000/sessions/${SESSION_ID}/query-operations" \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-Id: tenant-a" \
+  -d '{
+    "server_name": "filesystem",
+    "tool_name": "analyze_pdf",
+    "arguments": {
+      "file_path": "/srv/shared/report.pdf",
+      "topic": "contracts"
+    }
+  }'
+```
 - local temporary session asset storage only
 - no public reusable session asset API yet
 - no S3/object storage yet
@@ -910,16 +926,13 @@ Uploaded files are first registered as temporary session assets, then resolved t
 
 #### POST /sessions/{session_id}/query-operations
 Create an asynchronous query execution using the same legacy or multimodal payload.
-Public operation metadata exposes only a safe multimodal summary.
+Public operation metadata exposes only a safe multimodal summary. This is also the supported endpoint for direct MCP tool invocation via JSON `tool_name` and `arguments`.
 
 #### POST /sessions/{session_id}/query-operations-multipart
 Create an asynchronous multipart multimodal query operation in the given MCP session.
-Accepts either:
+Accepts query mode only: `text`, optional async query settings, uploaded image files under `images`, and uploaded PDF files under `documents`.
 
-- query mode: `text`, optional async query settings, uploaded image files under `images`, and uploaded PDF files under `documents`
-- direct tool mode: `tool_name`, optional `server_name`, JSON-encoded `arguments`, and uploaded PDF files under `documents`
-
-Unsupported image/PDF models are rejected before a query operation is queued. Direct tool invocation resolves uploaded PDFs bridge-side and forwards them to the MCP tool in a reserved `_bridge_uploaded_documents` argument.
+Unsupported image/PDF models are rejected before a query operation is queued. Multipart direct tool invocation is not supported on this endpoint; use JSON `POST /sessions/{session_id}/query-operations` instead. If the MCP server is path-based, pass a `file_path` reachable by that server.
 
 ---
 
