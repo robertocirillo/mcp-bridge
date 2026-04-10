@@ -19,6 +19,16 @@ It is ready to work with a Docker MCP gateway in either **DIND** or **DOD** mode
 - Not a generic RAG ingestion platform
 - Not primarily an A2A platform
 
+## Where this fits
+
+| Category | Typical focus | How `mcp-bridge` differs |
+| --- | --- | --- |
+| Infrastructure / control-plane MCP gateways | Fleet management, governance, authentication, and operational control across MCP deployments | `mcp-bridge` is narrower: a REST bridge to MCP sessions and queries, powered by `mcp-use`, with session-scoped guardrail enforcement around LLM interactions |
+| OpenAI-compatible MCP bridges | Presenting MCP capabilities behind OpenAI-style chat or responses APIs | `mcp-bridge` exposes its own REST surface for sessions, queries, and controlled MCP access rather than centering API compatibility emulation |
+| Lightweight MCP REST proxies | Thin HTTP wrappers over MCP transport or direct tool forwarding | `mcp-bridge` adds server-managed session lifecycle, `mcp-use`-based query orchestration, and guardrail enforcement instead of acting as a minimal pass-through |
+
+If you need a stable REST API in front of MCP with a session boundary and guardrails, this is the intended fit. For suggested repository metadata, see [docs/GITHUB_REPO_SETTINGS.md](docs/GITHUB_REPO_SETTINGS.md).
+
 ---
 
 ## Quickstart
