@@ -13,16 +13,17 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from app.api.dependencies import get_settings
 from app.api.errors import http_error
-from config import settings
+from config import Settings
 
 router = APIRouter()
 
 
-async def _forward_get(path: str) -> Any:
+async def _forward_get(path: str, *, settings: Settings) -> Any:
     base_url = (getattr(settings, "BIAS_DETECTOR_SERVICE_BASE_URL", None) or "").rstrip("/")
     if not base_url:
         raise http_error(
@@ -55,12 +56,12 @@ async def _forward_get(path: str) -> Any:
 
 
 @router.get("/models/{model_id:path}/policy")
-async def get_model_policy(model_id: str):
+async def get_model_policy(model_id: str, settings: Settings = Depends(get_settings)):
     """Proxy to bias-detector-service GET /v1/models/{model_id}/policy."""
-    return await _forward_get(f"/v1/models/{model_id}/policy")
+    return await _forward_get(f"/v1/models/{model_id}/policy", settings=settings)
 
 
 @router.get("/models/{model_id:path}/labels")
-async def get_model_labels(model_id: str):
+async def get_model_labels(model_id: str, settings: Settings = Depends(get_settings)):
     """Proxy to bias-detector-service GET /v1/models/{model_id}/labels (if supported)."""
-    return await _forward_get(f"/v1/models/{model_id}/labels")
+    return await _forward_get(f"/v1/models/{model_id}/labels", settings=settings)
