@@ -131,6 +131,8 @@ This keeps application clients simpler while making MCP access easier to expose,
 - Multipart uploads use short-lived local temporary files, not a durable shared storage layer
 - Effective multimodal support depends on the configured provider/model and runtime capabilities
 
+For the short public roadmap and a consolidated view of the main limitations, see [docs/ROADMAP.md](docs/ROADMAP.md).
+
 ---
 
 ## 📁 Project Structure
