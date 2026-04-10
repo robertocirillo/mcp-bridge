@@ -146,7 +146,9 @@ Most configuration is handled in config.py and app/models/config.py / app/core/c
 
 ```env
 # API Configuration
-API_TITLE="MCP-BRIDGE REST API"
+API_TITLE="mcp-bridge"
+API_DESCRIPTION="REST bridge for MCP capabilities with session-scoped guardrails, powered by mcp-use."
+API_VERSION="0.2.0"
 PORT=8000
 DEBUG=false
 

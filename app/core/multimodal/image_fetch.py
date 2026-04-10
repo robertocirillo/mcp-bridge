@@ -9,6 +9,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from app import __version__
 from app.core.multimodal.policy import MAX_REMOTE_IMAGE_BYTES
 from app.core.multimodal.validation import (
     MultimodalInputValidationError,
@@ -20,7 +21,9 @@ logger = get_logger(__name__)
 
 IMAGE_FETCH_TIMEOUT_SECONDS = 5.0
 MAX_REMOTE_IMAGE_REDIRECTS = 3
-REMOTE_IMAGE_FETCH_USER_AGENT = "mcp-bridge/0.1 (+https://github.com/openai/codex)"
+REMOTE_IMAGE_FETCH_USER_AGENT = (
+    f"mcp-bridge/{__version__} (+https://github.com/robertocirillo/mcp-bridge)"
+)
 
 _LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
 

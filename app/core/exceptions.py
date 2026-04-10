@@ -1,6 +1,4 @@
-"""
-Custom exceptions for MCP-Use REST API
-"""
+"""Custom exceptions for mcp-bridge."""
 
 class MCPAPIException(Exception):
     """Base exception for MCP API"""

@@ -1,6 +1,4 @@
-"""
-MCP-BRIDGE REST API global settings
-"""
+"""Global settings for mcp-bridge."""
 
 import os
 from typing import List
@@ -8,13 +6,14 @@ from typing import List
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app import __description__, __title__, __version__
 from app.models.config import A2ASettings, A2AAgentConfig, MultiTenancySettings, A2AAuthConfig
 
 load_dotenv()
 
 
 class Settings(BaseSettings):
-    """Global settings for MCP-BRIDGE"""
+    """Global settings for mcp-bridge."""
 
 
     model_config = SettingsConfigDict(
@@ -25,11 +24,9 @@ class Settings(BaseSettings):
     )
 
     # API Settings
-    API_TITLE: str = "mcp-bridge: REST API for mcp-use library"
-    API_DESCRIPTION: str = (
-        "A modular and scalable REST service to interact with MCP servers using the mcp-use library"
-    )
-    API_VERSION: str = "0.2.0"
+    API_TITLE: str = __title__
+    API_DESCRIPTION: str = __description__
+    API_VERSION: str = __version__
 
     # Server Settings
     HOST: str = "0.0.0.0"

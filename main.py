@@ -1,6 +1,4 @@
-"""
-MCP-Use REST API Service - Entry Point
-"""
+"""mcp-bridge service entry point."""
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,13 +22,13 @@ print("DEBUG MULTI TENANCY:", settings.multi_tenancy)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manages the application lifecycle"""
-    logger.info("Starting MCP-Use REST API service")
+    """Manage the application lifecycle."""
+    logger.info("Starting mcp-bridge service")
     detector = initialize_bias_detector_from_env()
     logger.info("Bias detector initialized", extra={"detector": detector})
     await session_manager.initialize()
     yield
-    logger.info("Shutting down MCP-Use REST API service")
+    logger.info("Shutting down mcp-bridge service")
     await session_manager.cleanup_all()
 
 # Create the FastAPI app
@@ -61,7 +59,7 @@ if settings.a2a.enabled:
 # Root endpoint
 @app.get("/")
 async def root():
-    """Basic health check endpoint"""
+    """Return basic service status."""
     return {
         "service": settings.API_TITLE,
         "version": settings.API_VERSION,

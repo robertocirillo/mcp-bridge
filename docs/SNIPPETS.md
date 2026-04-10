@@ -10,7 +10,7 @@ These are **not** meant to be copy-paste complete, but to preserve important str
 ### 1.1 Global Settings (`config.py`)
 
 ```python
-"""MCP-BRIDGE REST API global settings"""
+"""Global settings for mcp-bridge."""
 
 from pydantic_settings import BaseSettings
 from typing import List
@@ -22,14 +22,14 @@ load_dotenv()
 
 
 class Settings(BaseSettings):
-    """Global settings for MCP-BRIDGE"""
+    """Global settings for mcp-bridge."""
 
     # API Settings
-    API_TITLE: str = "mcp-bridge: REST API for mcp-use library"
+    API_TITLE: str = "mcp-bridge"
     API_DESCRIPTION: str = (
-        "A modular and scalable REST service to interact with MCP servers using the mcp-use library"
+        "REST bridge for MCP capabilities with session-scoped guardrails, powered by mcp-use."
     )
-    API_VERSION: str = "0.1.0-beta"
+    API_VERSION: str = "0.2.0"
 
     # Server Settings
     HOST: str = "0.0.0.0"
