@@ -820,60 +820,35 @@ See also `DECISIONS.md`, but key points:
 
 ## 10. Roadmap / Next Steps
 
-This roadmap section is mostly tracking follow-up work on the secondary A2A surface.
-It should not be read as the primary product identity of the project.
+This roadmap should be read with the current product identity in mind:
 
-**Short-term (secondary A2A hardening)**
+* `mcp-bridge` is primarily a REST bridge to the MCP ecosystem, powered by `mcp-use`
+* its main value is stable REST exposure of MCP capabilities plus session-scoped guardrail enforcement around LLM interactions
+* A2A remains a secondary / experimental integration surface
 
-Recently completed (Sprint Week 1):
-1. Harden `POST /a2a/agents/{agent_id}/messages`:
-   * `goal` required + non-empty
-   * `mode="task"` only when `task_id` is present; otherwise `mode="blocking"`
-   * consistent structured errors under `detail` (stable `code/message`, optional `agent_id/task_id/upstream`)
-2. Harden `GET /a2a/agents/{agent_id}/tasks/{task_id}`:
-   * message-only agents → HTTP 409 (`A2A_TASK_NOT_APPLICABLE`)
-   * task not found → HTTP 404 (`A2A_TASK_NOT_FOUND`)
-   * task state is A2A-standard (TaskState): `submitted|working|input-required|completed|canceled|failed|unknown` (+ `upstream_state`, `is_terminal`)
-   * transport/connect/timeout mapped into the same structured error schema
-3. Add/extend pytest contract tests for A2A behaviors (blocking/message-only, task-based + polling, task not found, transport/timeout).
+**Near-term**
 
-Next validation step:
-4. Validate the hardened task polling behavior across real third-party agents (capability differences, partial compliance) and refine upstream error mapping if needed.
+1. Persistence and scaling:
 
-**Medium-term (secondary A2A protocol integration)**
+   * Replace the in-memory session, query-operation, and pending-interaction stores with a durable backend.
+   * Improve restart behavior and create a better base for multi-instance deployments.
 
-4. Expand **a2a-sdk** coverage:
+2. Stronger auth and public-edge hardening:
 
-   * Clarify semantics for message-only vs task-based agents.
-   * Improve streaming/task handling and error reporting.
-   * Optionally surface selected Agent Card metadata (skills, interfaces) in `GET /a2a/agents`.
+   * Keep the current upstream-first deployment model, but make public-edge integration clearer and safer.
+   * Focus on authentication hooks, authorization boundaries, and rate-limiting-friendly operational defaults.
 
-5. Extend `GET /a2a/agents`:
+3. Observability and metrics:
 
-   * Fetch real `skills`, `interfaces`, and other metadata from `AgentCard`.
-   * Possibly expose raw card in a dedicated endpoint.
+   * Expand beyond health endpoints and logs with better metrics, tracing, and runtime visibility.
+   * Make query execution, failures, and guardrail decisions easier to inspect operationally.
 
-6. Implement real task polling:
+4. Hotspot refactors:
 
-   * `POST /a2a/agents/{agent_id}/messages` with `blocking=false` → create task.
-   * `GET /a2a/agents/{agent_id}/tasks/{task_id}` → map A2A Task/TaskStatus to `A2ATaskStatusResponse` using A2A TaskState values.
+   * Reduce complexity in the busiest session, query, and runtime orchestration paths.
+   * Keep the MCP/session/query boundary easier to test and extend without changing the public REST contract.
 
-**Medium-term (Multi-tenancy & config)**
+5. Clearer core vs optional integration boundaries:
 
-7. Multi-tenant A2A configuration:
-
-   * Optionally allow different sets of agents per tenant.
-   * Optionally different(credentials per tenant via `A2AAuthConfig`.
-
-8. Optional per-tenant LLM configuration:
-
-   * Different default providers or models per tenant.
-
-**Long-term**
-
-9. Persistence & scaling:
-
-   * Replace in-memory session store with persistent storage (Redis, DB, etc.).
-10. Unified tracing & observability:
-
-* Correlate MCP sessions and A2A calls via `run_id` and external tracing systems (Langfuse, OpenTelemetry, etc.).
+   * Keep the MCP bridge and session-scoped guardrail path as the primary architecture.
+   * Make optional integrations such as A2A, E2B, and external detector services easier to treat as add-ons rather than part of the core product story.
