@@ -1,7 +1,8 @@
 from fastapi.testclient import TestClient
 
+from app.api.dependencies import get_settings
 from config import Settings
-from main import create_app
+from main import app
 
 
 def test_bias_proxy_routes_accept_model_ids_with_slashes():
@@ -13,14 +14,19 @@ def test_bias_proxy_routes_accept_model_ids_with_slashes():
 
     # Force the proxy to fail with 503 through the standard settings dependency so we
     # can assert the request actually hits the handler (i.e. route matched) rather than 404.
-    client = TestClient(create_app(Settings(BIAS_DETECTOR_SERVICE_BASE_URL="")))
+    app.dependency_overrides[get_settings] = lambda: Settings(BIAS_DETECTOR_SERVICE_BASE_URL="")
 
-    r = client.get(
-        "/v1/guardrails/bias/models/cardiffnlp/twitter-roberta-base-hate-latest/policy"
-    )
-    assert r.status_code == 503
+    try:
+        client = TestClient(app)
 
-    r = client.get(
-        "/v1/guardrails/bias/models/cardiffnlp/twitter-roberta-base-hate-latest/labels"
-    )
-    assert r.status_code == 503
+        r = client.get(
+            "/v1/guardrails/bias/models/cardiffnlp/twitter-roberta-base-hate-latest/policy"
+        )
+        assert r.status_code == 503
+
+        r = client.get(
+            "/v1/guardrails/bias/models/cardiffnlp/twitter-roberta-base-hate-latest/labels"
+        )
+        assert r.status_code == 503
+    finally:
+        app.dependency_overrides.pop(get_settings, None)

@@ -1,12 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from main import app
 from app.api.dependencies import get_settings, get_a2a_client
 from app.core.clients.a2a_client import A2AClientError
-from config import Settings
-from main import create_app
 
-app = create_app(Settings(A2A_ENABLED=True))
 client = TestClient(app)
 
 

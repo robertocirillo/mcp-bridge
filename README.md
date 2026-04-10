@@ -4,7 +4,7 @@ REST bridge to the **MCP ecosystem**, powered by [`mcp-use`](https://github.com/
 
 It exposes MCP capabilities through a stable HTTP API and adds **session-scoped guardrail enforcement** around LLM interactions. Use it when you want a service boundary for MCP sessions, queries, and controlled tool access without embedding MCP orchestration directly into your application.
 
-It is ready to work with a Docker MCP gateway in either **DIND** or **DOD** mode. It can also call remote A2A agents through `/a2a`, but that integration is optional and disabled by default.
+It is ready to work with a Docker MCP gateway in either **DIND** or **DOD** mode. It can also call remote A2A agents through `/a2a`, but that is a secondary capability rather than the main product focus.
 
 ## What this is
 
@@ -33,10 +33,7 @@ It is ready to work with a Docker MCP gateway in either **DIND** or **DOD** mode
 - **E2B Sandbox (optional)** - Execute supported workloads in an isolated environment
 - **OpenAPI and health endpoints** - Inspect and operate the service through `/docs` and `/health`
 - **Docker-ready deployment** - Run with the provided image and compose setups, including MCP gateway variants
-
-## Optional Integrations
-
-- **Experimental A2A client endpoints** - Set `A2A_ENABLED=true` to mount `/a2a` routes for configured remote agents
+- **A2A client endpoints (secondary)** - Call configured remote A2A agents through `/a2a`
 
 ---
 
@@ -55,7 +52,7 @@ mcp-bridge/
 ├── docker-compose-dod.yml      # Docker-outside-Docker variant
 └── app/
     ├── api/
-    │   ├── routes/             # Public REST endpoints for sessions, queries, guardrails, optional A2A, and health
+    │   ├── routes/             # Public REST endpoints for sessions, queries, guardrails, A2A, and health
     │   ├── services/           # Request handling for session and query flows, including multipart queries
     │   ├── dependencies.py     # Dependency injection for session manager, tenant context, and optional A2A client
     │   ├── session_context.py  # Tenant/session binding helpers for API services
@@ -156,9 +153,6 @@ DEBUG=false
 # Session Management
 MAX_ACTIVE_SESSIONS=100
 SESSION_TIMEOUT=3600
-
-# Experimental / optional integrations
-A2A_ENABLED=false
 
 # LLM Provider API Keys
 OPENAI_API_KEY="your_key_here"
@@ -737,11 +731,11 @@ Sessions from other tenants are never shown.
 
 ---
 
-## 📚 Experimental / Optional Integration: A2A Agents
+## 📚 Secondary Usage: A2A Agents
 
 In addition to its MCP REST bridge role, `mcp-bridge` can optionally act as a client to remote A2A agents via a simple REST API.
 
-This is a secondary or experimental surface compared with MCP sessions and queries. A2A endpoints are disabled by default, are only mounted when `A2A_ENABLED=true`, and do not enforce tenant isolation like MCP sessions do, though you can still pass `X-Tenant-Id` and `X-Run-Id` for logging, correlation, and future extensions.
+This is a secondary or experimental surface compared with MCP sessions and queries. A2A endpoints also do not enforce tenant isolation like MCP sessions do, though you can still pass `X-Tenant-Id` and `X-Run-Id` for logging, correlation, and future extensions.
 
 ---
 
@@ -751,7 +745,7 @@ A2A support is configured via `A2ASettings` in `app/models/config.py` and wired 
 
 ```python
 a2a: A2ASettings = A2ASettings(
-    enabled=False,
+    enabled=True,
     agents={
         # ✅ A2A sample: HelloWorld (protocol-compliant)
         "helloworld": A2AAgentConfig(
@@ -777,12 +771,6 @@ a2a: A2ASettings = A2ASettings(
 )
 ```
 
-Enable the routes explicitly before using them:
-
-```env
-A2A_ENABLED=true
-```
-
 Each agent entry defines (key fields):
 
 - **card_url**: URL to the agent card (Agent Card / Agent Card JSON)
@@ -796,8 +784,6 @@ Each agent entry defines (key fields):
 ---
 
 ### 1. List Available A2A Agents
-
-First enable the integration with `A2A_ENABLED=true`; otherwise `/a2a` routes are not mounted.
 
 **Endpoint**
 
@@ -954,16 +940,16 @@ Unsupported image/PDF models are rejected before a query operation is queued. Mu
 
 ---
 
-### Optional: A2A Agents
+### A2A Agents
 
 #### GET /a2a/agents
-List configured A2A agents for optional integrations, UIs, or visual builders. Available only when `A2A_ENABLED=true`.
+List configured A2A agents for secondary integrations, UIs, or visual builders.
 
 #### POST /a2a/agents/{agent_id}/messages
-Send a message to a specific A2A agent. Available only when `A2A_ENABLED=true`.
+Send a message to a specific A2A agent.
 
 #### GET /a2a/agents/{agent_id}/tasks/{task_id}
-Poll a task status for task-based agents. Available only when `A2A_ENABLED=true`.
+Poll a task status for task-based agents.
 
 ---
 

@@ -3,10 +3,9 @@ MCP-BRIDGE REST API global settings
 """
 
 import os
-from typing import Any, List
+from typing import List
 
 from dotenv import load_dotenv
-from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.models.config import A2ASettings, A2AAgentConfig, MultiTenancySettings, A2AAuthConfig
@@ -67,11 +66,9 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_HOST: str | None = None
 
-    A2A_ENABLED: bool = False
-
     # A2A
     a2a: A2ASettings = A2ASettings(
-        enabled=False,
+        enabled=True,
         agents={
             # Example local A2A agent configuration.
             "local_echo_agent": A2AAgentConfig(
@@ -119,30 +116,6 @@ class Settings(BaseSettings):
 
     # MultiTenancy
     multi_tenancy: MultiTenancySettings = MultiTenancySettings()
-
-    @model_validator(mode="before")
-    @classmethod
-    def _apply_flat_a2a_enabled_override(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-
-        flat_enabled = data.get("A2A_ENABLED", data.get("a2a_enabled"))
-        if flat_enabled is None:
-            return data
-
-        a2a_value = data.get("a2a")
-        if isinstance(a2a_value, dict) and "enabled" in a2a_value:
-            return data
-        if a2a_value is not None and hasattr(a2a_value, "enabled"):
-            return data
-
-        merged = dict(data)
-        default_a2a = cls.model_fields["a2a"].default
-        if isinstance(a2a_value, dict):
-            merged["a2a"] = default_a2a.model_copy(deep=True, update={**a2a_value, "enabled": flat_enabled})
-        else:
-            merged["a2a"] = default_a2a.model_copy(deep=True, update={"enabled": flat_enabled})
-        return merged
 
 # global settings instance
 settings = Settings()
