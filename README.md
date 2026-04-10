@@ -21,6 +21,64 @@ It is ready to work with a Docker MCP gateway in either **DIND** or **DOD** mode
 
 ---
 
+## Quickstart
+
+This is the shortest happy path for the core use case: run `mcp-bridge`, create a session, and execute one MCP-backed query over REST through the same session boundary where guardrails can be configured and enforced.
+
+Assumptions: Python 3.11+, `uv`, one LLM API key configured in `.env`, and `npx` available for the example filesystem MCP server.
+
+1. **Install and configure**
+
+```bash
+uv sync
+cp .env.example .env
+# Set OPENAI_API_KEY=... in .env
+```
+
+2. **Start the service**
+
+```bash
+uv run python main.py
+```
+
+3. **Create a session**
+
+```bash
+curl -s -X POST "http://localhost:8000/sessions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "llm_provider": {
+      "provider": "openai",
+      "model": "gpt-4o-mini"
+    },
+    "mcp_servers": {
+      "filesystem": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      }
+    }
+  }'
+```
+
+Copy the returned `session_id`.
+
+4. **Run one query**
+
+```bash
+curl -s -X POST "http://localhost:8000/sessions/<session_id>/query" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "Use the filesystem MCP tools to list the files in /tmp.",
+    "max_steps": 10
+  }'
+```
+
+That is the core product story: MCP connectivity through a stable REST API, with server-managed session state and guardrail enforcement around LLM-driven tool use.
+
+For async operations, multimodal query formats, and secondary A2A endpoints, see the detailed usage sections below.
+
+---
+
 ## 🚀 Features
 
 - **REST API for MCP** - Create sessions, run queries, and access MCP-facing capabilities through a consistent HTTP surface
@@ -34,6 +92,21 @@ It is ready to work with a Docker MCP gateway in either **DIND** or **DOD** mode
 - **OpenAPI and health endpoints** - Inspect and operate the service through `/docs` and `/health`
 - **Docker-ready deployment** - Run with the provided image and compose setups, including MCP gateway variants
 - **A2A client endpoints (secondary)** - Call configured remote A2A agents through `/a2a`
+
+---
+
+## Why not just use `mcp-use` directly?
+
+Use `mcp-use` directly when your application can own MCP orchestration in-process. Use `mcp-bridge` when you want that runtime exposed as a network service with API-level operational boundaries.
+
+- **REST facade** - clients integrate over HTTP instead of embedding Python runtime and `mcp-use` orchestration logic
+- **Session lifecycle** - MCP sessions are created, tracked, listed, and cleaned up server-side instead of being managed ad hoc inside each caller
+- **Async query operations** - longer-running queries can be queued and polled through operation endpoints rather than forcing every caller into synchronous request handling
+- **Structured error mapping** - MCP/runtime failures are normalized into stable HTTP responses instead of leaking raw internal exceptions across service boundaries
+- **Session-scoped guardrails** - guardrail policy is attached to the session boundary and enforced consistently around LLM interactions and tool-result handling
+- **Multimodal preflight where supported** - image/PDF query payloads are validated, normalized, and capability-gated before model execution; multipart PDF support remains query-only
+
+This keeps application clients simpler while making MCP access easier to expose, observe, and control across multiple consumers.
 
 ---
 
@@ -91,6 +164,8 @@ mcp-bridge/
 ```
 
 ## 🛠️ Installation
+
+If you want the fastest local path, use the [Quickstart](#quickstart) above. This section is the fuller setup reference.
 
 ### Local Installation
 
