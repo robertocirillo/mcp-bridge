@@ -77,6 +77,8 @@ That is the core product story: MCP connectivity through a stable REST API, with
 
 For async operations, multimodal query formats, and secondary A2A endpoints, see the detailed usage sections below.
 
+For minimal copy-paste client scripts for this core flow, see [examples/README.md](examples/README.md).
+
 ---
 
 ## 🚀 Features
