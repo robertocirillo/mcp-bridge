@@ -50,42 +50,29 @@ mcp-bridge/
 ├── docker-compose-dind.yml     # Docker-in-Docker variant
 ├── docker-compose-dind-full-stack.yml
 ├── docker-compose-dod.yml      # Docker-outside-Docker variant
-├── logs/
-│   └── app.log                 # Application log file
 └── app/
     ├── api/
-    │   ├── routes/             # Public REST routers (sessions, queries, a2a, health, guardrails)
-    │   ├── services/           # Route-level application services for sessions and queries
-    │   ├── dependencies.py     # Dependency injection helpers (SessionManager, A2A, TenantContext)
-    │   ├── session_context.py  # Tenant/session wrapper binding helpers for API services
-    │   ├── error_mapping.py    # HTTP error mapping for session/query/capability flows
-    │   └── mcp_capabilities.py # Normalization helpers for MCP prompts/resources payloads
+    │   ├── routes/             # Public REST endpoints for sessions, queries, guardrails, A2A, and health
+    │   ├── services/           # Request handling for session and query flows, including multipart queries
+    │   ├── dependencies.py     # Dependency injection for session manager, tenant context, and optional A2A client
+    │   ├── session_context.py  # Tenant/session binding helpers for API services
+    │   └── error_mapping.py    # HTTP mapping for session, query, and capability errors
     ├── core/
-    │   ├── mcp_wrapper.py                  # Public MCP boundary / façade around mcp-use
-    │   ├── mcp_wrapper_capabilities.py     # Internal MCP capability invocation helpers
-    │   ├── mcp_wrapper_tools.py            # Internal tool/task execution helpers
-    │   ├── mcp_wrapper_guardrails.py       # Internal guardrail pipeline orchestration helpers
-    │   ├── mcp_wrapper_llm.py              # Internal LLM/runtime bootstrap for the MCP boundary
-    │   ├── mcp_wrapper_transport.py        # Internal guarded MCP client/session proxies
-    │   ├── mcp_wrapper_guardrails_pii.py   # Internal PII guardrail logic
-    │   ├── mcp_wrapper_guardrails_bias.py  # Internal bias guardrail logic
-    │   ├── mcp_wrapper_errors.py           # Internal MCP boundary errors
-    │   ├── guardrail_runner.py             # Guardrail execution pipeline
-    │   ├── mcp_policy_engine.py            # Tool policy evaluation
-    │   ├── mcp_audit.py                    # Audit event primitives/recorder
+    │   ├── runtime/            # MCP runtime boundary over `mcp-use`: transport, tools, capabilities, LLM bootstrap
+    │   ├── guardrails/         # Session-scoped guardrail orchestration, policy checks, PII, and bias controls
+    │   ├── sessions/           # Session lifecycle, in-memory stores, query operations, and interaction tracking
+    │   ├── session_assets/     # Temporary session-scoped asset storage and cleanup for uploaded files
+    │   ├── audit/              # Audit event primitives and recording helpers
+    │   ├── clients/            # External clients such as A2A and bias-detector integrations
     │   ├── multimodal/
-    │   │   ├── image_fetch.py              # Remote image fetch/validation with SSRF-aware checks
-    │   │   ├── image_resolver.py           # Multimodal image normalization to provider-ready payloads
-    │   │   ├── image_data.py               # Internal resolved image/data-URL primitives
-    │   │   └── model_query.py              # Multimodal query normalization/building helpers
-    │   ├── session_manager.py              # Public session/query-operation orchestrator
-    │   ├── session_store.py                # In-memory SessionData and SessionStore primitives
-    │   ├── query_operation_store.py        # Async query-operation state/task storage
-    │   ├── session_manager_interactions.py # Pending elicitation/task-status helpers
-    │   ├── a2a_client.py                   # A2A HTTP client for remote agents
-    │   └── exceptions.py                   # Custom exceptions
+    │   │   ├── uploads.py                  # Upload normalization for query multimodal inputs
+    │   │   ├── temp_uploads.py             # Temporary multipart upload registration and resolution
+    │   │   ├── image_resolver.py           # Provider-ready image normalization and validation
+    │   │   └── model_query.py              # Multimodal request shaping for model-backed query flows
+    │   ├── config.py           # Core runtime configuration helpers
+    │   └── exceptions.py       # Shared domain exceptions
     ├── models/
-    │   ├── config.py           # Configuration models (MCP, A2A, LLM, multi-tenancy)
+    │   ├── config.py           # Settings models for MCP, A2A, LLM, and multi-tenancy
     │   ├── requests.py         # Request models
     │   └── responses.py        # Response models
     └── utils/
@@ -440,18 +427,13 @@ curl -X POST "http://localhost:8000/sessions/d0c02f31-06f0-4e8c-9e80-3f7eaf606e5
 }
 ```
 
-V1.5 also supports a structured `input` payload for multimodal model queries.
+Structured `input` also supports multimodal model queries.
 
 There are now two image ingestion paths:
 
 - JSON `POST /sessions/{session_id}/query` or `POST /sessions/{session_id}/query-operations` with `input.images`
 - multipart `POST /sessions/{session_id}/query-multipart` for synchronous real file uploads
 - multipart `POST /sessions/{session_id}/query-operations-multipart` for asynchronous real file uploads
-
-Important runtime note:
-
-- This V1.5 work assumes the project is already on `mcp-use==1.7.0`.
-- The upgrade from `mcp-use 1.3.x` to `1.7.0` is not incidental: it is a required baseline because the multimodal `HumanMessage` path is known to work correctly only after that upgrade.
 
 `QueryRequest` / `QueryOperationCreateRequest` now accept:
 
@@ -742,11 +724,11 @@ Sessions from other tenants are never shown.
 
 ---
 
-## 📚 Usage: A2A Agents
+## 📚 Secondary Usage: A2A Agents
 
-In addition to MCP, mcp-bridge can act as a client to remote A2A agents via a simple REST API.
+In addition to its MCP REST bridge role, `mcp-bridge` can optionally act as a client to remote A2A agents via a simple REST API.
 
-Currently, A2A endpoints do not enforce tenant isolation like MCP sessions do, but you can still pass `X-Tenant-Id` and `X-Run-Id` for logging/correlation and future extensions.
+This is a secondary or experimental surface compared with MCP sessions and queries. A2A endpoints also do not enforce tenant isolation like MCP sessions do, though you can still pass `X-Tenant-Id` and `X-Run-Id` for logging, correlation, and future extensions.
 
 ---
 
@@ -954,7 +936,7 @@ Unsupported image/PDF models are rejected before a query operation is queued. Mu
 ### A2A Agents
 
 #### GET /a2a/agents
-List configured A2A agents (for UIs/visual builders).
+List configured A2A agents for secondary integrations, UIs, or visual builders.
 
 #### POST /a2a/agents/{agent_id}/messages
 Send a message to a specific A2A agent.
