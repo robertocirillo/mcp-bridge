@@ -209,6 +209,13 @@ Internally, the MCP boundary is now split into focused modules:
 - the audit/event layer for structured observability
 - the underlying `mcp-use` client/agent runtime
 
+For bias-detector-service introspection, mcp-bridge also exposes two **read-only proxy endpoints** around the external service:
+
+- `GET /v1/guardrails/bias/models/{model_id}/policy`
+- `GET /v1/guardrails/bias/models/{model_id}/labels`
+
+These endpoints let REST clients inspect upstream bias model policy/label metadata when the detector service is only reachable inside the deployment network. They do not apply guardrail decisions themselves.
+
 ### Session and API orchestration internals
 
 `SessionManager` remains the public session façade/orchestrator used by the API layer, but its in-memory responsibilities are now split across focused helpers:
@@ -957,6 +964,16 @@ Send a message to a specific A2A agent. Available only when `A2A_ENABLED=true`.
 
 #### GET /a2a/agents/{agent_id}/tasks/{task_id}
 Poll a task status for task-based agents. Available only when `A2A_ENABLED=true`.
+
+---
+
+### Bias Detector Proxy
+
+#### GET /v1/guardrails/bias/models/{model_id}/policy
+Read-only proxy to inspect the upstream bias-detector-service policy for a model.
+
+#### GET /v1/guardrails/bias/models/{model_id}/labels
+Read-only proxy to inspect the upstream bias-detector-service labels for a model.
 ---
 
 ### Monitoring

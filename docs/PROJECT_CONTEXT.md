@@ -50,6 +50,8 @@ Important baseline for the current branch:
 
     * `/sessions` (MCP sessions)
     * `/sessions/{id}/query` (MCP queries)
+    * `/v1/guardrails/bias/models/{model_id}/policy` (read-only bias service policy proxy)
+    * `/v1/guardrails/bias/models/{model_id}/labels` (read-only bias service labels proxy)
     * `/a2a/agents` (A2A discovery)
     * `/a2a/agents/{agent_id}/messages` (A2A invocation)
     * `/a2a/agents/{agent_id}/tasks/{task_id}` (A2A task polling)
@@ -145,6 +147,11 @@ Important baseline for the current branch:
     - `return_char_spans` (enables `labels[].spans` when the detector/model supports it)
   * When service calls fail and bias is in `block` mode, mcp-bridge fails closed:
     HTTP 503 `detail.code="BIAS_DETECTOR_UNAVAILABLE"`.
+  * mcp-bridge also exposes read-only proxy endpoints for detector introspection:
+    - `GET /v1/guardrails/bias/models/{model_id}/policy`
+    - `GET /v1/guardrails/bias/models/{model_id}/labels`
+    - Purpose: let REST clients inspect upstream detector model metadata when the external
+      bias service is reachable only inside the deployment network.
   * `A2AClient`:
 
     * Wrapper around **`a2a-sdk`**
@@ -183,6 +190,9 @@ Important baseline for the current branch:
   * `routes/health.py`:
 
     * Health check endpoints
+  * `routes/guardrails_bias.py`:
+
+    * Read-only proxy endpoints for external bias-detector-service model policy/labels
   * `routes/a2a.py`:
 
     * A2A discovery, message send, and task polling endpoints
