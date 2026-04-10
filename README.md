@@ -1,24 +1,39 @@
-# MCP-BRIDGE REST API
+# mcp-bridge
 
-A modular and extensible REST service to interact with **MCP servers** (via the [`mcp-use`](https://github.com/mcp-use/mcp-use) library) and **remote A2A agents** through a simple HTTP interface.
+REST bridge to the **MCP ecosystem**, powered by [`mcp-use`](https://github.com/mcp-use/mcp-use).
 
-It is ready to work with a Docker MCP gateway in either **DIND** or **DOD** mode, which can be selected using the appropriate Docker Compose file.
+It exposes MCP capabilities through a stable HTTP API and adds **session-scoped guardrail enforcement** around LLM interactions. Use it when you want a service boundary for MCP sessions, queries, and controlled tool access without embedding MCP orchestration directly into your application.
+
+It is ready to work with a Docker MCP gateway in either **DIND** or **DOD** mode. It can also call remote A2A agents through `/a2a`, but that is a secondary capability rather than the main product focus.
+
+## What this is
+
+- A FastAPI service that exposes MCP sessions and query flows over REST
+- A thin orchestration layer on top of `mcp-use` for MCP connectivity and LLM-backed interactions
+- A session-aware guardrail boundary for policy checks, validation, and controlled tool execution
+
+## What this is not
+
+- Not a full enterprise MCP control plane
+- Not a persistent workflow engine
+- Not a generic RAG ingestion platform
+- Not primarily an A2A platform
 
 ---
 
 ## 🚀 Features
 
-- **Important baseline upgrade** – This branch also upgrades `mcp-use` from `1.3.x` to `1.7.0`; this is a prerequisite for the current multimodal flow because the `HumanMessage` path works correctly only after that runtime upgrade
-- **Modular architecture** – Code organized into well-separated modules (`core`, `api`, `models`, `utils`)
-- **Advanced session management** – Persistent MCP sessions with automatic cleanup
-- **Multi-provider LLM** – Support for OpenAI, Anthropic, Ollama (via `mcp-use`)
-- **A2A integration (client-side)** – Call remote A2A agents via `/a2a` REST endpoints
-- **Optional multi-tenancy** – Session isolation per tenant via simple HTTP headers
-- **E2B Sandbox (optional)** – Safe execution in an isolated environment
-- **RESTful API** – Well-documented endpoints with OpenAPI/Swagger (`/docs`)
-- **Structured logging** – Centralized logs for debugging and monitoring
-- **Docker ready** – Container image and multiple `docker-compose` setups
-- **Health monitoring** – Simple health check endpoints
+- **REST API for MCP** - Create sessions, run queries, and access MCP-facing capabilities through a consistent HTTP surface
+- **Powered by `mcp-use`** - Reuse MCP connectivity and multi-provider LLM support without exposing `mcp-use` directly to clients
+- **Session-scoped guardrails** - Apply guardrail and policy checks within the scope of each session
+- **Session lifecycle management** - Keep MCP interactions tied to managed server-side sessions with cleanup support
+- **Query-first multimodal handling** - Multipart PDF support remains query-only; JSON direct tool invocation remains supported
+- **Optional multi-tenancy** - Isolate sessions per tenant via simple HTTP headers
+- **Async query operations** - Run longer queries through operation endpoints when needed
+- **E2B Sandbox (optional)** - Execute supported workloads in an isolated environment
+- **OpenAPI and health endpoints** - Inspect and operate the service through `/docs` and `/health`
+- **Docker-ready deployment** - Run with the provided image and compose setups, including MCP gateway variants
+- **A2A client endpoints (secondary)** - Call configured remote A2A agents through `/a2a`
 
 ---
 
