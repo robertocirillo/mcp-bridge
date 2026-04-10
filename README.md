@@ -159,7 +159,7 @@ API_DESCRIPTION="REST bridge for MCP capabilities with session-scoped guardrails
 API_VERSION="0.2.0"
 PORT=8000
 DEBUG=false
-CORS_ORIGINS='["http://localhost","http://127.0.0.1","http://localhost:3000","http://127.0.0.1:3000","http://localhost:5173","http://127.0.0.1:5173","http://localhost:8000","http://127.0.0.1:8000"]'
+CORS_ORIGINS='["http://localhost","https://localhost","http://127.0.0.1","https://127.0.0.1","http://[::1]","https://[::1]","http://localhost:3000","https://localhost:3000","http://127.0.0.1:3000","https://127.0.0.1:3000","http://[::1]:3000","https://[::1]:3000","http://localhost:5173","https://localhost:5173","http://127.0.0.1:5173","https://127.0.0.1:5173","http://[::1]:5173","https://[::1]:5173","http://localhost:8000","https://localhost:8000","http://127.0.0.1:8000","https://127.0.0.1:8000","http://[::1]:8000","https://[::1]:8000"]'
 LOG_LEVEL="INFO"
 
 # Session Management
@@ -174,7 +174,7 @@ ANTHROPIC_API_KEY="your_key_here"
 E2B_API_KEY="your_key_here"
 ```
 
-Default CORS is limited to common localhost origins so the repository does not ship with a fully open cross-origin posture. This does not interfere with the built-in `/docs` UI when you open it from the same service origin.
+Default CORS is limited to common localhost origins, including HTTPS and IPv6 loopback variants, so the repository does not ship with a fully open cross-origin posture. This does not interfere with the built-in `/docs` UI when you open it from the same service origin.
 
 If you need permissive CORS for local experimentation, set `CORS_ORIGINS='["*"]'` explicitly in your `.env`.
 
