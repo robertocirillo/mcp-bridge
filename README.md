@@ -186,15 +186,15 @@ Guardrails are configured **per session** via the `guardrails` object in `POST /
 
 Internally, the MCP boundary is now split into focused modules:
 
-- `mcp_wrapper.py`: public façade, session lifecycle, query orchestration
-- `mcp_wrapper_capabilities.py`: capability lookup/invocation helpers for prompts, resources, and other optional MCP features
-- `mcp_wrapper_tools.py`: direct tool invocation helpers, task-support detection, raw MCP task transport
-- `mcp_wrapper_guardrails.py`: shared guardrail pipeline wiring and tool-result wrapping helpers
-- `mcp_wrapper_llm.py`: provider imports, sandbox normalization, LLM construction
-- `mcp_wrapper_transport.py`: guarded MCP client/session proxies
-- `mcp_wrapper_guardrails_pii.py`: PII detection, redaction, before/after-model factories
-- `mcp_wrapper_guardrails_bias.py`: local/service-backed bias guardrails and output sanitization helpers
-- `mcp_wrapper_errors.py`: structured MCP boundary exceptions
+- `app/core/runtime/mcp_wrapper.py`: public façade, session lifecycle, and query orchestration
+- `app/core/runtime/capabilities.py`: capability lookup/invocation helpers for prompts, resources, and other optional MCP features
+- `app/core/runtime/tools.py`: direct tool invocation helpers, task-support detection, and raw MCP task transport
+- `app/core/guardrails/wrapper.py`: shared guardrail pipeline wiring and tool-result wrapping helpers
+- `app/core/runtime/llm.py`: provider imports, sandbox normalization, and LLM construction
+- `app/core/runtime/transport.py`: guarded MCP client/session proxies
+- `app/core/guardrails/pii.py`: PII detection, redaction, and before/after-model factories
+- `app/core/guardrails/bias.py`: local/service-backed bias guardrails and output sanitization helpers
+- `app/core/runtime/errors.py`: structured MCP boundary exceptions
 
 `MCPWrapper` coordinates:
 
@@ -207,9 +207,9 @@ Internally, the MCP boundary is now split into focused modules:
 
 `SessionManager` remains the public session façade/orchestrator used by the API layer, but its in-memory responsibilities are now split across focused helpers:
 
-- `session_store.py`: owns `SessionData` and `SessionStore` for active sessions
+- `app/core/sessions/store.py`: owns `SessionData` and `SessionStore` for active sessions
 - `query_operation_store.py`: tracks async query-operation state, results, and background tasks
-- `session_manager_interactions.py`: tracks pending elicitation and task-status interactions
+- `app/core/sessions/interactions.py`: tracks pending elicitation and task-status interactions
 
 `SessionData` now lives in `app/core/sessions/store.py`, not in `app/core/sessions/manager.py`.
 
