@@ -94,7 +94,10 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 - `GET /a2a/agents/{agent_id}/tasks/{task_id}` hardened contract:
   - message-only agents → HTTP 409 `A2A_TASK_NOT_APPLICABLE`
   - task not found → HTTP 404 `A2A_TASK_NOT_FOUND`
-  - `status` is normalized to `queued|running|succeeded|failed|unknown`
+  - `status` in A2A responses uses the A2A task-state vocabulary:
+    `submitted|working|input-required|completed|canceled|failed|unknown`
+  - `upstream_state` carries the raw upstream state string when the SDK/agent uses a different representation
+  - `queued|running|completed|failed|cancelled` belong to MCP async query operations (`QueryOperationStatus`), not to A2A task-status responses
   - errors include `operation` (e.g. `send_message`, `get_task`) and relevant identifiers (`agent_id`, `task_id` when applicable) in the structured `detail` payload
 
 **Rationale:**

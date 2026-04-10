@@ -11,7 +11,7 @@ This document describes how requests flow through **mcp-bridge**, spanning:
 
 The visual builder/consumer is responsible for orchestrating multi-step flows such as:
 
-> Create MCP session → Make MCP queries → Call A2A agents → Combine results
+> Create MCP session → Execute guarded MCP queries → Optionally call A2A agents → Combine results if needed
 
 mcp-bridge itself is deliberately kept as a **thin bridge**.
 
@@ -478,12 +478,14 @@ Hardened/normalized REST behavior:
 - Message-only agents (task polling not applicable) → HTTP **409** with structured error `code="A2A_TASK_NOT_APPLICABLE"` and `operation="get_task"`.
 - Task id not found → HTTP **404** with structured error `code="A2A_TASK_NOT_FOUND"` and `operation="get_task"`.
 - Transport/connect/timeout issues are mapped using the same structured A2A error schema (`detail.code`, `detail.message`, `detail.operation`, `detail.agent_id`, `detail.task_id` when applicable, optional `detail.upstream`).
-- Returned `status` is normalized to one of: `queued|running|succeeded|failed|unknown`.
+- Returned `status` uses the A2A task-state vocabulary exposed by the REST models:
+  `submitted|working|input-required|completed|canceled|failed|unknown`.
+- `upstream_state` preserves the raw upstream state string for observability/debugging.
 
 
 
 Status normalization (mapping):
-- Upstream task status strings are mapped best-effort into the canonical set above.
+- Upstream task status strings are mapped best-effort into the canonical A2A set above.
 - Missing/unknown statuses are returned as `unknown`.
 
 ## 5. Who Decides Agent Collaboration?
