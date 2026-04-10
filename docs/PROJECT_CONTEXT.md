@@ -774,7 +774,7 @@ See also `DECISIONS.md`, but key points:
 * Multi-tenancy is implemented at **REST/bridge level**, not at MCP or A2A protocol level:
 
   * Tenants are identified by `X-Tenant-Id` header.
-  * Tenant is stored on sessions and used for filtering/authorization.
+  * Tenant is stored on sessions and used for filtering and ownership checks.
 * Sessions can be created **without MCP servers** (LLM-only).
 * A2A **does not embed tenant_id in the A2A protocol** payloads to avoid binding to a non-standard extension.
 
@@ -787,11 +787,18 @@ See also `DECISIONS.md`, but key points:
   * `SessionStore`, `QueryOperationStore`, and `PendingInteractionStore` are all in-memory.
   * No persistence across restarts.
   * Single-process only; not designed for multi-instance scaling yet.
+* Platform edge controls are not built in by default:
+
+  * Public authentication, authorization, and rate limiting are expected to be handled upstream.
 * Multipart/tool scope in `0.2.0`:
 
   * multipart uploads are supported for multimodal queries, including PDFs
   * multipart direct MCP tool invocation with uploaded PDFs/documents was intentionally removed
   * direct MCP tool invocation still exists through JSON `POST /sessions/{session_id}/query-operations`
+  * uploaded files use short-lived local temporary storage, not a durable shared asset backend
+* Multimodal capability is runtime-dependent:
+
+  * image/PDF support still depends on the configured provider/model/runtime, even when the REST contract accepts the request shape
 * Multi-tenancy is coarse:
 
   * No per-tenant configuration for LLM providers or A2A agents yet.

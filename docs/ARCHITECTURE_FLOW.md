@@ -579,7 +579,19 @@ Therefore:
 
 - In-memory runtime state:
   - `SessionStore`, `QueryOperationStore`, and pending elicitation state are in-memory.
-  - Not suitable for multi-instance or long-lived production without external persistence.
+  - Active sessions, queued/running query operations, and pending interactions are lost on restart.
+  - Horizontal scaling is not a first-class out-of-the-box story without external persistence/coordination.
+
+- Temporary multipart assets:
+  - Uploaded images/PDFs are stored as short-lived local filesystem assets.
+  - This is not a durable shared storage layer for multi-instance deployments.
+
+- Platform edge responsibilities:
+  - Built-in public auth/authz and rate limiting are not part of the default service surface.
+  - These controls are expected to be layered upstream (for example via an API gateway).
+
+- Multimodal support:
+  - Effective image/PDF behavior depends on provider/model/runtime capabilities, not only on the HTTP contract.
 
 - No global orchestration:
   - All broader flows must be handled by the visual builder or dedicated orchestrators, not by mcp-bridge.
