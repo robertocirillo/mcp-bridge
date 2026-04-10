@@ -1031,32 +1031,15 @@ docker compose down
 
 ## 🔒 Security
 
-- Input validation – All inputs are validated via Pydantic models.  
-- E2B Sandbox (optional) – Isolated code execution when enabled.  
-- Session limits – Configurable maximum number of active sessions.  
-- Timeouts – Automatic timeout and cleanup for inactive sessions.  
-- Multi-tenant isolation (MCP) – Each tenant only sees and uses its own sessions.  
+For vulnerability reporting and security expectations, see [SECURITY.md](SECURITY.md).
 
-Authentication, authorization, and rate limiting are expected to be layered upstream.
+At the product level, `mcp-bridge` adds session-scoped guardrails around LLM interactions and expects authentication, authorization, and rate limiting to be layered upstream.
 
 ---
 
 ## 🤝 Contributing
 
-1. Fork the repository  
-2. Create a feature branch:
-```bash
-git checkout -b feature/new-feature
-```
-3. Commit your changes:
-```bash
-git commit -am "Add new feature"
-```
-4. Push to the branch:
-```bash
-git push origin feature/new-feature
-```
-5. Open a Pull Request
+For contribution workflow, coding expectations, and PR hygiene, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
