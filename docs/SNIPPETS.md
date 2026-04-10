@@ -37,7 +37,16 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     # CORS Settings
-    CORS_ORIGINS: List[str] = ["*"]
+    CORS_ORIGINS: List[str] = [
+        "http://localhost",
+        "http://127.0.0.1",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
 
     # Session Settings
     MAX_ACTIVE_SESSIONS: int = 100
@@ -48,7 +57,7 @@ class Settings(BaseSettings):
     SUPPORTED_PROVIDERS: List[str] = ["openai", "anthropic", "ollama"]
 
     # Logging Settings
-    LOG_LEVEL: str = "DEBUG"
+    LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
     # E2B Sandbox Settings

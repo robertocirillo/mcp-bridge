@@ -12,6 +12,18 @@ from app.models.config import A2ASettings, A2AAgentConfig, MultiTenancySettings,
 load_dotenv()
 
 
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost",
+    "http://127.0.0.1",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
+
 class Settings(BaseSettings):
     """Global settings for mcp-bridge."""
 
@@ -34,7 +46,7 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     # CORS Settings
-    CORS_ORIGINS: List[str] = ["*"]
+    CORS_ORIGINS: List[str] = DEFAULT_CORS_ORIGINS.copy()
 
     # Session Settings
     MAX_ACTIVE_SESSIONS: int = 100
@@ -48,7 +60,7 @@ class Settings(BaseSettings):
     BIAS_DETECTOR_SERVICE_BASE_URL: str = "http://bias-detector-service:9090"
 
     # Logging Settings
-    LOG_LEVEL: str = "DEBUG"
+    LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
     # E2B Sandbox Settings

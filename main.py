@@ -1,9 +1,9 @@
 """mcp-bridge service entry point."""
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-import logging
 
 from app.core.sessions.manager import SessionManager
 from app.core.runtime.mcp_wrapper import initialize_bias_detector_from_env
@@ -17,8 +17,6 @@ logger = get_logger("main")
 
 # Global session manager
 session_manager = SessionManager()
-
-print("DEBUG MULTI TENANCY:", settings.multi_tenancy)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
