@@ -632,6 +632,8 @@ Bridge-level contract notes:
 
 This is the minimal example A2A-like agent used for local testing.
 
+Note: the `0.1.0` values in this snippet belong to the example agent itself and do not represent the `mcp-bridge` version, which is `0.2.0`.
+
 ```python
 from typing import Any, Dict, Optional
 import uuid
