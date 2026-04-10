@@ -1,6 +1,6 @@
 # DECISIONS.md
 
-This file captures key decisions, rejected alternatives, non-goals, and open questions for **mcp-bridge – MCP + A2A integration**.
+This file captures key decisions, rejected alternatives, non-goals, and open questions for **mcp-bridge – REST bridge to the MCP ecosystem**.
 
 ---
 
@@ -249,6 +249,45 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 
 ---
 
+### D11 – Public positioning centers MCP + guardrails; A2A is secondary
+
+**Status:** Accepted
+
+**Decision:**
+
+- Public framing should present mcp-bridge primarily as:
+  - a REST bridge to the MCP ecosystem
+  - powered by `mcp-use`
+  - differentiated by session-scoped guardrail enforcement around LLM interactions
+- A2A support remains in the repository, but should be described as **secondary / experimental**, not as the core product identity.
+
+**Rationale:**
+
+- This matches the current codebase value proposition more accurately than an "MCP + A2A integration" framing.
+- The MCP/session/query/guardrail path is the mainline product surface.
+- A2A support is useful, but should not dominate future chat context or public positioning.
+
+---
+
+### D12 – Multipart direct tool PDF forwarding was removed from `0.2.0`
+
+**Status:** Accepted
+
+**Decision:**
+
+- In release line `0.2.0`, multipart uploads remain supported for multimodal **query** execution.
+- Uploaded PDFs in multipart requests are supported only for the **query path**.
+- Multipart direct MCP tool invocation with uploaded PDF/documents is intentionally **not supported**.
+- Direct MCP tool invocation remains supported through JSON `POST /sessions/{session_id}/query-operations` using `tool_name` + `arguments`.
+
+**Rationale:**
+
+- Keeping multipart query ingestion and direct tool invocation separate simplifies the contract and narrows lifecycle risk.
+- The JSON path is sufficient for direct tool calls without preserving bridge-owned uploaded document forwarding semantics.
+- This keeps the release scope tighter and easier to reason about for `0.2.0`.
+
+---
+
 ## 2. Rejected Alternatives
 
 ### R1 – Using A2A as MCP tools (A2A-over-MCP)
@@ -320,7 +359,8 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 
 ### NG1 – Persistent storage and clustering
 
-- mcp-bridge currently uses **in-memory session storage**.
+- mcp-bridge currently uses **in-memory runtime state**.
+- Active sessions, query operations, and pending interaction/elicitation state are not persisted.
 - No guarantee of persistence across restarts.
 - No built-in support for multi-instance clustering or distributed sessions.
 - This may change in the future, but is **explicitly not a requirement right now**.
@@ -328,7 +368,7 @@ This file captures key decisions, rejected alternatives, non-goals, and open que
 ### NG2 – Acting as an A2A gateway/broker for all traffic
 
 - mcp-bridge’s role is not to be a universal A2A gateway (e.g., multiplexing A2A traffic between many agents for many unrelated clients).
-- It is focused on supporting **a visual builder** that needs MCP + A2A in one place.
+- It is focused on supporting MCP-centric workflows; A2A support is additive, not the primary identity.
 
 ### NG3 – Implementing NATS or message bus inside mcp-bridge
 

@@ -5,7 +5,8 @@
 This document describes how requests flow through **mcp-bridge**, spanning:
 
 - MCP sessions and queries (via `mcp-use`)
-- A2A agent invocation (via official a2a-sdk)
+- Session-scoped guardrail enforcement around LLM interactions
+- A2A agent invocation (via official a2a-sdk, secondary / experimental)
 - Multi-tenancy
 - Failure modes and current constraints
 
@@ -14,6 +15,7 @@ The visual builder/consumer is responsible for orchestrating multi-step flows su
 > Create MCP session → Execute guarded MCP queries → Optionally call A2A agents → Combine results if needed
 
 mcp-bridge itself is deliberately kept as a **thin bridge**.
+Its mainline identity is the MCP/session/query path; A2A support exists in the same service, but is not the primary product framing.
 
 For the MCP/session side, the public FastAPI routers are now intentionally thin:
 
@@ -324,9 +326,18 @@ Implementation note:
 **Async query operations (`POST /sessions/{session_id}/query-operations`)**
 
 - Accept the same legacy `query` or structured multimodal `input` payloads.
+- Also remain the supported JSON path for direct MCP tool invocation via `tool_name` + `arguments`.
 - Public operation metadata stores only a safe multimodal summary.
 - Raw base64 image data is not exposed through public async metadata.
 - Remote URL downloads stay internal to the bridge and are never exposed in operation metadata.
+
+**Multipart query endpoints**
+
+- `POST /sessions/{session_id}/query-multipart` and `POST /sessions/{session_id}/query-operations-multipart`
+  are query-only multipart ingestion paths in `0.2.0`.
+- They accept uploaded images and uploaded PDFs for multimodal query execution.
+- Multipart direct MCP tool invocation with uploaded PDF/documents is intentionally not supported in `0.2.0`;
+  clients must use JSON `POST /sessions/{session_id}/query-operations` for direct tool calls.
 
 **Failure modes:**
 
@@ -376,6 +387,8 @@ background_tasks.add_task(
 ---
 
 ## 3. A2A Flow: Client → mcp-bridge → A2A Agent (via a2a-sdk)
+
+This section describes a secondary / experimental capability, not the main product identity.
 
 ### 3.1 Current A2A Architecture (SDK-based)
 
@@ -564,7 +577,8 @@ Therefore:
     - SDK/version mismatches may surface as schema/validation errors.
 ### 7.3 System Constraints
 
-- In-memory session store:
+- In-memory runtime state:
+  - `SessionStore`, `QueryOperationStore`, and pending elicitation state are in-memory.
   - Not suitable for multi-instance or long-lived production without external persistence.
 
 - No global orchestration:
@@ -580,7 +594,7 @@ Therefore:
    - `GET /sessions` / `GET /sessions/{id}` → thin route → `session_service` → tenant-aware `SessionStore` lookup/list.
    - `DELETE /sessions/{id}` → thin route → `session_service.delete_session` → tenant-checked cleanup in `SessionManager`.
 
-2. **A2A agent usage (current)**:
+2. **A2A agent usage (current, secondary / experimental)**:
    - `GET /a2a/agents` → static config listing (UI-friendly).
    - `POST /a2a/agents/{id}/messages` → a2a-sdk `send_message` (Agent Card via `card_url`) → `A2AMessageResponse`.
    - `GET /a2a/agents/{id}/tasks/{task_id}` → a2a-sdk `get_task` → `A2ATaskStatusResponse`.

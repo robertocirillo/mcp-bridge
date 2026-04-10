@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT.md
 
-Project: **mcp-bridge – MCP + A2A integration**
+Project: **mcp-bridge – REST bridge to the MCP ecosystem**
 
 ---
 
@@ -8,9 +8,11 @@ Project: **mcp-bridge – MCP + A2A integration**
 
 Important baseline for the current branch:
 
-* The project has been upgraded from **`mcp-use 1.3.x`** to **`mcp-use 1.7.0`**.
-* This is a foundational runtime change, not a minor dependency bump.
-* The current multimodal implementation depends on that upgrade because the `HumanMessage` execution path is expected to work correctly only on the newer `mcp-use` runtime.
+* Release line: **`0.2.0`**
+* Runtime foundation: **`mcp-use 1.7.0`**
+* Core product identity: a stable **REST bridge to the MCP ecosystem**, with **session-scoped guardrail enforcement around LLM interactions**
+* **A2A support exists, but it is secondary / experimental** and should not drive the default product framing
+* Active sessions, query operations, and pending interaction state are **in-memory only** today
 
 **mcp-bridge** is a FastAPI-based REST service that:
 
@@ -18,15 +20,22 @@ Important baseline for the current branch:
 
    * Managing MCP sessions (LLM + MCP servers via `mcp-use`)
    * Executing queries through those sessions
-   * Calling external **A2A agents** (remote/local, third-party)
+   * Enforcing session-scoped guardrails around model input/output and MCP tool results
+   * Optionally calling external **A2A agents** (secondary / experimental)
 
 2. Acts as a **bridge** between:
 
    * Visual builders / UIs / workflow tools (HTTP/JSON)
    * The **MCP ecosystem** (via `mcp-use`)
-   * The **A2A ecosystem** (today: SDK-based integration)
+   * Session-level safety / policy controls at the REST layer
 
 3. Supports **multi-tenancy**, so the same mcp-bridge deployment can be safely used by multiple tenants (e.g. multiple users/applications) without leaking sessions between them.
+
+4. Keeps **A2A integration** in the same codebase, but as a non-core capability:
+
+   * SDK-based
+   * useful for experiments and adjacent workflows
+   * not the main public identity of the project
 
 ---
 
@@ -108,6 +117,10 @@ Important baseline for the current branch:
     * Responsible for scheduling and resuming asynchronous query operations
     * Enforces `MAX_ACTIVE_SESSIONS`
     * Uses an `asyncio.Lock` for concurrency safety
+    * Uses in-memory stores only in `0.2.0`:
+      - `SessionStore` for active sessions
+      - `QueryOperationStore` for async query-operation state/tasks
+      - `PendingInteractionStore` for elicitation state
 
 * Guardrails (session-scoped):
 
@@ -357,9 +370,35 @@ Important baseline for the current branch:
     * Use `QueryOperationStore` for queued/running/completed/failed operation state
     * Use `PendingInteractionStore` for elicitation pauses and resumes
 
+### 3.4 Query and Tool Invocation Scope in `0.2.0`
+
+Current request-path scope:
+
+* `POST /sessions/{session_id}/query`:
+
+  * synchronous MCP/LLM query execution
+  * supports JSON text or structured multimodal input
+
+* `POST /sessions/{session_id}/query-operations`:
+
+  * asynchronous query execution
+  * remains the supported **JSON path** for direct MCP tool invocation via `tool_name` + `arguments`
+
+* `POST /sessions/{session_id}/query-multipart` and `POST /sessions/{session_id}/query-operations-multipart`:
+
+  * support multipart multimodal **query input**
+  * accept uploaded images and uploaded PDFs for the query path
+  * are **query-only** in `0.2.0`
+  * do **not** support multipart direct MCP tool invocation with uploaded PDF/documents
+
+The multipart direct-tool PDF forwarding behavior was intentionally removed from `0.2.0`.
+If a direct MCP tool invocation needs a document, clients must use the JSON `query-operations` path and pass normal tool arguments (for example a `file_path` already reachable by the MCP server).
+
 ---
 
 ## 4. A2A Integration Details
+
+This section is intentionally secondary. A2A support exists in the repo, but it is not the primary product identity of mcp-bridge.
 
 ### 4.1 Current State vs Target
 
@@ -617,7 +656,7 @@ Common `code` values:
      * Uses `wrapper.steps_used` and `wrapper.last_server_used`
      * Returns `QueryResponse` (session_id, result, execution_time, steps_used, timestamp, server_used, `has_mcp_servers`)
 
-### A2A Flow (SDK-based implementation)
+### A2A Flow (SDK-based implementation, secondary / experimental)
 
 1. **Client** calls `GET /a2a/agents` to list configured agents.
 
@@ -664,6 +703,8 @@ Common `code` values:
 
   * `POST /sessions`: create MCP sessions with LLM+MCP servers **or LLM-only** (empty `mcp_servers`).
   * `POST /sessions/{session_id}/query`: executes queries via `mcp-use`.
+  * `POST /sessions/{session_id}/query-operations`: creates async query operations and remains the JSON path for direct MCP tool invocation.
+  * Multipart query endpoints accept uploaded images and PDFs for query execution only.
 
     * mcp-use logs warnings when there are no MCP servers; behavior is acceptable.
   * `GET /sessions`: lists sessions **scoped to the current tenant** (if multi-tenancy enabled).
@@ -675,7 +716,7 @@ Common `code` values:
     * Filtering in `list_sessions` works.
     * Tenant-specific checks on `get_session` and `delete_session` are in place.
 
-* **A2A side (SDK-based integration):**
+* **A2A side (SDK-based integration, secondary / experimental):**
 
   * `GET /a2a/agents`:
 
@@ -717,6 +758,9 @@ See also `DECISIONS.md`, but key points:
 
   * mcp-bridge offers MCP endpoints and A2A endpoints from the same process,
   * visual builder orchestrates calls between them.
+* Public positioning should center **MCP + session-scoped guardrails**:
+
+  * A2A is present, but secondary / experimental.
 * Multi-tenancy is implemented at **REST/bridge level**, not at MCP or A2A protocol level:
 
   * Tenants are identified by `X-Tenant-Id` header.
@@ -728,10 +772,16 @@ See also `DECISIONS.md`, but key points:
 
 ## 9. Known Limitations and Pain Points
 
-* In-memory session store:
+* In-memory runtime state:
 
+  * `SessionStore`, `QueryOperationStore`, and `PendingInteractionStore` are all in-memory.
   * No persistence across restarts.
   * Single-process only; not designed for multi-instance scaling yet.
+* Multipart/tool scope in `0.2.0`:
+
+  * multipart uploads are supported for multimodal queries, including PDFs
+  * multipart direct MCP tool invocation with uploaded PDFs/documents was intentionally removed
+  * direct MCP tool invocation still exists through JSON `POST /sessions/{session_id}/query-operations`
 * Multi-tenancy is coarse:
 
   * No per-tenant configuration for LLM providers or A2A agents yet.
@@ -753,7 +803,10 @@ See also `DECISIONS.md`, but key points:
 
 ## 10. Roadmap / Next Steps
 
-**Short-term (A2A & stability)**
+This roadmap section is mostly tracking follow-up work on the secondary A2A surface.
+It should not be read as the primary product identity of the project.
+
+**Short-term (secondary A2A hardening)**
 
 Recently completed (Sprint Week 1):
 1. Harden `POST /a2a/agents/{agent_id}/messages`:
@@ -770,7 +823,7 @@ Recently completed (Sprint Week 1):
 Next validation step:
 4. Validate the hardened task polling behavior across real third-party agents (capability differences, partial compliance) and refine upstream error mapping if needed.
 
-**Medium-term (A2A protocol integration)**
+**Medium-term (secondary A2A protocol integration)**
 
 4. Expand **a2a-sdk** coverage:
 

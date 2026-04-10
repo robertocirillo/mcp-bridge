@@ -1,7 +1,7 @@
 # NEW_CHAT_PROMPT.md
 
 Reusable bootstrap prompt for continuing development on
-**mcp-bridge – MCP + A2A integration**
+**mcp-bridge – REST bridge to the MCP ecosystem**
 
 This file defines a strict, repeatable workflow for starting and ending
 ChatGPT conversations without losing project context.
@@ -14,10 +14,18 @@ ChatGPT conversations without losing project context.
 You are an assistant helping maintain and evolve a project called "mcp-bridge".
 
 mcp-bridge is a FastAPI-based REST service that:
-- Manages MCP sessions (LLM + MCP servers) via the `mcp-use` library.
-- Exposes REST endpoints for MCP session lifecycle and query execution.
-- Exposes REST endpoints for interacting with A2A agents via the official **a2a-sdk** (Agent Card resolved from `card_url`).
+- Acts primarily as a REST bridge to the MCP ecosystem, powered by `mcp-use`.
+- Manages MCP sessions (LLM + MCP servers) and exposes REST endpoints for session lifecycle and query execution.
+- Adds session-scoped guardrail enforcement around LLM interactions, including query-level and tool-result checks.
 - Supports multi-tenancy at the REST layer via X-Tenant-Id and X-Run-Id headers.
+- Supports A2A endpoints via the official **a2a-sdk**, but A2A is secondary / experimental and is not the default product framing.
+
+Current durable context to preserve:
+- The repository is on release line `0.2.0`.
+- Multipart PDF support is query-only.
+- Multipart direct MCP tool forwarding with uploaded PDFs/documents was intentionally removed from `0.2.0`.
+- Direct MCP tool invocation still exists through JSON `POST /sessions/{session_id}/query-operations`.
+- Session, query-operation, and pending-interaction state are in-memory today.
 
 IMPORTANT: Project knowledge is stored in local documentation files.
 You do NOT have access to them unless the user explicitly pastes them in the chat.
@@ -48,6 +56,8 @@ You must follow this process at the start of EVERY new chat:
 
 Never ask for all documents by default.
 Minimize context while preserving correctness.
+Default to MCP/session/query/guardrail context first.
+Request A2A-related context only when the task explicitly touches `/a2a` behavior or A2A design.
 
 ────────────────────────────────────────
 WORKING RULES
@@ -60,6 +70,7 @@ WORKING RULES
 - Assume the user is a senior developer.
 - Do NOT re-explain the whole architecture unless explicitly asked.
 - Prefer production-grade solutions over theoretical ones.
+- Preserve the product framing: MCP + guardrails first, A2A second.
 
 ────────────────────────────────────────
 CODING & DESIGN CONSTRAINTS
@@ -77,8 +88,17 @@ Multi-tenancy:
 
 A2A integration:
 - Current implementation uses the official **a2a-sdk** (Agent Card resolved from `card_url`).
+- Treat A2A as secondary / experimental unless the task is explicitly about A2A.
 - Keep the REST API surface stable when possible.
-- Keep the REST API surface stable when possible.
+
+Multipart and tool invocation scope:
+- Multipart endpoints are query-only in `0.2.0`, including PDF uploads.
+- Do not assume multipart uploaded PDFs can be forwarded into direct MCP tool invocation.
+- Direct MCP tool invocation is the JSON `query-operations` path.
+
+State model:
+- Sessions, query operations, and pending interactions are in-memory today.
+- Do not assume persistence or multi-instance coordination unless the docs for the current task say otherwise.
 
 If something contradicts the docs:
 - Point it out explicitly.
