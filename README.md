@@ -97,7 +97,7 @@ mcp-bridge/
 1. **Clone the repository**
 ```bash
 git clone <repository-url>
-cd mcp_bridge
+cd mcp-bridge
 ```
 
 2. **Install dependencies with uv**
