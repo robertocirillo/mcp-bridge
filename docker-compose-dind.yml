@@ -6,16 +6,15 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "8000"
-      DEBUG: "False"
-      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      DEBUG: "false"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
       # used when gateway is in another container
-      MCP_HOST: "http://gateway:9011/mcp"
+      MCP_HOST: "${MCP_HOST:-http://gateway:9011/mcp}"
     env_file:
       - .env
-    volumes:
-#      - ./logs:/app/logs
-      - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
-#      - /var/run/docker.sock:/var/run/docker.sock
+    # Optional mounts:
+    # - ./logs:/app/logs
+    # - ./servers:/app/servers:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://mcp-bridge:8000/health"]
@@ -37,4 +36,3 @@ services:
       - --servers=duckduckgo
       - --port=9011
       - --memory=512Mb
-

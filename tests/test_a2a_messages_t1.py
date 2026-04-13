@@ -1,10 +1,13 @@
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from main import app
 from app.api.dependencies import get_settings, get_a2a_client
+from app.api.routes.a2a import router as a2a_router
 from app.core.clients.a2a_client import A2AClientError
 
+app = FastAPI()
+app.include_router(a2a_router)
 client = TestClient(app)
 
 

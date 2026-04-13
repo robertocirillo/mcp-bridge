@@ -4,14 +4,13 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "8000"
-      DEBUG: "False"
-      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
-      MCP_HOST: "http://gateway:9011/mcp"
+      DEBUG: "false"
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      MCP_HOST: "${MCP_HOST:-http://gateway:9011/mcp}"
     env_file:
       - .env
     volumes:
       - ./logs:/app/logs
-      - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
     ports:
       - "8000:8000"
     restart: unless-stopped

@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app import __description__, __title__, __version__
-from app.models.config import A2ASettings, A2AAgentConfig, MultiTenancySettings, A2AAuthConfig
+from app.models.config import A2ASettings, MultiTenancySettings
 
 load_dotenv()
 
@@ -91,53 +91,8 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_HOST: str | None = None
 
-    # A2A
-    a2a: A2ASettings = A2ASettings(
-        enabled=True,
-        agents={
-            # Example local A2A agent configuration.
-            "local_echo_agent": A2AAgentConfig(
-                card_url="http://localhost:9001/.well-known/agent.json",
-                runtime_url="http://localhost:9001",
-                timeout_seconds=60,
-                enabled=False,
-                label="Local Echo Agent",
-                description="Simple local A2A agent used for testing.",
-            ),
-            # ✅ A2A sample: HelloWorld (protocol-compliant)
-            "helloworld": A2AAgentConfig(
-                enabled=True,
-                label="Hello World Agent (A2A sample)",
-                description="A2A protocol-compliant HelloWorld agent from a2a-samples.",
-                card_url="http://localhost:9999/.well-known/agent-card.json",
-                runtime_url="http://localhost:9999",
-                timeout_seconds=60,
-                auth=A2AAuthConfig(type="none"),
-                extra_headers={},
-            ),
-            "helloworld_extended": A2AAgentConfig(
-                enabled=True,
-                label="Hello World Agent (extended card)",
-                description="HelloWorld agent using authenticated extended card.",
-                card_url="http://localhost:9999/agent/authenticatedExtendedCard",
-                runtime_url="http://localhost:9999",
-                timeout_seconds=60,
-                auth=A2AAuthConfig(type="bearer_token", env_var="A2A_HELLOWORLD_BEARER_TOKEN"),
-                extra_headers={},
-            ),
-            "langgraph": A2AAgentConfig(
-                enabled=True,
-                label="LangGraph Agent (A2A sample)",
-                description="Task-based A2A agent from a2a-samples (LangGraph sample).",
-                card_url="http://localhost:9998/.well-known/agent-card.json",
-                runtime_url="http://localhost:9998",
-                timeout_seconds=60,
-                auth=A2AAuthConfig(type="none"),
-                extra_headers={},
-            ),
-
-        },
-    )
+    # A2A stays experimental and opt-in. Enable and configure agents explicitly via env/config.
+    a2a: A2ASettings = A2ASettings(enabled=False, agents={})
 
     # MultiTenancy
     multi_tenancy: MultiTenancySettings = MultiTenancySettings()

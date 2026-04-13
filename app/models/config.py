@@ -420,5 +420,5 @@ class A2AAgentConfig(BaseModel):
 
 
 class A2ASettings(BaseModel):
-    enabled: bool = True
+    enabled: bool = False
     agents: Dict[str, A2AAgentConfig] = Field(default_factory=dict)

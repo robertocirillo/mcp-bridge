@@ -66,3 +66,15 @@ def test_app_cors_blocks_non_default_origin(monkeypatch):
 
     assert response.status_code == 400
     assert "access-control-allow-origin" not in response.headers
+
+
+def test_a2a_is_disabled_and_not_mounted_by_default(monkeypatch):
+    monkeypatch.delenv("A2A__ENABLED", raising=False)
+    app = _build_app_with_default_cors(monkeypatch)
+
+    with TestClient(app) as client:
+        openapi = client.get("/openapi.json")
+
+    assert config.settings.a2a.enabled is False
+    assert config.settings.a2a.agents == {}
+    assert "/a2a/agents" not in openapi.json()["paths"]

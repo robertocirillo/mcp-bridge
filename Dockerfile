@@ -23,10 +23,6 @@ RUN uv sync --frozen
 # Copy project files
 COPY . .
 
-# Optional: ensure your local vendor package is installed in editable mode
-# (only if it's not declared in pyproject.toml)
-#RUN uv pip install -e ./vendor/mcp-use
-
 # Set environment variables
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="/app/.venv/bin:$PATH"

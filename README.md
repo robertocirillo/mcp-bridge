@@ -17,7 +17,7 @@ It exposes MCP-backed sessions and queries over HTTP so applications can integra
 - Not a built-in auth or rate-limiting layer
 - Not primarily an A2A platform
 
-`/a2a` remains a secondary, experimental surface compared with the MCP REST bridge.
+`/a2a` remains a secondary, experimental surface compared with the MCP REST bridge, and is disabled by default until explicitly configured.
 
 ## Quickstart
 
@@ -97,7 +97,7 @@ Guardrails are configured per session in `POST /sessions`.
 - Horizontal scaling and multi-instance coordination are not first-class yet
 - Authentication, authorization, and rate limiting are expected to sit upstream
 - Multimodal support depends on the configured provider and model capabilities
-- A2A support is secondary and experimental compared with the MCP REST bridge
+- A2A support is secondary, experimental, and opt-in compared with the MCP REST bridge
 
 ## Where next
 

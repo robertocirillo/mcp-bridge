@@ -6,7 +6,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - /srv/docker-volumes/ollama_data:/root/.ollama
+      - ollama-data:/root/.ollama
     environment:
       - CUDA_VISIBLE_DEVICES=0
       - OLLAMA_DEBUG=1
@@ -27,7 +27,7 @@ services:
       - 'OLLAMA_BASE_URL=http://ollama-server:11434'
   #    - WEBUI_BASE_PATH=/open-webui
     volumes:
-      - /srv/docker-volumes/webui:/app/backend/data
+      - webui-data:/app/backend/data
     ports:
       - "3010:8080"
     deploy:
@@ -43,15 +43,14 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "8000"
-      DEBUG: "False"
+      DEBUG: "false"
       OLLAMA_BASE_URL: "http://ollama-server:11434"
-      MCP_HOST: "http://gateway:9011/mcp"
+      MCP_HOST: "${MCP_HOST:-http://gateway:9011/mcp}"
     env_file:
       - .env
-    volumes:
-#      - ./logs:/app/logs
-      - /home/cirillo/workspace/mcp-national-rail:/app/servers/mcp-national-rails:ro
-#      - /var/run/docker.sock:/var/run/docker.sock
+    # Optional mounts:
+    # - ./logs:/app/logs
+    # - ./servers:/app/servers:ro
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -74,4 +73,6 @@ services:
     ports:
       - "9011:9011"
 
-
+volumes:
+  ollama-data:
+  webui-data:
