@@ -792,20 +792,15 @@ source = { virtual = "." }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "anyio" },
-    { name = "black" },
     { name = "fastapi" },
-    { name = "flake8" },
     { name = "httpx" },
     { name = "langchain-anthropic" },
     { name = "langchain-ollama" },
     { name = "langchain-openai" },
     { name = "mcp-use" },
-    { name = "mypy" },
     { name = "psutil" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
@@ -814,28 +809,27 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "black" },
+    { name = "flake8" },
     { name = "httpx" },
+    { name = "mypy" },
     { name = "pytest" },
+    { name = "pytest-asyncio" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "a2a-sdk", specifier = "==0.3.22" },
     { name = "anyio", specifier = ">=4.0.0" },
-    { name = "black", specifier = ">=23.0.0" },
     { name = "fastapi", specifier = ">=0.116.0" },
-    { name = "flake8", specifier = ">=6.0.0" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "langchain-anthropic", specifier = ">=0.1.0" },
     { name = "langchain-ollama", specifier = ">=0.1.0" },
     { name = "langchain-openai", specifier = ">=0.1.0" },
     { name = "mcp-use", specifier = "==1.7.0" },
-    { name = "mypy", specifier = ">=1.7.0" },
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pydantic", specifier = ">=2.5.0,<3.0" },
     { name = "pydantic-settings", specifier = ">=2.1.0" },
-    { name = "pytest", specifier = ">=7.4.0" },
-    { name = "pytest-asyncio", specifier = ">=0.21.1" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-multipart", specifier = ">=0.0.6" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.25.0" },
@@ -844,8 +838,12 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "black", specifier = ">=23.0.0" },
+    { name = "flake8", specifier = ">=6.0.0" },
     { name = "httpx", specifier = ">=0.25" },
+    { name = "mypy", specifier = ">=1.7.0" },
     { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.21.1" },
 ]
 
 [[package]]
