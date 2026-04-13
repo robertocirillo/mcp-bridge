@@ -25,7 +25,6 @@ services:
     restart: unless-stopped
     environment:
       - 'OLLAMA_BASE_URL=http://ollama-server:11434'
-  #    - WEBUI_BASE_PATH=/open-webui
     volumes:
       - webui-data:/app/backend/data
     ports:
@@ -36,8 +35,7 @@ services:
           devices:
             - capabilities: [gpu]
     runtime: nvidia
-    extra_hosts:
-      - host.docker.internal:host-gateway
+
   mcp-bridge:
     build: .
     environment:
@@ -45,7 +43,6 @@ services:
       PORT: "8000"
       DEBUG: "false"
       OLLAMA_BASE_URL: "http://ollama-server:11434"
-      MCP_HOST: "${MCP_HOST:-http://gateway:9011/mcp}"
     env_file:
       - .env
     # Optional mounts:
@@ -60,18 +57,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    depends_on:
-      - gateway
-  gateway:
-    image: docker/mcp-gateway:dind
-    privileged: true
-    command:
-      - --transport=sse
-      - --servers=duckduckgo
-      - --port=9011
-      - --memory=512Mb
-    ports:
-      - "9011:9011"
 
 volumes:
   ollama-data:
