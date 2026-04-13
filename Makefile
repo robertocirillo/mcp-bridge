@@ -1,31 +1,30 @@
-# Name of the virtual environment
-VENV = .venv
-PYTHON = python3.12
-PIP = $(VENV)/bin/pip
+UV = uv
 
-# Default target
+.PHONY: default install setup clean rebuild run test lint format type-check
+
 default: install
 
-# Create a new virtual environment
-$(VENV)/bin/activate: requirements.txt
-	@echo "📦 Creating virtual environment..."
-	rm -rf $(VENV)
-	$(PYTHON) -m venv $(VENV)
-	$(PIP) install --upgrade pip setuptools wheel
+install:
+	$(UV) sync --dev
 
-# Install dependencies from requirements.txt
-install: $(VENV)/bin/activate
-	@echo "📥 Installing requirements..."
-	$(PIP) install -r requirements.txt
+setup: install
 
-# Clean the virtual environment
 clean:
-	@echo "🧹 Removing virtual environment..."
-	rm -rf $(VENV)
+	rm -rf .venv
 
-# Rebuild everything from scratch
 rebuild: clean install
 
-# Run the app with uvicorn
 run:
-	$(VENV)/bin/uvicorn main:app --reload
+	$(UV) run uvicorn main:app --reload
+
+test:
+	$(UV) run pytest -q
+
+lint:
+	$(UV) run flake8 .
+
+format:
+	$(UV) run black .
+
+type-check:
+	$(UV) run mypy .
