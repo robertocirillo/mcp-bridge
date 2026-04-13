@@ -27,7 +27,7 @@ It is ready to work with a Docker MCP gateway in either **DIND** or **DOD** mode
 | OpenAI-compatible MCP bridges | Presenting MCP capabilities behind OpenAI-style chat or responses APIs | `mcp-bridge` exposes its own REST surface for sessions, queries, and controlled MCP access rather than centering API compatibility emulation |
 | Lightweight MCP REST proxies | Thin HTTP wrappers over MCP transport or direct tool forwarding | `mcp-bridge` adds server-managed session lifecycle, `mcp-use`-based query orchestration, and guardrail enforcement instead of acting as a minimal pass-through |
 
-If you need a stable REST API in front of MCP with a session boundary and guardrails, this is the intended fit. For suggested repository metadata, see [docs/GITHUB_REPO_SETTINGS.md](docs/GITHUB_REPO_SETTINGS.md).
+If you need a stable REST API in front of MCP with a session boundary and guardrails, this is the intended fit.
 
 ---
 
@@ -167,7 +167,7 @@ mcp-bridge/
 │   └── utils/
 │       ├── logging.py          # Logging setup
 │       └── helpers.py          # Generic utilities
-├── docs/                       # Architecture and project context notes
+├── docs/                       # Public architecture, decisions, and roadmap notes
 ├── tests/                      # HTTP contract and regression tests
 ├── Dockerfile                  # Container image build
 ├── docker-compose.yml          # Default local deployment
