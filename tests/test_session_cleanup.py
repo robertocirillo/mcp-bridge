@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi import UploadFile
 from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
+from config import settings
 
 from app.api.dependencies import get_session_manager
 from app.api.routes.sessions import router as sessions_router
@@ -227,7 +228,11 @@ def test_delete_session_cancels_pending_elicitations():
     assert "s1" not in manager._pending_elicitations
 
 
-def test_delete_route_passes_tenant_id_to_background_task():
+def test_delete_route_passes_tenant_id_to_background_task(monkeypatch):
+    monkeypatch.setattr(settings.multi_tenancy, "enabled", True, raising=False)
+    monkeypatch.setattr(settings.multi_tenancy, "require_header", False, raising=False)
+    monkeypatch.setattr(settings.multi_tenancy, "default_tenant_id", "default", raising=False)
+
     manager = SessionManager()
     config = _session_config_stub()
     manager._sessions["s1"] = SessionData("s1", config, _DummyWrapper(), tenant_id="tenant-a")
