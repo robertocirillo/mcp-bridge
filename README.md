@@ -2,13 +2,13 @@
 
 `mcp-bridge` is a REST bridge to the MCP ecosystem, powered by [`mcp-use`](https://github.com/mcp-use/mcp-use), with session-scoped guardrail enforcement around LLM interactions.
 
-It gives applications a stable HTTP boundary for MCP-backed sessions, queries, and controlled tool access without embedding MCP orchestration directly in the caller.
+It exposes MCP-backed sessions and queries over HTTP so applications can integrate with the MCP ecosystem through a service boundary instead of embedding MCP orchestration directly.
 
 ## What this is
 
 - A FastAPI service that exposes MCP sessions and query flows over REST
-- A thin service layer on top of `mcp-use`
-- A session-aware guardrail boundary around LLM-driven interactions and tool results
+- A service built on `mcp-use` for MCP connectivity and LLM-backed execution
+- A session-aware guardrail boundary around LLM interactions
 
 ## What this is not
 
@@ -17,31 +17,13 @@ It gives applications a stable HTTP boundary for MCP-backed sessions, queries, a
 - Not a built-in auth or rate-limiting layer
 - Not primarily an A2A platform
 
-## Why use it
-
-- Keep MCP orchestration server-side and integrate over HTTP
-- Create, reuse, and clean up managed sessions instead of handling runtime state in every client
-- Apply guardrails consistently at the session boundary
-- Support synchronous queries and asynchronous query operations through the same API
-- Reach beyond query execution when needed with prompt and resource endpoints
-
-Secondary capability: `mcp-bridge` can proxy configured A2A agents through `/a2a`, but that path is experimental and not the primary product story.
-
-## Key capabilities
-
-- Session lifecycle over REST: create, inspect, list, and delete sessions
-- Query execution over MCP-backed sessions with `mcp-use`
-- Session-scoped guardrails configured at session creation
-- Asynchronous query operations for longer-running work
-- Prompt and resource access for MCP servers
-- Optional multi-tenancy via request headers
-- Optional multimodal query support, depending on model/provider support
+`/a2a` remains a secondary, experimental surface compared with the MCP REST bridge.
 
 ## Quickstart
 
 Requirements:
 
-- Python 3.11+
+- Python 3.12+
 - [`uv`](https://docs.astral.sh/uv/)
 - At least one LLM credential configured in `.env`
 - An MCP server to launch or connect to
@@ -57,8 +39,8 @@ uv run python main.py
 
 Once the service is running:
 
-- Swagger / OpenAPI: `http://localhost:8000/docs`
 - Health check: `http://localhost:8000/health`
+- OpenAPI / Swagger: `http://localhost:8000/docs`
 
 Create a session:
 
@@ -90,9 +72,7 @@ curl -s -X POST "http://localhost:8000/sessions/<session_id>/query" \
   }'
 ```
 
-## Short examples
-
-Start an async query operation:
+For a longer-running query, use the async flow:
 
 ```bash
 curl -s -X POST "http://localhost:8000/sessions/<session_id>/query-operations" \
@@ -108,7 +88,7 @@ Poll it:
 curl -s "http://localhost:8000/sessions/<session_id>/query-operations/<operation_id>"
 ```
 
-Guardrails are configured per session in `POST /sessions`. For copy-paste client examples in Python and Node.js, see [examples/README.md](examples/README.md).
+Guardrails are configured per session in `POST /sessions`.
 
 ## Current limitations
 
@@ -122,8 +102,7 @@ Guardrails are configured per session in `POST /sessions`. For copy-paste client
 ## Where next
 
 - [examples/README.md](examples/README.md) for minimal client examples
-- [docs/ROADMAP.md](docs/ROADMAP.md) for current gaps and planned work
-- [docs/ARCHITECTURE_FLOW.md](docs/ARCHITECTURE_FLOW.md) for the runtime flow
-- [docs/DECISIONS.md](docs/DECISIONS.md) for design notes
 - `http://localhost:8000/docs` for the full API surface
-- `Dockerfile` and the compose files for containerized local runs
+- [docs/ROADMAP.md](docs/ROADMAP.md) for current gaps and planned work
+- [LICENSE](LICENSE)
+- [SECURITY.md](SECURITY.md)
