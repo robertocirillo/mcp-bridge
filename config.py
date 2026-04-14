@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     DEFAULT_MAX_STEPS: int = 30
     SUPPORTED_PROVIDERS: List[str] = ["openai", "anthropic", "ollama"]
 
-    # Bias-detector-service (optional internal dependency)
+    # Bias-detector-service (optional companion service)
     BIAS_DETECTOR_SERVICE_BASE_URL: str = "http://bias-detector-service:9090"
 
     # Logging Settings
