@@ -36,6 +36,12 @@ cp .env.example .env
 uv run python main.py
 ```
 
+## Docker Compose orientation
+
+- `docker-compose.yml` is the simplest starting point and runs `mcp-bridge` only.
+- `docker-compose-dod.yml` and `docker-compose-dind.yml` are more specific gateway-based setups that also add a `gateway` service.
+- `docker-compose-full-stack.yml` is the broader local stack with `mcp-bridge`, Ollama, Open WebUI, and the bias detector service.
+
 Once the service is running:
 
 - Health check: `http://localhost:8000/health`
