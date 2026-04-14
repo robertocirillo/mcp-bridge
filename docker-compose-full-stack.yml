@@ -2,7 +2,7 @@ services:
   ollama-server:
     image: ollama/ollama:latest
     container_name: ollama-server
-    pull_policy: always
+    pull_policy: missing
     ports:
       - "11434:11434"
     volumes:
@@ -21,10 +21,13 @@ services:
   ollama-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: ollama-webui
-    pull_policy: always
+    pull_policy: missing
     restart: unless-stopped
     environment:
       - 'OLLAMA_BASE_URL=http://ollama-server:11434'
+    depends_on:
+      ollama-server:
+        condition: service_started
     volumes:
       - webui-data:/app/backend/data
     ports:
@@ -36,6 +39,35 @@ services:
             - capabilities: [gpu]
     runtime: nvidia
 
+  bias-detector-service:
+    image: robertocirillo/bias-detector-service:0.1.0
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "9090"
+      HF_HOME: "/hf_cache"
+      HF_OFFLINE: "false"
+      MODEL_ID: "cardiffnlp/twitter-roberta-base-hate-latest"
+      DEVICE: "cpu"
+      MAX_LENGTH: "512"
+      BATCH_SIZE: "8"
+      THRESHOLD: "0.5"
+      MAX_INPUT_CHARS: "20000"
+      WARMUP: "true"
+      MAX_LOADED_MODELS: "0"
+      LOG_LEVEL: "INFO"
+      SPAN_TRIGGERS: "always,never,all,nobody,everyone"
+    expose:
+      - "9090"
+    restart: unless-stopped
+    volumes:
+      - hf-cache:/hf_cache
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   mcp-bridge:
     build: .
     environment:
@@ -45,6 +77,9 @@ services:
       OLLAMA_BASE_URL: "http://ollama-server:11434"
     env_file:
       - .env
+    depends_on:
+      bias-detector-service:
+        condition: service_healthy
     # Optional mounts:
     # - ./logs:/app/logs
     # - ./servers:/app/servers:ro
@@ -59,5 +94,6 @@ services:
       start_period: 40s
 
 volumes:
+  hf-cache:
   ollama-data:
   webui-data:
