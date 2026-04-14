@@ -38,9 +38,9 @@ uv run python main.py
 
 ## Docker Compose orientation
 
-* `docker-compose.yml` is the simplest starting point. It runs `mcp-bridge` only and is the best default choice if you already have an LLM endpoint available, for example Ollama running outside the stack.
-* `docker-compose-full-stack.yml` is the more advanced local stack, not the simplest default. It runs `mcp-bridge` together with additional local services including Ollama, Open WebUI, and the optional bias detector service, and it includes GPU/NVIDIA-oriented configuration for the Ollama/Open WebUI side.
-* `docker-compose-dod.yml` and `docker-compose-dind.yml` are specialized setups for Docker MCP Toolkit / gateway scenarios. They add a `gateway` service and are intended for cases where MCP server access is mediated through Docker-based gateway patterns rather than the simpler default bridge-only setup.
+- `docker-compose.yml` is the simplest starting point. It runs `mcp-bridge` only and is the best default choice if you already have an LLM endpoint available, for example Ollama running outside the stack.
+- `docker-compose-full-stack.yml` is the more advanced local stack, not the simplest default. It runs `mcp-bridge` together with additional local services including Ollama, Open WebUI, and the optional bias detector service, and it includes GPU/NVIDIA-oriented configuration for the Ollama/Open WebUI side.
+- `docker-compose-dod.yml` and `docker-compose-dind.yml` are specialized setups for Docker MCP Toolkit / gateway scenarios. They add a `gateway` service and are intended for cases where MCP server access is mediated through Docker-based gateway patterns rather than the simpler default bridge-only setup.
 
 Once the service is running:
 

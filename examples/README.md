@@ -55,6 +55,8 @@ Run:
 node examples/javascript/query_operation_poll.mjs
 ```
 
+Use a recent Node.js version with built-in `fetch`.
+
 What it does:
 
 - creates a session
