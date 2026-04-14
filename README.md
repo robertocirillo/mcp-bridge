@@ -26,7 +26,7 @@ Requirements:
 - Python 3.12+
 - [`uv`](https://docs.astral.sh/uv/)
 - Node.js + npm (required for the quickstart example below, which launches the filesystem MCP server via `npx`)
-- At least one LLM credential configured in `.env`
+- At least one usable LLM provider configured (cloud API key or reachable local Ollama)
 - An MCP server to launch or connect to
 
 ```bash
