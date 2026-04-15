@@ -209,6 +209,62 @@ def test_multipart_query_accepts_text_plus_one_image(monkeypatch):
     assert body["steps_used"] == 7
 
 
+def test_multipart_query_accepts_text_plus_one_image_without_optional_fields(monkeypatch):
+    client, _mgr = _build_test_client(monkeypatch)
+    session_id = _create_session(client)
+
+    response = client.post(
+        f"/sessions/{session_id}/query-multipart",
+        data={"text": "describe this image"},
+        files=[("images", ("cat.png", PNG_BYTES, "image/png"))],
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["result"] == "TEXT:describe this image|IMAGES:1|PDFS:0"
+    assert body["steps_used"] == 2
+
+
+def test_multipart_query_normalizes_swagger_empty_optional_fields(monkeypatch):
+    client, _mgr = _build_test_client(monkeypatch)
+    session_id = _create_session(client)
+
+    response = client.post(
+        f"/sessions/{session_id}/query-multipart",
+        data={
+            "text": "describe this image",
+            "max_steps": "",
+            "documents": "",
+        },
+        files=[("images", ("cat.png", PNG_BYTES, "image/png"))],
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["result"] == "TEXT:describe this image|IMAGES:1|PDFS:0"
+    assert body["steps_used"] == 2
+
+
+def test_multipart_query_rejects_invalid_max_steps_string(monkeypatch):
+    client, _mgr = _build_test_client(monkeypatch)
+    session_id = _create_session(client)
+
+    response = client.post(
+        f"/sessions/{session_id}/query-multipart",
+        data={"text": "describe this image", "max_steps": "abc"},
+        files=[("images", ("cat.png", PNG_BYTES, "image/png"))],
+        headers={"X-Tenant-Id": "tenant-a"},
+    )
+
+    assert response.status_code == 400, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "MCP_SCHEMA_ERROR"
+    assert detail["operation"] == "execute_multipart_query"
+    assert detail["message"] == "Field 'max_steps' must be a valid integer"
+
+
 def test_multipart_query_accepts_multiple_images_within_limits(monkeypatch):
     client, _mgr = _build_test_client(monkeypatch)
     session_id = _create_session(client)
@@ -300,9 +356,7 @@ def test_query_operations_multipart_openapi_is_query_only(monkeypatch):
     assert response.status_code == 200, response.text
     body = response.json()
     multipart_operation = body["paths"]["/sessions/{session_id}/query-operations-multipart"]["post"]
-    schema_ref = multipart_operation["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"]
-    schema_name = schema_ref.rsplit("/", 1)[-1]
-    properties = body["components"]["schemas"][schema_name]["properties"]
+    properties = multipart_operation["requestBody"]["content"]["multipart/form-data"]["schema"]["properties"]
 
     assert "text" in properties
     assert "max_steps" in properties
@@ -346,6 +400,39 @@ async def test_multipart_query_operation_accepts_text_plus_one_image(monkeypatch
 
         assert final_body["result"]["result"] == "TEXT:describe this image|IMAGES:1|PDFS:0"
         assert final_body["result"]["steps_used"] == 7
+
+
+@pytest.mark.asyncio
+async def test_multipart_query_operation_normalizes_swagger_empty_optional_fields(monkeypatch, tmp_path):
+    app, _mgr = _build_test_api(monkeypatch, upload_root=tmp_path)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        session_id = await _create_session_async(client)
+
+        create_response = await client.post(
+            f"/sessions/{session_id}/query-operations-multipart",
+            data={
+                "text": "describe this image",
+                "max_steps": "",
+                "documents": "",
+                "tool_name": "",
+                "arguments": "",
+            },
+            files=[("images", ("cat.png", PNG_BYTES, "image/png"))],
+            headers={"X-Tenant-Id": "tenant-a"},
+        )
+
+        assert create_response.status_code == 200, create_response.text
+        create_body = create_response.json()
+        final_body = await _wait_for_operation_status(
+            client,
+            session_id=session_id,
+            operation_id=create_body["operation_id"],
+            expected_status="completed",
+        )
+
+        assert final_body["result"]["result"] == "TEXT:describe this image|IMAGES:1|PDFS:0"
+        assert final_body["result"]["steps_used"] == 2
 
 
 @pytest.mark.asyncio
