@@ -1,5 +1,11 @@
 # mcp-bridge
 
+[![CI](https://github.com/robertocirillo/mcp-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/robertocirillo/mcp-bridge/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/robertocirillo/mcp-bridge)](https://github.com/robertocirillo/mcp-bridge/releases)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue)](https://github.com/robertocirillo/mcp-bridge)
+[![License](https://img.shields.io/github/license/robertocirillo/mcp-bridge)](LICENSE)
+[![Built on mcp-use](https://img.shields.io/badge/built%20on-mcp--use-6f42c1)](https://github.com/mcp-use/mcp-use)
+
 `mcp-bridge` is a REST bridge to the MCP ecosystem, powered by [`mcp-use`](https://github.com/mcp-use/mcp-use), with session-scoped guardrail enforcement around LLM interactions.
 
 Built on the `mcp-use` runtime, it inherits broad MCP server compatibility from the underlying runtime rather than targeting only a small fixed set of MCP servers. It exposes MCP-backed sessions and queries over HTTP so applications can integrate with the MCP ecosystem through a service boundary instead of embedding MCP orchestration directly.
