@@ -23,7 +23,7 @@ from app.models.requests import QueryOperationCreateRequest, QueryOperationResum
 from app.models.responses import QueryOperationResponse, QueryResponse
 
 MULTIPART_DIRECT_TOOL_INVOCATION_NOT_SUPPORTED_MESSAGE = (
-    "Multipart direct tool invocation with uploaded documents is not supported in 0.2.0. "
+    "Multipart direct tool invocation with uploaded documents is not supported in 0.2.1. "
     "Use POST /sessions/{session_id}/query-operations with JSON arguments. "
     "If the MCP server is path-based, pass a file_path reachable by that server."
 )

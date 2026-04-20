@@ -2,6 +2,13 @@
 
 All notable project-level changes should be recorded here.
 
+## [0.2.1] - 2026-04-20
+
+### Fixed
+
+- Handle empty optional multipart query form fields as absent values instead of raising an error
+- Cover multipart query endpoints with regression tests for empty optional form fields
+
 ## [0.2.0] - 2026-04-10
 
 Initial changelog entry for the current release line.

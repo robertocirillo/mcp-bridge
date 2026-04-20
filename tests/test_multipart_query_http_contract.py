@@ -13,7 +13,7 @@ PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 16
 PDF_BYTES = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
 MULTIPART_DIRECT_TOOL_INVOCATION_NOT_SUPPORTED_MESSAGE = (
-    "Multipart direct tool invocation with uploaded documents is not supported in 0.2.0. "
+    "Multipart direct tool invocation with uploaded documents is not supported in 0.2.1. "
     "Use POST /sessions/{session_id}/query-operations with JSON arguments. "
     "If the MCP server is path-based, pass a file_path reachable by that server."
 )
