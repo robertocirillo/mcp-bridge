@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_MCP_SERVER_ROOT="${SCRIPT_DIR}/sample-files"
+
 MCP_BRIDGE_BASE_URL="${MCP_BRIDGE_BASE_URL:-http://localhost:8000}"
 MCP_BRIDGE_BASE_URL="${MCP_BRIDGE_BASE_URL%/}"
 MCP_BRIDGE_LLM_PROVIDER="${MCP_BRIDGE_LLM_PROVIDER:-ollama}"
 MCP_BRIDGE_LLM_MODEL="${MCP_BRIDGE_LLM_MODEL:-llama3.2:latest}"
-MCP_SERVER_ROOT="${MCP_SERVER_ROOT:-/tmp}"
+MCP_SERVER_ROOT="${MCP_SERVER_ROOT:-$DEFAULT_MCP_SERVER_ROOT}"
 MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS="${MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS:-120}"
 MCP_BRIDGE_TENANT_ID="${MCP_BRIDGE_TENANT_ID:-}"
 MCP_BRIDGE_RUN_ID="${MCP_BRIDGE_RUN_ID:-}"
@@ -205,7 +208,9 @@ main() {
     die "MCP_SERVER_ROOT does not exist or is not a directory: ${MCP_SERVER_ROOT}"
   fi
 
-  query_text="Use the filesystem MCP tools to list the files in ${query_target}."
+  MCP_SERVER_ROOT="$(cd "$MCP_SERVER_ROOT" && pwd)"
+  query_target="$MCP_SERVER_ROOT"
+  query_text="Use the filesystem MCP tools to list the files in ${query_target} and briefly identify the sample files you find."
 
   log_step "Demo configuration"
   log_info "Base URL: ${MCP_BRIDGE_BASE_URL}"

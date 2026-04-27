@@ -1,0 +1,4 @@
+Demo notes
+- This folder is safe to show in a public terminal recording.
+- The REST client talks only to mcp-bridge.
+- The MCP filesystem server exposes these sample files.

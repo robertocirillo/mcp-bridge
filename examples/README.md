@@ -27,7 +27,7 @@ These examples focus on the main product path: the REST bridge for MCP sessions 
 - `MCP_BRIDGE_BASE_URL=http://localhost:8000`
 - `MCP_BRIDGE_LLM_PROVIDER=ollama`
 - `MCP_BRIDGE_LLM_MODEL=llama3.2:latest`
-- `MCP_SERVER_ROOT=/tmp`
+- `MCP_SERVER_ROOT=<repo>/examples/demo/sample-files`
 - `MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS=120`
 
 Optional headers:
@@ -56,7 +56,7 @@ Minimum prerequisites:
 - `mcp-bridge` must already be running
 - Ollama and the `llama3.2:latest` model must be reachable from the `mcp-bridge` runtime, or you must override provider/model via env
 - `curl`, `jq`, `node`, and `npx` must be available
-- `MCP_SERVER_ROOT` must exist in the runtime where the filesystem MCP server process is launched
+- by default the script uses the sample directory under `examples/demo/sample-files`
 
 On CPU-only machines the sync query can take noticeably longer, so the demo exposes `MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS` and defaults it to `120`.
 
@@ -74,11 +74,17 @@ Increase the sync timeout when needed:
 MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS=180 ./examples/demo/filesystem_rest_demo.sh
 ```
 
+Point the demo at a different directory when needed:
+
+```bash
+MCP_SERVER_ROOT=/private/tmp ./examples/demo/filesystem_rest_demo.sh
+```
+
 For a short terminal cast:
 
 - start `mcp-bridge` first in a separate terminal, with Ollama already reachable
 - run `./examples/demo/filesystem_rest_demo.sh` from a clean shell
-- keep the default `/tmp` root unless you want the listing to show a different demo directory
+- keep the default sample directory unless you want the listing to show a different demo directory
 
 ## Python example
 
