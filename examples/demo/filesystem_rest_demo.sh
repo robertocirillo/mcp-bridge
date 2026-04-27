@@ -26,7 +26,11 @@ COLOR_YELLOW=""
 COLOR_RED=""
 
 setup_colors() {
-  if [[ -t 1 && -z "${NO_COLOR+x}" ]]; then
+  if [[ -n "${NO_COLOR+x}" ]]; then
+    return
+  fi
+
+  if [[ (-n "${FORCE_COLOR:-}" && "${FORCE_COLOR}" != "0") || -t 1 ]]; then
     COLOR_RESET=$'\033[0m'
     COLOR_BOLD=$'\033[1m'
     COLOR_CYAN=$'\033[36m'
@@ -252,7 +256,6 @@ main() {
   log_step "Health check"
   run_health_check
 
-  log_step "Create session"
   session_payload="$(
     jq -n \
       --arg provider "$MCP_BRIDGE_LLM_PROVIDER" \
@@ -272,6 +275,10 @@ main() {
         }
       }'
   )"
+  log_step "Create session payload"
+  print_json "$session_payload"
+
+  log_step "Create session"
   if ! api_request "POST" "/sessions" "$session_payload"; then
     die "session creation failed. Confirm that mcp-bridge can reach provider '${MCP_BRIDGE_LLM_PROVIDER}' with model '${MCP_BRIDGE_LLM_MODEL}'."
   fi
@@ -283,7 +290,6 @@ main() {
 
   log_success "Session created: ${SESSION_ID}"
 
-  log_step "Run query"
   query_payload="$(
     jq -n \
       --arg query "$query_text" \
@@ -292,6 +298,10 @@ main() {
         max_steps: 10
       }'
   )"
+  log_step "Query payload"
+  print_json "$query_payload"
+
+  log_step "Run query"
   if ! api_request "POST" "/sessions/${SESSION_ID}/query" "$query_payload" "$MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS"; then
     if [[ "$API_ERROR_KIND" == "timeout" ]]; then
       die "sync query timed out after ${MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS} seconds for session ${SESSION_ID}. Increase MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS for slower CPU-only Ollama demos."
