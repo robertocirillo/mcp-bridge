@@ -42,6 +42,18 @@ cp .env.example .env
 uv run python main.py
 ```
 
+## Optional Langfuse observability
+
+Langfuse is optional at runtime. `mcp-bridge` relies on `mcp-use`, and `mcp-use` automatically enables Langfuse tracing when the `langfuse` package is installed and these environment variables are present:
+
+```bash
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGFUSE_HOST=http://127.0.0.1:3000
+```
+
+This setup can point to a self-hosted Langfuse instance. For the local setup used in this repository, the expected `LANGFUSE_HOST` value is `http://127.0.0.1:3000`.
+
 ## Docker Compose orientation
 
 - `docker-compose.yml` is the simplest starting point. It runs `mcp-bridge` only and is the best default choice if you already have an LLM endpoint available, for example Ollama running outside the stack.
