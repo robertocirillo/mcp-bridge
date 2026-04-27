@@ -4,14 +4,17 @@ set -euo pipefail
 MCP_BRIDGE_BASE_URL="${MCP_BRIDGE_BASE_URL:-http://localhost:8000}"
 MCP_BRIDGE_BASE_URL="${MCP_BRIDGE_BASE_URL%/}"
 MCP_BRIDGE_LLM_PROVIDER="${MCP_BRIDGE_LLM_PROVIDER:-ollama}"
-MCP_BRIDGE_LLM_MODEL="${MCP_BRIDGE_LLM_MODEL:-qwen3-vl:8b}"
+MCP_BRIDGE_LLM_MODEL="${MCP_BRIDGE_LLM_MODEL:-llama3.2:latest}"
 MCP_SERVER_ROOT="${MCP_SERVER_ROOT:-/tmp}"
+MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS="${MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS:-120}"
 MCP_BRIDGE_TENANT_ID="${MCP_BRIDGE_TENANT_ID:-}"
 MCP_BRIDGE_RUN_ID="${MCP_BRIDGE_RUN_ID:-}"
 
 SESSION_ID=""
 API_BODY=""
 API_STATUS=""
+API_ERROR_KIND=""
+API_ERROR_MESSAGE=""
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -41,16 +44,20 @@ api_request() {
   local method="$1"
   local path="$2"
   local payload="${3-}"
+  local timeout_seconds="${4:-20}"
   local body_file=""
   local status
+  local curl_exit_code
 
+  API_ERROR_KIND=""
+  API_ERROR_MESSAGE=""
   body_file="$(mktemp)"
   local curl_args=(
     curl
     --silent
     --show-error
     --max-time
-    20
+    "$timeout_seconds"
     --output
     "$body_file"
     --write-out
@@ -86,9 +93,20 @@ api_request() {
 
   curl_args+=("${MCP_BRIDGE_BASE_URL}${path}")
 
-  if ! status="$("${curl_args[@]}")"; then
+  if status="$("${curl_args[@]}")"; then
+    :
+  else
+    curl_exit_code="$?"
     rm -f "$body_file"
-    printf 'Error: request failed: %s %s\n' "$method" "$path" >&2
+    if [[ "$curl_exit_code" -eq 28 ]]; then
+      API_ERROR_KIND="timeout"
+      API_ERROR_MESSAGE="${method} ${path} timed out after ${timeout_seconds} seconds"
+      printf 'Error: %s\n' "$API_ERROR_MESSAGE" >&2
+    else
+      API_ERROR_KIND="transport"
+      API_ERROR_MESSAGE="request failed: ${method} ${path}"
+      printf 'Error: %s\n' "$API_ERROR_MESSAGE" >&2
+    fi
     return 1
   fi
 
@@ -97,11 +115,15 @@ api_request() {
   rm -f "$body_file"
 
   if [[ ! "$API_STATUS" =~ ^[0-9]{3}$ ]]; then
+    API_ERROR_KIND="invalid_status"
+    API_ERROR_MESSAGE="unexpected HTTP status for ${method} ${path}: ${API_STATUS}"
     printf 'Error: unexpected HTTP status for %s %s: %s\n' "$method" "$path" "$API_STATUS" >&2
     return 1
   fi
 
   if (( API_STATUS < 200 || API_STATUS >= 300 )); then
+    API_ERROR_KIND="http_error"
+    API_ERROR_MESSAGE="${method} ${path} returned HTTP ${API_STATUS}"
     printf 'Error: %s %s returned HTTP %s\n' "$method" "$path" "$API_STATUS" >&2
     if [[ -n "$API_BODY" ]]; then
       printf '%s\n' "$API_BODY" | jq . 2>/dev/null || printf '%s\n' "$API_BODY" >&2
@@ -175,6 +197,10 @@ main() {
   require_command node
   require_command npx
 
+  if [[ ! "$MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || (( MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS <= 0 )); then
+    die "MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS must be a positive integer: ${MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS}"
+  fi
+
   if [[ ! -d "$MCP_SERVER_ROOT" ]]; then
     die "MCP_SERVER_ROOT does not exist or is not a directory: ${MCP_SERVER_ROOT}"
   fi
@@ -186,6 +212,7 @@ main() {
   log_info "LLM provider: ${MCP_BRIDGE_LLM_PROVIDER}"
   log_info "LLM model: ${MCP_BRIDGE_LLM_MODEL}"
   log_info "Filesystem root: ${MCP_SERVER_ROOT}"
+  log_info "Sync query timeout: ${MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS}s"
   log_info "MCP server: npx -y @modelcontextprotocol/server-filesystem ${MCP_SERVER_ROOT}"
 
   log_step "Health check"
@@ -231,8 +258,11 @@ main() {
         max_steps: 10
       }'
   )"
-  if ! api_request "POST" "/sessions/${SESSION_ID}/query" "$query_payload"; then
-    die "query execution failed for session ${SESSION_ID}. Confirm that the selected provider/model are reachable and that the filesystem MCP server can start."
+  if ! api_request "POST" "/sessions/${SESSION_ID}/query" "$query_payload" "$MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS"; then
+    if [[ "$API_ERROR_KIND" == "timeout" ]]; then
+      die "sync query timed out after ${MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS} seconds for session ${SESSION_ID}. Increase MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS for slower CPU-only Ollama demos."
+    fi
+    die "sync query failed for session ${SESSION_ID}. Confirm that the selected provider/model are reachable and that the filesystem MCP server can start."
   fi
 
   log_info "Query completed"

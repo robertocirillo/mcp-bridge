@@ -26,8 +26,9 @@ These examples focus on the main product path: the REST bridge for MCP sessions 
 
 - `MCP_BRIDGE_BASE_URL=http://localhost:8000`
 - `MCP_BRIDGE_LLM_PROVIDER=ollama`
-- `MCP_BRIDGE_LLM_MODEL=qwen3-vl:8b`
+- `MCP_BRIDGE_LLM_MODEL=llama3.2:latest`
 - `MCP_SERVER_ROOT=/tmp`
+- `MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS=120`
 
 Optional headers:
 
@@ -47,15 +48,17 @@ What it shows:
 - checks `GET /health`
 - verifies that the selected provider is advertised by the bridge health response
 - creates a session with the filesystem MCP server via `npx -y @modelcontextprotocol/server-filesystem`
-- runs `POST /sessions/{session_id}/query`
+- runs the synchronous `POST /sessions/{session_id}/query` flow
 - deletes the session with `DELETE /sessions/{session_id}`
 
 Minimum prerequisites:
 
 - `mcp-bridge` must already be running
-- Ollama and the `qwen3-vl:8b` model must be reachable from the `mcp-bridge` runtime, or you must override provider/model via env
+- Ollama and the `llama3.2:latest` model must be reachable from the `mcp-bridge` runtime, or you must override provider/model via env
 - `curl`, `jq`, `node`, and `npx` must be available
 - `MCP_SERVER_ROOT` must exist in the runtime where the filesystem MCP server process is launched
+
+On CPU-only machines the sync query can take noticeably longer, so the demo exposes `MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS` and defaults it to `120`.
 
 Override provider/model when needed:
 
@@ -63,6 +66,12 @@ Override provider/model when needed:
 MCP_BRIDGE_LLM_PROVIDER=ollama \
 MCP_BRIDGE_LLM_MODEL=qwen2.5:7b \
 ./examples/demo/filesystem_rest_demo.sh
+```
+
+Increase the sync timeout when needed:
+
+```bash
+MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS=180 ./examples/demo/filesystem_rest_demo.sh
 ```
 
 For a short terminal cast:
