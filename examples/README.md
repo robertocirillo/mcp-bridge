@@ -85,6 +85,7 @@ For a short terminal cast:
 - start `mcp-bridge` first in a separate terminal, with Ollama already reachable
 - run `./examples/demo/filesystem_rest_demo.sh` from a clean shell
 - keep the default sample directory unless you want the listing to show a different demo directory
+- the script uses ANSI colors when stdout is a terminal; disable them with `NO_COLOR=1`
 
 ## Python example
 

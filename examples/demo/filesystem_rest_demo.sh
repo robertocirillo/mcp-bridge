@@ -18,25 +18,53 @@ API_BODY=""
 API_STATUS=""
 API_ERROR_KIND=""
 API_ERROR_MESSAGE=""
+COLOR_RESET=""
+COLOR_BOLD=""
+COLOR_CYAN=""
+COLOR_GREEN=""
+COLOR_YELLOW=""
+COLOR_RED=""
+
+setup_colors() {
+  if [[ -t 1 && -z "${NO_COLOR+x}" ]]; then
+    COLOR_RESET=$'\033[0m'
+    COLOR_BOLD=$'\033[1m'
+    COLOR_CYAN=$'\033[36m'
+    COLOR_GREEN=$'\033[32m'
+    COLOR_YELLOW=$'\033[33m'
+    COLOR_RED=$'\033[31m'
+  fi
+}
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    printf 'Error: required command not found: %s\n' "$1" >&2
-    exit 1
+    die "required command not found: $1"
   fi
 }
 
 die() {
-  printf 'Error: %s\n' "$1" >&2
+  printf '%sError:%s %s\n' "$COLOR_RED" "$COLOR_RESET" "$1" >&2
   exit 1
 }
 
 log_step() {
-  printf '\n==> %s\n' "$1"
+  printf '\n%s%s==>%s %s\n' "$COLOR_BOLD" "$COLOR_CYAN" "$COLOR_RESET" "$1"
 }
 
 log_info() {
   printf '%s\n' "$1"
+}
+
+log_success() {
+  printf '%s%s%s\n' "$COLOR_GREEN" "$1" "$COLOR_RESET"
+}
+
+log_warning() {
+  printf '%sWarning:%s %s\n' "$COLOR_YELLOW" "$COLOR_RESET" "$1" >&2
+}
+
+log_kv() {
+  printf '%s: %s%s%s\n' "$1" "$COLOR_BOLD" "$2" "$COLOR_RESET"
 }
 
 print_json() {
@@ -104,11 +132,11 @@ api_request() {
     if [[ "$curl_exit_code" -eq 28 ]]; then
       API_ERROR_KIND="timeout"
       API_ERROR_MESSAGE="${method} ${path} timed out after ${timeout_seconds} seconds"
-      printf 'Error: %s\n' "$API_ERROR_MESSAGE" >&2
+      printf '%sError:%s %s\n' "$COLOR_RED" "$COLOR_RESET" "$API_ERROR_MESSAGE" >&2
     else
       API_ERROR_KIND="transport"
       API_ERROR_MESSAGE="request failed: ${method} ${path}"
-      printf 'Error: %s\n' "$API_ERROR_MESSAGE" >&2
+      printf '%sError:%s %s\n' "$COLOR_RED" "$COLOR_RESET" "$API_ERROR_MESSAGE" >&2
     fi
     return 1
   fi
@@ -120,14 +148,14 @@ api_request() {
   if [[ ! "$API_STATUS" =~ ^[0-9]{3}$ ]]; then
     API_ERROR_KIND="invalid_status"
     API_ERROR_MESSAGE="unexpected HTTP status for ${method} ${path}: ${API_STATUS}"
-    printf 'Error: unexpected HTTP status for %s %s: %s\n' "$method" "$path" "$API_STATUS" >&2
+    printf '%sError:%s unexpected HTTP status for %s %s: %s\n' "$COLOR_RED" "$COLOR_RESET" "$method" "$path" "$API_STATUS" >&2
     return 1
   fi
 
   if (( API_STATUS < 200 || API_STATUS >= 300 )); then
     API_ERROR_KIND="http_error"
     API_ERROR_MESSAGE="${method} ${path} returned HTTP ${API_STATUS}"
-    printf 'Error: %s %s returned HTTP %s\n' "$method" "$path" "$API_STATUS" >&2
+    printf '%sError:%s %s %s returned HTTP %s\n' "$COLOR_RED" "$COLOR_RESET" "$method" "$path" "$API_STATUS" >&2
     if [[ -n "$API_BODY" ]]; then
       printf '%s\n' "$API_BODY" | jq . 2>/dev/null || printf '%s\n' "$API_BODY" >&2
     fi
@@ -139,11 +167,11 @@ delete_session() {
   local session_id="$1"
 
   if ! api_request "DELETE" "/sessions/${session_id}"; then
-    printf 'Warning: failed to delete session %s\n' "$session_id" >&2
+    log_warning "failed to delete session ${session_id}"
     return 1
   fi
 
-  log_info "Session deleted: ${session_id}"
+  log_success "Session deleted: ${session_id}"
 }
 
 run_health_check() {
@@ -160,9 +188,9 @@ run_health_check() {
   fi
 
   supported_providers="$(printf '%s\n' "$API_BODY" | jq -r '(.supported_providers // []) | join(", ")')"
-  log_info "Bridge health: healthy"
+  log_success "Bridge health: healthy"
   if [[ -n "$supported_providers" ]]; then
-    log_info "Supported providers: ${supported_providers}"
+    log_kv "Supported providers" "$supported_providers"
   fi
 
   if ! printf '%s\n' "$API_BODY" | jq -e --arg provider "$MCP_BRIDGE_LLM_PROVIDER" '(.supported_providers // []) | index($provider) != null' >/dev/null; then
@@ -170,7 +198,7 @@ run_health_check() {
   fi
 
   if [[ "$MCP_BRIDGE_LLM_PROVIDER" == "ollama" ]]; then
-    log_info "Ollama preflight: provider advertised by mcp-bridge"
+    log_success "Ollama preflight: provider advertised by mcp-bridge"
   fi
 }
 
@@ -195,6 +223,7 @@ main() {
   local session_payload
   local query_payload
 
+  setup_colors
   require_command curl
   require_command jq
   require_command node
@@ -213,12 +242,12 @@ main() {
   query_text="Use the filesystem MCP tools to list the files in ${query_target} and briefly identify the sample files you find."
 
   log_step "Demo configuration"
-  log_info "Base URL: ${MCP_BRIDGE_BASE_URL}"
-  log_info "LLM provider: ${MCP_BRIDGE_LLM_PROVIDER}"
-  log_info "LLM model: ${MCP_BRIDGE_LLM_MODEL}"
-  log_info "Filesystem root: ${MCP_SERVER_ROOT}"
-  log_info "Sync query timeout: ${MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS}s"
-  log_info "MCP server: npx -y @modelcontextprotocol/server-filesystem ${MCP_SERVER_ROOT}"
+  log_kv "Base URL" "$MCP_BRIDGE_BASE_URL"
+  log_kv "LLM provider" "$MCP_BRIDGE_LLM_PROVIDER"
+  log_kv "LLM model" "$MCP_BRIDGE_LLM_MODEL"
+  log_kv "Filesystem root" "$MCP_SERVER_ROOT"
+  log_kv "Sync query timeout" "${MCP_BRIDGE_REQUEST_TIMEOUT_SECONDS}s"
+  log_kv "MCP server" "npx -y @modelcontextprotocol/server-filesystem ${MCP_SERVER_ROOT}"
 
   log_step "Health check"
   run_health_check
@@ -252,7 +281,7 @@ main() {
     die "session_id not found in POST /sessions response"
   fi
 
-  log_info "Session created: ${SESSION_ID}"
+  log_success "Session created: ${SESSION_ID}"
 
   log_step "Run query"
   query_payload="$(
@@ -270,7 +299,7 @@ main() {
     die "sync query failed for session ${SESSION_ID}. Confirm that the selected provider/model are reachable and that the filesystem MCP server can start."
   fi
 
-  log_info "Query completed"
+  log_success "Query completed"
   printf '\n%s\n' "$(printf '%s\n' "$API_BODY" | jq -r '.result')"
   printf '\nserver_used: %s\n' "$(printf '%s\n' "$API_BODY" | jq -r '.server_used // "n/a"')"
   printf 'execution_time: %s seconds\n' "$(printf '%s\n' "$API_BODY" | jq -r '.execution_time')"
