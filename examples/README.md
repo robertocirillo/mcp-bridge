@@ -5,8 +5,9 @@ Small, public-friendly examples for the core `mcp-bridge` flow:
 1. create a session
 2. run a query
 3. optionally poll an async query operation
+4. record or replay a short public-facing REST demo
 
-These examples are dependency-free:
+The Python and Node.js examples are dependency-free:
 
 - Python uses the standard library only
 - Node.js uses built-in APIs only
@@ -32,6 +33,30 @@ Optional headers:
 
 - `MCP_BRIDGE_TENANT_ID`
 - `MCP_BRIDGE_RUN_ID`
+
+## Bash demo
+
+Run:
+
+```bash
+./examples/demo/filesystem_rest_demo.sh
+```
+
+What it shows:
+
+- checks `GET /health`
+- creates a session with the filesystem MCP server via `npx -y @modelcontextprotocol/server-filesystem`
+- runs `POST /sessions/{session_id}/query`
+- deletes the session with `DELETE /sessions/{session_id}`
+
+Minimum prerequisites:
+
+- `mcp-bridge` must already be running
+- the server-side `mcp-bridge` runtime must already have a working LLM provider configuration
+- `curl`, `jq`, `node`, and `npx` must be available
+- `MCP_SERVER_ROOT` must exist in the runtime where the filesystem MCP server process is launched
+
+This script is intentionally minimal and has terminal-friendly output so it can be used directly by users or as the base for a short demo video or terminal cast.
 
 ## Python example
 

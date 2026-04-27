@@ -144,6 +144,7 @@ The same session-scoped guardrail model can also be extended with external servi
 
 ## Where next
 
+- [examples/demo/filesystem_rest_demo.sh](examples/demo/filesystem_rest_demo.sh) for a minimal REST demo script suitable for a quick terminal/video walkthrough
 - [examples/README.md](examples/README.md) for minimal client examples
 - `http://localhost:8000/docs` for the full API surface
 - [docs/ROADMAP.md](docs/ROADMAP.md) for current gaps and planned work
