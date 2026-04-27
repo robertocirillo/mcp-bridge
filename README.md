@@ -16,6 +16,12 @@ Built on the `mcp-use` runtime, it inherits broad MCP server compatibility from 
 - A service built on `mcp-use` for MCP connectivity, broad MCP server compatibility, and LLM-backed execution
 - A session-aware guardrail boundary around LLM interactions
 
+## Demo
+
+Create an MCP-backed session, run a sync REST query, and clean up the session:
+
+![mcp-bridge REST demo](demos/mcp-bridge-rest-demo.gif)
+
 ## What this is not
 
 - Not a full MCP control plane
