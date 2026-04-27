@@ -3,8 +3,8 @@ set -euo pipefail
 
 MCP_BRIDGE_BASE_URL="${MCP_BRIDGE_BASE_URL:-http://localhost:8000}"
 MCP_BRIDGE_BASE_URL="${MCP_BRIDGE_BASE_URL%/}"
-MCP_BRIDGE_LLM_PROVIDER="${MCP_BRIDGE_LLM_PROVIDER:-openai}"
-MCP_BRIDGE_LLM_MODEL="${MCP_BRIDGE_LLM_MODEL:-gpt-4o-mini}"
+MCP_BRIDGE_LLM_PROVIDER="${MCP_BRIDGE_LLM_PROVIDER:-ollama}"
+MCP_BRIDGE_LLM_MODEL="${MCP_BRIDGE_LLM_MODEL:-qwen3-vl:8b}"
 MCP_SERVER_ROOT="${MCP_SERVER_ROOT:-/tmp}"
 MCP_BRIDGE_TENANT_ID="${MCP_BRIDGE_TENANT_ID:-}"
 MCP_BRIDGE_RUN_ID="${MCP_BRIDGE_RUN_ID:-}"
@@ -18,6 +18,11 @@ require_command() {
     printf 'Error: required command not found: %s\n' "$1" >&2
     exit 1
   fi
+}
+
+die() {
+  printf 'Error: %s\n' "$1" >&2
+  exit 1
 }
 
 log_step() {
@@ -44,6 +49,8 @@ api_request() {
     curl
     --silent
     --show-error
+    --max-time
+    20
     --output
     "$body_file"
     --write-out
@@ -111,7 +118,35 @@ delete_session() {
     return 1
   fi
 
-  print_json "$API_BODY"
+  log_info "Session deleted: ${session_id}"
+}
+
+run_health_check() {
+  local health_status
+  local supported_providers
+
+  if ! api_request "GET" "/health"; then
+    die "mcp-bridge did not respond at ${MCP_BRIDGE_BASE_URL}. Start the service before running the demo."
+  fi
+
+  health_status="$(printf '%s\n' "$API_BODY" | jq -r '.status // empty')"
+  if [[ "$health_status" != "healthy" ]]; then
+    die "mcp-bridge responded but is not healthy. Response status: ${health_status:-unknown}"
+  fi
+
+  supported_providers="$(printf '%s\n' "$API_BODY" | jq -r '(.supported_providers // []) | join(", ")')"
+  log_info "Bridge health: healthy"
+  if [[ -n "$supported_providers" ]]; then
+    log_info "Supported providers: ${supported_providers}"
+  fi
+
+  if ! printf '%s\n' "$API_BODY" | jq -e --arg provider "$MCP_BRIDGE_LLM_PROVIDER" '(.supported_providers // []) | index($provider) != null' >/dev/null; then
+    die "Provider '${MCP_BRIDGE_LLM_PROVIDER}' is not advertised by GET /health. Adjust MCP_BRIDGE_LLM_PROVIDER or the bridge runtime configuration."
+  fi
+
+  if [[ "$MCP_BRIDGE_LLM_PROVIDER" == "ollama" ]]; then
+    log_info "Ollama preflight: provider advertised by mcp-bridge"
+  fi
 }
 
 cleanup() {
@@ -141,8 +176,7 @@ main() {
   require_command npx
 
   if [[ ! -d "$MCP_SERVER_ROOT" ]]; then
-    printf 'Error: MCP_SERVER_ROOT does not exist or is not a directory: %s\n' "$MCP_SERVER_ROOT" >&2
-    exit 1
+    die "MCP_SERVER_ROOT does not exist or is not a directory: ${MCP_SERVER_ROOT}"
   fi
 
   query_text="Use the filesystem MCP tools to list the files in ${query_target}."
@@ -152,11 +186,10 @@ main() {
   log_info "LLM provider: ${MCP_BRIDGE_LLM_PROVIDER}"
   log_info "LLM model: ${MCP_BRIDGE_LLM_MODEL}"
   log_info "Filesystem root: ${MCP_SERVER_ROOT}"
-  log_info "MCP server command: npx -y @modelcontextprotocol/server-filesystem ${MCP_SERVER_ROOT}"
+  log_info "MCP server: npx -y @modelcontextprotocol/server-filesystem ${MCP_SERVER_ROOT}"
 
   log_step "Health check"
-  api_request "GET" "/health"
-  print_json "$API_BODY"
+  run_health_check
 
   log_step "Create session"
   session_payload="$(
@@ -178,16 +211,16 @@ main() {
         }
       }'
   )"
-  api_request "POST" "/sessions" "$session_payload"
-  print_json "$API_BODY"
+  if ! api_request "POST" "/sessions" "$session_payload"; then
+    die "session creation failed. Confirm that mcp-bridge can reach provider '${MCP_BRIDGE_LLM_PROVIDER}' with model '${MCP_BRIDGE_LLM_MODEL}'."
+  fi
 
   SESSION_ID="$(printf '%s\n' "$API_BODY" | jq -r '.session_id')"
   if [[ -z "$SESSION_ID" || "$SESSION_ID" == "null" ]]; then
-    printf 'Error: session_id not found in POST /sessions response\n' >&2
-    exit 1
+    die "session_id not found in POST /sessions response"
   fi
 
-  log_info "Session ID: ${SESSION_ID}"
+  log_info "Session created: ${SESSION_ID}"
 
   log_step "Run query"
   query_payload="$(
@@ -198,9 +231,11 @@ main() {
         max_steps: 10
       }'
   )"
-  api_request "POST" "/sessions/${SESSION_ID}/query" "$query_payload"
+  if ! api_request "POST" "/sessions/${SESSION_ID}/query" "$query_payload"; then
+    die "query execution failed for session ${SESSION_ID}. Confirm that the selected provider/model are reachable and that the filesystem MCP server can start."
+  fi
 
-  log_info "Query response:"
+  log_info "Query completed"
   printf '\n%s\n' "$(printf '%s\n' "$API_BODY" | jq -r '.result')"
   printf '\nserver_used: %s\n' "$(printf '%s\n' "$API_BODY" | jq -r '.server_used // "n/a"')"
   printf 'execution_time: %s seconds\n' "$(printf '%s\n' "$API_BODY" | jq -r '.execution_time')"

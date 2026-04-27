@@ -25,8 +25,8 @@ These examples focus on the main product path: the REST bridge for MCP sessions 
 ## Default environment variables
 
 - `MCP_BRIDGE_BASE_URL=http://localhost:8000`
-- `MCP_BRIDGE_LLM_PROVIDER=openai`
-- `MCP_BRIDGE_LLM_MODEL=gpt-4o-mini`
+- `MCP_BRIDGE_LLM_PROVIDER=ollama`
+- `MCP_BRIDGE_LLM_MODEL=qwen3-vl:8b`
 - `MCP_SERVER_ROOT=/tmp`
 
 Optional headers:
@@ -45,6 +45,7 @@ Run:
 What it shows:
 
 - checks `GET /health`
+- verifies that the selected provider is advertised by the bridge health response
 - creates a session with the filesystem MCP server via `npx -y @modelcontextprotocol/server-filesystem`
 - runs `POST /sessions/{session_id}/query`
 - deletes the session with `DELETE /sessions/{session_id}`
@@ -52,11 +53,23 @@ What it shows:
 Minimum prerequisites:
 
 - `mcp-bridge` must already be running
-- the server-side `mcp-bridge` runtime must already have a working LLM provider configuration
+- Ollama and the `qwen3-vl:8b` model must be reachable from the `mcp-bridge` runtime, or you must override provider/model via env
 - `curl`, `jq`, `node`, and `npx` must be available
 - `MCP_SERVER_ROOT` must exist in the runtime where the filesystem MCP server process is launched
 
-This script is intentionally minimal and has terminal-friendly output so it can be used directly by users or as the base for a short demo video or terminal cast.
+Override provider/model when needed:
+
+```bash
+MCP_BRIDGE_LLM_PROVIDER=ollama \
+MCP_BRIDGE_LLM_MODEL=qwen2.5:7b \
+./examples/demo/filesystem_rest_demo.sh
+```
+
+For a short terminal cast:
+
+- start `mcp-bridge` first in a separate terminal, with Ollama already reachable
+- run `./examples/demo/filesystem_rest_demo.sh` from a clean shell
+- keep the default `/tmp` root unless you want the listing to show a different demo directory
 
 ## Python example
 
