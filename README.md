@@ -14,6 +14,8 @@ Built on the `mcp-use` runtime, it inherits broad MCP server compatibility from 
 
 - A FastAPI service that exposes MCP sessions and query flows over REST
 - A service built on `mcp-use` for MCP connectivity, broad MCP server compatibility, and LLM-backed execution
+- Support for both synchronous queries and asynchronous query operations with polling
+- MCP client-side elicitation support for asynchronous operations when servers request additional input during a session
 - A session-aware guardrail boundary around LLM interactions
 
 ## Demo
