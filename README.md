@@ -14,7 +14,15 @@ Built on the `mcp-use` runtime, it inherits broad MCP server compatibility from 
 
 - A FastAPI service that exposes MCP sessions and query flows over REST
 - A service built on `mcp-use` for MCP connectivity, broad MCP server compatibility, and LLM-backed execution
+- Support for both synchronous queries and asynchronous query operations with polling
+- MCP client-side elicitation support for asynchronous operations when servers request additional input during a session
 - A session-aware guardrail boundary around LLM interactions
+
+## Demo
+
+Create an MCP-backed session, run a sync REST query, and clean up the session:
+
+![mcp-bridge REST demo](demos/mcp-bridge-rest-demo.gif)
 
 ## What this is not
 
@@ -144,6 +152,7 @@ The same session-scoped guardrail model can also be extended with external servi
 
 ## Where next
 
+- [examples/demo/filesystem_rest_demo.sh](examples/demo/filesystem_rest_demo.sh) for a minimal REST demo script suitable for a quick terminal/video walkthrough
 - [examples/README.md](examples/README.md) for minimal client examples
 - `http://localhost:8000/docs` for the full API surface
 - [docs/ROADMAP.md](docs/ROADMAP.md) for current gaps and planned work

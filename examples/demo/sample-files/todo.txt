@@ -1,0 +1,5 @@
+todo
+1. create session
+2. run sync query
+3. show response
+4. delete session
